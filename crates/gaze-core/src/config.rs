@@ -6,32 +6,34 @@ use serde::{Deserialize, Serialize};
 use std::io::Write;
 use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::path::Path;
-use zvariant::{OwnedValue, Type, Value};
 
 pub const CONFIG_PATH: &str = "/etc/gaze/config.toml";
 pub const USERS_DIR: &str = "/var/lib/gaze/users";
 pub const MODELS_DIR: &str = "/var/cache/gaze";
 pub const DEFAULT_RGB_CAMERA: &str = "primary";
 pub const SECURITY_LEVEL_OPTIONS: [&str; 5] = ["low", "medium", "high", "maximum", "custom"];
-pub const SECURITY_LEVEL_LABELS: [&str; 5] = ["低", "中", "高", "最高", "自定义"];
+pub const SECURITY_LEVEL_LABELS: [&str; 5] = ["Low", "Medium", "High", "Maximum", "Custom"];
 pub const MODEL_QUALITY_OPTIONS: [&str; 2] = ["standard", "accurate"];
-pub const MODEL_QUALITY_LABELS: [&str; 2] = ["标准", "精确"];
+pub const MODEL_QUALITY_LABELS: [&str; 2] = ["Standard", "Accurate"];
 pub const HYBRID_POLICY_OPTIONS: [&str; 4] = ["default", "or", "fallback_on_dark", "and"];
-pub const HYBRID_POLICY_LABELS: [&str; 4] = ["默认", "任一通过", "暗光时回退", "全部通过"];
+pub const HYBRID_POLICY_LABELS: [&str; 4] = ["Default", "Or", "Fallback on dark", "And"];
 pub const PARALLEL_CAPTURE_OPTIONS: [&str; 3] = ["never", "auto", "always"];
 pub const PARALLEL_CAPTURE_LABELS: [&str; 3] = [
-    "从不（先采集 RGB，再采集红外）",
-    "自动（摄像头支持时并行采集）",
-    "始终（同时采集 RGB 和红外）",
+    "Never (capture RGB, then IR)",
+    "Auto (parallel when the camera allows it)",
+    "Always (capture RGB and IR at once)",
 ];
 pub const START_DELAY_SCOPE_OPTIONS: [&str; 2] = ["all", "screen_lock"];
-pub const START_DELAY_SCOPE_LABELS: [&str; 2] = ["所有人脸认证（包括 sudo）", "仅锁屏"];
+pub const START_DELAY_SCOPE_LABELS: [&str; 2] = [
+    "All face authentication (including sudo)",
+    "Screen lockers only",
+];
 // Clients validate syntax independently of the daemon's installed vendor runtime.
 pub const INFERENCE_EXECUTION_PROVIDER_OPTIONS: [&str; 4] = ["cpu", "auto", "openvino", "vitis"];
 pub const INFERENCE_EXECUTION_PROVIDER_LABELS: [&str; 4] =
-    ["CPU", "自动", "Intel OpenVINO", "AMD Ryzen AI"];
-pub const INFERENCE_DEVICE_LABELS: [&str; 3] = ["CPU", "GPU", "NPU"];
+    ["CPU", "Automatic (NPU)", "Intel OpenVINO", "AMD Ryzen AI"];
 pub const INFERENCE_DEVICE_OPTIONS: [&str; 3] = ["cpu", "gpu", "npu"];
+pub const INFERENCE_DEVICE_LABELS: [&str; 3] = ["CPU", "GPU", "NPU"];
 pub const DEFAULT_ENROLLMENT_MIN_FACE_SIZE_RATIO: f64 = 0.25;
 pub const MIN_ENROLLMENT_FACE_SIZE_RATIO: f64 = 0.10;
 pub const MAX_ENROLLMENT_FACE_SIZE_RATIO: f64 = 0.75;
@@ -127,7 +129,7 @@ fn round_threshold(threshold: f32) -> f64 {
     (threshold as f64 * 100.0).round() / 100.0
 }
 
-#[derive(Serialize, Clone, Debug, Value, OwnedValue, Type)]
+#[derive(Serialize, Clone, Debug)]
 pub struct SecurityLevel {
     pub level: String,
     pub detector: String,
@@ -299,7 +301,7 @@ impl SecurityLevel {
                 _ => "det_500m.onnx",
             },
             other => {
-                tracing::warn!("安全级别 {other:?} 无效；使用中等级别检测器");
+                tracing::warn!("Invalid security level {other:?}; using medium detector");
                 "det_500m.onnx"
             }
         }
@@ -314,7 +316,7 @@ impl SecurityLevel {
                 _ => "w600k_mbf.onnx",
             },
             other => {
-                tracing::warn!("安全级别 {other:?} 无效；使用中等级别识别器");
+                tracing::warn!("Invalid security level {other:?}; using medium recognizer");
                 "w600k_mbf.onnx"
             }
         }
@@ -344,7 +346,7 @@ impl SecurityLevel {
             errors.push(SecurityValidationError {
                 field: SecurityField::Level,
                 message: format!(
-                    "安全级别 {:?} 无效：应为 {:?} 中的一项",
+                    "invalid security level {:?}: expected one of {:?}",
                     self.level, SECURITY_LEVEL_OPTIONS
                 ),
             });
@@ -362,7 +364,7 @@ impl SecurityLevel {
                 errors.push(SecurityValidationError {
                     field: SecurityField::ModelQuality,
                     message: format!(
-                        "{name} 级别 {quality:?} 无效：应为 \"standard\" 或 \"accurate\""
+                        "invalid {name} level {quality:?}: expected \"standard\" or \"accurate\""
                     ),
                 });
             }
@@ -375,7 +377,7 @@ impl SecurityLevel {
                 errors.push(SecurityValidationError {
                     field: SecurityField::Threshold,
                     message: format!(
-                        "security.{name} 必须介于 {MIN_SECURITY_THRESHOLD} 和 {MAX_SECURITY_THRESHOLD} 之间，当前为 {threshold}"
+                        "security.{name} must be between {MIN_SECURITY_THRESHOLD} and {MAX_SECURITY_THRESHOLD}, got {threshold}"
                     ),
                 });
             }
@@ -386,7 +388,7 @@ impl SecurityLevel {
             errors.push(SecurityValidationError {
                 field: SecurityField::HybridPolicy,
                 message: format!(
-                    "security.hybrid_policy {:?} 无效：应为 {:?} 中的一项",
+                    "invalid security.hybrid_policy {:?}: expected one of {:?}",
                     self.hybrid_policy, HYBRID_POLICY_OPTIONS
                 ),
             });
@@ -431,7 +433,7 @@ impl SecurityLevel {
                 tracing::warn!(
                     spectrum,
                     threshold = custom_threshold,
-                    "安全阈值超出范围；使用中等级别默认值"
+                    "security threshold is out of range; using the medium default"
                 );
                 DEFAULT_SECURITY_THRESHOLD as f32
             }
@@ -476,7 +478,7 @@ pub struct Config {
     pub duress: DuressConfig,
 }
 
-#[derive(Deserialize, Serialize, Clone, Debug, Value, OwnedValue, Type)]
+#[derive(Deserialize, Serialize, Clone, Debug)]
 pub struct InferenceConfig {
     #[serde(default = "default_execution_provider")]
     pub execution_provider: String,
@@ -505,26 +507,26 @@ impl InferenceConfig {
     pub fn validate(&self) -> anyhow::Result<()> {
         if !INFERENCE_EXECUTION_PROVIDER_OPTIONS.contains(&self.execution_provider.as_str()) {
             anyhow::bail!(
-                "inference.execution_provider {:?} 无效：应为 {:?} 中的一项",
+                "invalid inference.execution_provider {:?}: expected one of {:?}",
                 self.execution_provider,
                 INFERENCE_EXECUTION_PROVIDER_OPTIONS
             );
         }
         if !INFERENCE_DEVICE_OPTIONS.contains(&self.device.as_str()) {
             anyhow::bail!(
-                "inference.device {:?} 无效：应为 {:?} 中的一项",
+                "invalid inference.device {:?}: expected one of {:?}",
                 self.device,
                 INFERENCE_DEVICE_OPTIONS
             );
         }
         if self.execution_provider == "cpu" && self.device != "cpu" {
             anyhow::bail!(
-                "inference.execution_provider 为 \"cpu\" 时，inference.device 必须为 \"cpu\""
+                "inference.device must be \"cpu\" when inference.execution_provider is \"cpu\""
             );
         }
         if matches!(self.execution_provider.as_str(), "auto" | "vitis") && self.device != "npu" {
             anyhow::bail!(
-                "inference.execution_provider 为 {:?} 时，inference.device 必须为 \"npu\"",
+                "inference.device must be \"npu\" when inference.execution_provider is {:?}",
                 self.execution_provider
             );
         }
@@ -558,9 +560,9 @@ impl InferenceConfig {
 }
 
 // Its own table: a security preset replaces `[security]` wholesale, resetting it.
-#[derive(Deserialize, Serialize, Clone, Debug, Default)]
+#[derive(Deserialize, Serialize, Clone, Debug)]
 pub struct StorageConfig {
-    #[serde(default = "default_false")]
+    #[serde(default = "default_true")]
     pub encrypt_templates: bool,
     #[serde(default = "default_false")]
     pub unlock_gnome_keyring: bool,
@@ -580,12 +582,22 @@ impl Config {
     }
 }
 
+impl Default for StorageConfig {
+    fn default() -> Self {
+        Self {
+            encrypt_templates: true,
+            unlock_gnome_keyring: false,
+            unlock_kwallet: false,
+        }
+    }
+}
+
 impl StorageConfig {
     pub fn validate_keyring(&self, liveness: &LivenessConfig) -> anyhow::Result<()> {
         if (self.unlock_gnome_keyring || self.unlock_kwallet)
             && (!self.encrypt_templates || !liveness.enabled)
         {
-            anyhow::bail!("钥匙环解锁需要启用 storage.encrypt_templates 和 liveness.enabled");
+            anyhow::bail!("keyring unlock requires storage.encrypt_templates and liveness.enabled");
         }
         Ok(())
     }
@@ -623,7 +635,7 @@ impl DuressConfig {
     pub fn validate(&self) -> anyhow::Result<()> {
         if !Self::closed_threshold_in_range(self.closed_threshold) {
             anyhow::bail!(
-                "duress.closed_threshold 必须介于 {} 和 {} 之间，当前为 {}",
+                "duress.closed_threshold must be between {} and {}, got {}",
                 MIN_DURESS_CLOSED_THRESHOLD,
                 MAX_DURESS_CLOSED_THRESHOLD,
                 self.closed_threshold
@@ -631,7 +643,7 @@ impl DuressConfig {
         }
         if self.hold_ms > MAX_DURESS_HOLD_MS {
             anyhow::bail!(
-                "duress.hold_ms 不得超过 {}，当前为 {}",
+                "duress.hold_ms must be at most {}, got {}",
                 MAX_DURESS_HOLD_MS,
                 self.hold_ms
             );
@@ -657,7 +669,7 @@ impl DuressConfig {
     }
 }
 
-#[derive(Serialize, Deserialize, Clone, Debug, Value, OwnedValue, Type)]
+#[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct LivenessConfig {
     #[serde(default = "default_liveness_enabled")]
     pub enabled: bool,
@@ -691,7 +703,7 @@ impl LivenessConfig {
     pub fn validate(&self) -> anyhow::Result<()> {
         if !Self::threshold_in_range(self.threshold) {
             anyhow::bail!(
-                "liveness.threshold 必须介于 {} 和 {} 之间，当前为 {}",
+                "liveness.threshold must be between {} and {}, got {}",
                 MIN_LIVENESS_THRESHOLD,
                 MAX_LIVENESS_THRESHOLD,
                 self.threshold
@@ -699,7 +711,7 @@ impl LivenessConfig {
         }
         if !Self::max_seconds_in_range(self.max_seconds) {
             anyhow::bail!(
-                "liveness.max_seconds 必须介于 {} 和 {} 之间，当前为 {}",
+                "liveness.max_seconds must be between {} and {}, got {}",
                 MIN_LIVENESS_MAX_SECONDS,
                 MAX_LIVENESS_MAX_SECONDS,
                 self.max_seconds
@@ -783,20 +795,21 @@ impl CameraConfig {
     pub fn validate(&self) -> anyhow::Result<()> {
         if !PARALLEL_CAPTURE_OPTIONS.contains(&self.parallel_capture.as_str()) {
             anyhow::bail!(
-                "cameras.parallel_capture {:?} 无效：应为 {:?} 中的一项",
+                "invalid cameras.parallel_capture {:?}: expected one of {:?}",
                 self.parallel_capture,
                 PARALLEL_CAPTURE_OPTIONS
             );
         }
         match (self.ir_frame_width, self.ir_frame_height) {
             (None, None) => {}
-            (Some(_), None) | (None, Some(_)) => {
-                anyhow::bail!("cameras.ir_frame_width 和 cameras.ir_frame_height 必须同时设置")
-            }
+            (Some(_), None) | (None, Some(_)) => anyhow::bail!(
+                "cameras.ir_frame_width and cameras.ir_frame_height must be set together"
+            ),
             (Some(width), Some(height)) => {
                 if !ir_frame_dimension_valid(width) || !ir_frame_dimension_valid(height) {
                     anyhow::bail!(
-                        "cameras.ir_frame_width 和 cameras.ir_frame_height 必须介于 1 和 {MAX_IR_FRAME_DIMENSION} 之间，当前为 {width}x{height}"
+                        "cameras.ir_frame_width and cameras.ir_frame_height must be between 1 and \
+                         {MAX_IR_FRAME_DIMENSION}, got {width}x{height}"
                     );
                 }
             }
@@ -877,7 +890,7 @@ fn default_start_delay_scope() -> String {
     "screen_lock".to_string()
 }
 
-#[derive(Serialize, Clone, Debug, Value, OwnedValue, Type)]
+#[derive(Serialize, Clone, Debug)]
 pub struct AuthConfig {
     pub abort_if_ssh: bool,
     pub abort_if_lid_closed: bool,
@@ -960,7 +973,7 @@ impl AuthConfig {
             "screen_lock" => "screen_lock",
             "" | "all" => "all",
             other => {
-                tracing::warn!("启动延迟范围 {other:?} 无效；将延迟所有认证");
+                tracing::warn!("Invalid start delay scope {other:?}; delaying every auth");
                 "all"
             }
         }
@@ -1015,7 +1028,7 @@ fn default_true() -> bool {
     true
 }
 
-#[derive(Deserialize, Serialize, Clone, Debug, Value, OwnedValue, Type)]
+#[derive(Deserialize, Serialize, Clone, Debug)]
 pub struct EnrollmentConfig {
     #[serde(default = "default_max_templates")]
     pub max_templates: u32,
@@ -1038,7 +1051,7 @@ impl EnrollmentConfig {
                 .contains(&self.min_face_size_ratio)
         {
             anyhow::bail!(
-                "enrollment.min_face_size_ratio 必须介于 {} 和 {} 之间，当前为 {}",
+                "enrollment.min_face_size_ratio must be between {} and {}, got {}",
                 MIN_ENROLLMENT_FACE_SIZE_RATIO,
                 MAX_ENROLLMENT_FACE_SIZE_RATIO,
                 self.min_face_size_ratio
@@ -1159,11 +1172,11 @@ pub fn unknown_config_keys(contents: &str) -> Vec<String> {
 fn replace_file_atomically(path: &Path, contents: &str) -> std::io::Result<()> {
     let parent = path
         .parent()
-        .ok_or_else(|| std::io::Error::other("配置路径必须包含父目录"))?;
+        .ok_or_else(|| std::io::Error::other("config path must have a parent directory"))?;
     let file_name = path
         .file_name()
         .and_then(|name| name.to_str())
-        .ok_or_else(|| std::io::Error::other("配置路径必须包含有效的文件名"))?;
+        .ok_or_else(|| std::io::Error::other("config path must have a valid file name"))?;
     let mode = std::fs::metadata(path)
         .map(|meta| meta.permissions().mode() & 0o777)
         .unwrap_or(DEFAULT_CONFIG_MODE);
@@ -1194,6 +1207,77 @@ impl Config {
         Self::load_from(CONFIG_PATH)
     }
 
+    pub fn to_toml(&self) -> anyhow::Result<String> {
+        Ok(toml_edit::ser::to_string_pretty(self)?)
+    }
+
+    pub fn get_key(&self, key: &str) -> anyhow::Result<String> {
+        let doc = toml_edit::ser::to_document(self)?;
+        let mut item = doc.as_item();
+        for part in key.split('.') {
+            item = item
+                .get(part)
+                .ok_or_else(|| anyhow::anyhow!("unknown setting `{key}`"))?;
+        }
+        let value = item.as_value().filter(|_| !item.is_table_like());
+        let Some(value) = value else {
+            anyhow::bail!(
+                "`{key}` is a section; ask for one of its settings, such as `{key}.<name>`"
+            );
+        };
+        Ok(match value.as_str() {
+            Some(text) => text.to_string(),
+            None => value.to_string().trim().to_string(),
+        })
+    }
+
+    pub fn with_key(&self, key: &str, raw: &str) -> anyhow::Result<Config> {
+        let (section, leaf) = key
+            .rsplit_once('.')
+            .ok_or_else(|| anyhow::anyhow!("use section.setting, for example `security.level`"))?;
+        let mut doc = toml_edit::ser::to_document(self)?;
+        let mut table = doc.as_item_mut();
+        for part in section.split('.') {
+            table = table
+                .get_mut(part)
+                .ok_or_else(|| anyhow::anyhow!("unknown setting `{key}`"))?;
+        }
+        let table = table
+            .as_table_like_mut()
+            .ok_or_else(|| anyhow::anyhow!("unknown setting `{key}`"))?;
+        let current = table
+            .get(leaf)
+            .and_then(toml_edit::Item::as_value)
+            .ok_or_else(|| anyhow::anyhow!("unknown setting `{key}`"))?;
+        let raw = raw.trim();
+        let value = match current {
+            toml_edit::Value::Boolean(_) => toml_edit::value(
+                raw.parse::<bool>()
+                    .map_err(|_| anyhow::anyhow!("`{key}` takes true or false"))?,
+            ),
+            toml_edit::Value::Integer(_) => toml_edit::value(
+                raw.parse::<i64>()
+                    .map_err(|_| anyhow::anyhow!("`{key}` takes a whole number"))?,
+            ),
+            toml_edit::Value::Float(_) => toml_edit::value(
+                raw.parse::<f64>()
+                    .map_err(|_| anyhow::anyhow!("`{key}` takes a number"))?,
+            ),
+            toml_edit::Value::String(_) => toml_edit::value(raw),
+            _ => anyhow::bail!("`{key}` cannot be set from the command line; edit {CONFIG_PATH}"),
+        };
+        table.insert(leaf, value);
+        let config: Config = toml_edit::de::from_document(doc)
+            .map_err(|e| anyhow::anyhow!("invalid value for `{key}`: {e}"))?;
+        config.security.validate()?;
+        config.enrollment.validate()?;
+        config.inference.validate()?;
+        config.liveness.validate()?;
+        config.cameras.validate()?;
+        config.duress.validate()?;
+        Ok(config)
+    }
+
     pub fn migrate_file(path: &str) {
         let Ok(contents) = std::fs::read_to_string(path) else {
             return;
@@ -1202,8 +1286,8 @@ impl Config {
             return;
         };
         match replace_file_atomically(Path::new(path), &migrated) {
-            Ok(()) => tracing::info!("已迁移 {path} 中的旧配置"),
-            Err(e) => tracing::warn!("无法将迁移后的配置写入 {path}：{e}"),
+            Ok(()) => tracing::info!("Migrated legacy configuration in {path}"),
+            Err(e) => tracing::warn!("Failed to write migrated config to {path}: {e}"),
         }
     }
 
@@ -1214,28 +1298,28 @@ impl Config {
             let config: Config = toml_edit::de::from_str(&contents)?;
             for key in unknown_config_keys(&contents) {
                 tracing::warn!(
-                    "{path} 设置了 {key}，但 Gaze 不读取此项；它不会生效，可能是拼写错误"
+                    "{path} sets {key}, which Gaze does not read; it has no effect and is probably a typo"
                 );
             }
             // Keep startup available for an invalid level: warn and let the total
             // accessors fall back. `set_config` rejects invalid admin input earlier.
             if let Err(e) = config.security.validate() {
-                tracing::warn!("{e}；对无效的安全配置项使用安全的默认值");
+                tracing::warn!("{e}; using safe fallbacks for invalid security fields");
             }
             if let Err(e) = config.enrollment.validate() {
-                tracing::warn!("{e}；使用默认的录入人脸尺寸比例");
+                tracing::warn!("{e}; using the default enrollment face-size ratio");
             }
             if let Err(e) = config.inference.validate() {
-                tracing::warn!("{e}；将在模型加载时检查推理配置");
+                tracing::warn!("{e}; inference configuration will be checked when models load");
             }
             if let Err(e) = config.liveness.validate() {
-                tracing::warn!("{e}；使用默认的活体检测设置");
+                tracing::warn!("{e}; using the default liveness settings");
             }
             if let Err(e) = config.cameras.validate() {
-                tracing::warn!("{e}；对无效的摄像头设置使用默认值");
+                tracing::warn!("{e}; using the default for the invalid camera setting");
             }
             if let Err(e) = config.duress.validate() {
-                tracing::warn!("{e}；使用默认的胁迫检测设置");
+                tracing::warn!("{e}; using the default duress settings");
             }
             Ok(config)
         } else {
@@ -1260,24 +1344,32 @@ impl Config {
                 toml_edit::ser::to_string_pretty(self)
                     .unwrap_or_else(|_| String::from("# unwritable\n"))
             });
-        let parent = path.parent().context("配置路径必须包含父目录")?;
+        let parent = path
+            .parent()
+            .context("config path must have a parent directory")?;
         let file_name = path
             .file_name()
             .and_then(|n| n.to_str())
-            .context("配置路径必须包含有效的文件名")?;
+            .context("config path must have a valid file name")?;
         let tmp_path = parent.join(format!(".{file_name}.{}.tmp", std::process::id()));
         let mut file = std::fs::OpenOptions::new()
             .write(true)
             .create_new(true)
             .mode(0o600)
             .open(&tmp_path)
-            .with_context(|| format!("无法创建临时配置文件：{}", tmp_path.display()))?;
+            .with_context(|| {
+                format!(
+                    "failed to create temporary config file: {}",
+                    tmp_path.display()
+                )
+            })?;
         if let Err(err) = file
             .write_all(encoded.as_bytes())
             .and_then(|_| file.flush())
         {
             let _ = std::fs::remove_file(&tmp_path);
-            return Err(err).with_context(|| format!("无法写入配置文件：{}", path.display()));
+            return Err(err)
+                .with_context(|| format!("failed to write config file: {}", path.display()));
         }
         drop(file);
         let target_mode = existing_mode.unwrap_or(DEFAULT_CONFIG_MODE);
@@ -1285,11 +1377,12 @@ impl Config {
             std::fs::set_permissions(&tmp_path, std::fs::Permissions::from_mode(target_mode))
         {
             let _ = std::fs::remove_file(&tmp_path);
-            return Err(err)
-                .with_context(|| format!("无法为 {} 设置权限 {target_mode:o}", path.display()));
+            return Err(err).with_context(|| {
+                format!("failed to set mode {target_mode:o} on {}", path.display())
+            });
         }
         std::fs::rename(&tmp_path, path)
-            .with_context(|| format!("无法替换配置文件：{}", path.display()))?;
+            .with_context(|| format!("failed to replace config file: {}", path.display()))?;
         Ok(())
     }
 
@@ -1372,6 +1465,34 @@ fn merge_into_toml_table(target: &mut toml_edit::Table, desired: &toml_edit::Tab
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn config_keys_round_trip_through_get_and_set() {
+        let config = Config::default();
+        let enabled = config.liveness.enabled;
+        assert_eq!(
+            config.get_key("liveness.enabled").unwrap(),
+            enabled.to_string()
+        );
+        let changed = config
+            .with_key("liveness.enabled", &(!enabled).to_string())
+            .unwrap();
+        assert_eq!(changed.liveness.enabled, !enabled);
+        let changed = config
+            .with_key("cameras.dark_luma_threshold", "42")
+            .unwrap();
+        assert_eq!(changed.cameras.dark_luma_threshold, 42);
+        assert!(
+            config
+                .with_key("cameras.dark_luma_threshold", "300")
+                .is_err()
+        );
+        assert!(config.with_key("liveness.enabled", "maybe").is_err());
+        assert!(config.with_key("liveness.nonsense", "1").is_err());
+        assert!(config.with_key("liveness", "1").is_err());
+        assert!(config.get_key("liveness").is_err());
+        assert!(config.to_toml().unwrap().contains("[duress]"));
+    }
     use std::fs;
     use std::path::PathBuf;
     use std::time::{SystemTime, UNIX_EPOCH};
@@ -1931,8 +2052,7 @@ mod tests {
 
     #[test]
     fn the_dbus_signature_is_unchanged() {
-        use zvariant::Type;
-        assert_eq!(AuthConfig::SIGNATURE.to_string(), "(bbbbbtts)");
+        use zbus::Type;
         assert_eq!(
             crate::dbus::DbusConfig::SIGNATURE.to_string(),
             "((ss)(sssdds)(ssbys)(bbbbbtts)(ud)(bdd)(b))"
@@ -1976,7 +2096,7 @@ mod tests {
         .unwrap();
 
         let config = Config::load_from(path.to_str().unwrap()).unwrap();
-        assert!(!config.storage.encrypt_templates);
+        assert!(config.storage.encrypt_templates);
         assert_eq!(config.security.level, "high");
         assert_eq!(
             unknown_config_keys(&std::fs::read_to_string(&path).unwrap()),
@@ -2087,7 +2207,7 @@ mod tests {
             config.enrollment.min_face_size_ratio,
             DEFAULT_ENROLLMENT_MIN_FACE_SIZE_RATIO
         );
-        assert!(!config.storage.encrypt_templates);
+        assert!(config.storage.encrypt_templates);
     }
 
     #[test]
@@ -2270,7 +2390,7 @@ mod tests {
             config.enrollment.min_face_size_ratio,
             DEFAULT_ENROLLMENT_MIN_FACE_SIZE_RATIO
         );
-        assert!(!config.storage.encrypt_templates);
+        assert!(config.storage.encrypt_templates);
     }
 
     #[test]
@@ -2286,7 +2406,7 @@ mod tests {
             String::new(),
         );
 
-        let value = zvariant::OwnedValue::try_from(crate::dbus::DbusConfig::from(cfg)).unwrap();
+        let value = zbus::OwnedVariant::try_from(crate::dbus::DbusConfig::from(cfg)).unwrap();
         let back = crate::dbus::DbusConfig::try_from(value)
             .map(Config::from)
             .unwrap();
@@ -2556,7 +2676,7 @@ mod tests {
     }
 
     #[test]
-    fn storage_encrypt_templates_parses_and_defaults_false() {
+    fn storage_encrypt_templates_defaults_true_but_respects_explicit_opt_out() {
         let enabled: Config = toml_edit::de::from_str(
             r#"
             [storage]
@@ -2576,7 +2696,13 @@ mod tests {
 level = "low""#,
         )
         .unwrap();
-        assert!(!absent.storage.encrypt_templates);
+        assert!(absent.storage.encrypt_templates);
+        assert!(StorageConfig::default().encrypt_templates);
+        let empty_table: Config = toml_edit::de::from_str("[storage]").unwrap();
+        assert!(empty_table.storage.encrypt_templates);
+        let disabled: Config =
+            toml_edit::de::from_str("[storage]\nencrypt_templates = false").unwrap();
+        assert!(!disabled.storage.encrypt_templates);
     }
 
     #[test]
@@ -2692,6 +2818,14 @@ level = "low""#,
         assert_eq!(
             START_DELAY_SCOPE_OPTIONS.len(),
             START_DELAY_SCOPE_LABELS.len()
+        );
+        assert_eq!(
+            INFERENCE_EXECUTION_PROVIDER_OPTIONS.len(),
+            INFERENCE_EXECUTION_PROVIDER_LABELS.len()
+        );
+        assert_eq!(
+            INFERENCE_DEVICE_OPTIONS.len(),
+            INFERENCE_DEVICE_LABELS.len()
         );
     }
 

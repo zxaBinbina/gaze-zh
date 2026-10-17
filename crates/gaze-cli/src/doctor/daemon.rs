@@ -131,7 +131,20 @@ pub(super) async fn read_daemon_config(
     let deadline = Instant::now() + ready_wait;
     loop {
         match proxy.config().await {
-            Ok(config) => return Ok(config.into()),
+            Ok(config) => {
+                let mut config: Config = config.into();
+                match proxy.keyring_enabled().await {
+                    Ok(enabled) => config.storage.unlock_gnome_keyring = enabled,
+                    Err(err) if dbus_is_unknown_method(&err) => {}
+                    Err(err) => return Err(err),
+                }
+                match proxy.kwallet_enabled().await {
+                    Ok(enabled) => config.storage.unlock_kwallet = enabled,
+                    Err(err) if dbus_is_unknown_method(&err) => {}
+                    Err(err) => return Err(err),
+                }
+                return Ok(config);
+            }
             Err(err) if dbus_is_not_activatable(&err) && Instant::now() < deadline => {
                 tokio::time::sleep(Duration::from_millis(250)).await;
             }
@@ -168,35 +181,34 @@ pub(super) struct Daemon {
 }
 
 pub(super) async fn connect_daemon(report: &mut Report) -> Option<Daemon> {
-    let service_state = match command_output("systemctl", &["is-active", "gazed"]) {
-        Ok((_, state)) => state,
-        Err(_) => String::new(),
-    };
-    let daemon_starting = service_state == "active";
-    let ready_wait = if daemon_starting {
-        DAEMON_READY_TIMEOUT
-    } else {
-        Duration::ZERO
-    };
-
     let proxy = match tokio::time::timeout(DAEMON_TIMEOUT, gaze_core::dbus::connect_gaze()).await {
         Ok(Ok(proxy)) => proxy,
         Ok(Err(err)) => {
             report.error(
                 "DBus",
-                format!("无法连接系统总线：{err}"),
-                "运行 `systemctl status dbus`，并确认系统总线套接字存在。",
+                format!("could not reach the system bus: {err}"),
+                "Run `systemctl status dbus` and confirm the system bus socket exists.",
             );
             return None;
         }
         Err(_) => {
             report.error(
                 "DBus",
-                "连接系统总线超时",
-                "运行 `systemctl status dbus`，并确认系统总线套接字存在。",
+                "timed out connecting to the system bus",
+                "Run `systemctl status dbus` and confirm the system bus socket exists.",
             );
             return None;
         }
+    };
+
+    let unit_state = gaze_core::dbus::gazed_unit_state_on(proxy.inner().connection())
+        .await
+        .ok();
+    let daemon_starting = unit_state == Some(gaze_core::dbus::DaemonState::Starting);
+    let ready_wait = if daemon_starting {
+        DAEMON_READY_TIMEOUT
+    } else {
+        Duration::ZERO
     };
 
     let name_wait_started = Instant::now();
@@ -206,33 +218,19 @@ pub(super) async fn connect_daemon(report: &mut Report) -> Option<Daemon> {
     let ready_wait = ready_wait.saturating_sub(name_wait_started.elapsed());
 
     if name_owned {
-        report.pass("DBus", "gazed 在系统总线上持有 com.gundulabs.Gaze");
+        report.pass("DBus", "gazed owns com.gundulabs.Gaze on the system bus");
     } else {
         // Later calls would fail with the same "not activatable" error. Report the cause
         // once rather than repeating it as separate camera and enrollment faults.
-        let (message, fix) = if !gaze_core::cpu::supports_inference() {
+        let (message, fix) = if daemon_starting && gaze_core::cpu::supports_inference() {
             (
-                "gazed 无法在此 CPU 上运行（缺少 AVX2），因此无法连接系统总线".to_string(),
-                gaze_core::cpu::UNSUPPORTED_CPU_FIX.to_string(),
-            )
-        } else if daemon_starting {
-            (
-                "gazed 正在运行，但尚未取得 com.gundulabs.Gaze（可能正在下载模型）".to_string(),
-                "等待首次运行的模型下载完成，然后重新运行 `gaze doctor`。".to_string(),
-            )
-        } else {
-            (
-                format!(
-                    "gazed 不在系统总线上（服务状态：{}）",
-                    if service_state.is_empty() {
-                        "未报告状态"
-                    } else {
-                        service_state.as_str()
-                    }
-                ),
-                "运行 `sudo systemctl start gazed`；如果服务未持续运行，请查看 `journalctl -u gazed -n 100 --no-pager`。"
+                "gazed is running but has not claimed com.gundulabs.Gaze yet (models may be downloading)"
+                    .to_string(),
+                "Wait for the first-run model download to finish, then re-run `gaze doctor`."
                     .to_string(),
             )
+        } else {
+            gaze_core::dbus::daemon_unavailable_hint(proxy.inner().connection()).await
         };
         report.error("DBus", message, fix);
         return None;
@@ -245,28 +243,35 @@ pub(super) async fn connect_daemon(report: &mut Report) -> Option<Daemon> {
     .await
     {
         Ok(Ok(config)) => {
-            report.pass("守护进程", "gazed 已响应配置请求");
+            report.pass("Daemon", "gazed responded to a configuration request");
             Some(config)
         }
         // The name was owned a moment ago, so losing it here means gazed exited mid-check.
         Ok(Err(err)) if dbus_is_not_activatable(&err) => {
             report.error(
-                "守护进程",
-                "doctor 查询时，gazed 已退出系统总线",
-                "运行 `journalctl -u gazed -n 100 --no-pager` 查看退出原因。",
+                "Daemon",
+                "gazed left the system bus while doctor was querying it",
+                "Run `journalctl -u gazed -n 100 --no-pager` to see why it exited.",
             );
             None
         }
         Ok(Err(err)) => {
             report.error(
-                "守护进程",
-                format!("gazed 未返回配置：{}", dbus_error_message(&err)),
-                "重启 gazed 并查看日志。",
+                "Daemon",
+                format!(
+                    "gazed did not return its configuration: {}",
+                    dbus_error_message(&err)
+                ),
+                "Restart gazed and inspect its journal.",
             );
             None
         }
         Err(_) => {
-            report.error("守护进程", "读取 gazed 配置超时", "重启 gazed 并查看日志。");
+            report.error(
+                "Daemon",
+                "gazed timed out while reading its configuration",
+                "Restart gazed and inspect its journal.",
+            );
             None
         }
     };
@@ -286,31 +291,38 @@ pub(super) async fn check_daemon(
     };
 
     match tokio::time::timeout(DAEMON_TIMEOUT, proxy.is_camera_available()).await {
-        Ok(Ok(true)) => report.pass("摄像头会话", "守护进程可以访问当前 PipeWire 会话"),
+        Ok(Ok(true)) => report.pass(
+            "Camera session",
+            "the daemon can access the current PipeWire session",
+        ),
         Ok(Ok(false)) => report.error(
-            "摄像头会话",
-            "守护进程找不到此会话可用的 PipeWire 运行环境",
-            "在本地图形会话中运行此命令，并确认 /run/user/$UID/pipewire-0 存在。",
+            "Camera session",
+            "the daemon cannot find a usable PipeWire runtime for this session",
+            "Run this command from a local graphical session and verify /run/user/$UID/pipewire-0 exists.",
         ),
         Ok(Err(err)) => report.error(
-            "摄像头会话",
-            format!("可用性检查失败：{}", dbus_error_message(&err)),
-            "查看 gazed 日志中的 PipeWire 或登录会话错误。",
+            "Camera session",
+            format!("availability check failed: {}", dbus_error_message(&err)),
+            "Inspect the gazed journal for PipeWire or login-session errors.",
         ),
-        Err(_) => report.error("摄像头会话", "可用性检查超时", "重启 gazed 并查看日志。"),
+        Err(_) => report.error(
+            "Camera session",
+            "availability check timed out",
+            "Restart gazed and inspect its journal.",
+        ),
     }
     check_cameras(report, config);
 
     match tokio::time::timeout(DAEMON_TIMEOUT, proxy.list_faces(username)).await {
         Ok(Ok(faces)) if faces.is_empty() => report.warning(
-            "录入",
-            format!("尚未为 {username} 录入人脸"),
-            "运行 `gaze add-face default`。",
+            "Enrollment",
+            format!("no faces are enrolled for {username}"),
+            "Run `gaze add-face default`.",
         ),
         Ok(Ok(faces)) => {
             report.pass(
-                "录入",
-                format!("已为 {username} 录入 {} 个人脸档案", faces.len()),
+                "Enrollment",
+                format!("{} face(s) enrolled for {username}", faces.len()),
             );
             if let Some(config) = config {
                 let missing_rgb = !config.cameras.rgb.trim().is_empty()
@@ -319,35 +331,41 @@ pub(super) async fn check_daemon(
                     && faces.iter().any(|(_, _, _, has_ir)| !has_ir);
                 if missing_rgb || missing_ir {
                     let spectra = match (missing_rgb, missing_ir) {
-                        (true, true) => "RGB 和红外",
+                        (true, true) => "RGB and IR",
                         (true, false) => "RGB",
-                        (false, true) => "红外",
+                        (false, true) => "IR",
                         (false, false) => unreachable!(),
                     };
                     report.warning(
-                        "录入覆盖范围",
-                        format!("一个或多个人脸档案缺少 {spectra} 采集数据"),
-                        "对缺少已配置摄像头光谱数据的人脸档案运行 `gaze refine-face <name>`。",
+                        "Enrollment coverage",
+                        format!("one or more profiles have no {spectra} captures"),
+                        "Run `gaze refine-face <name>` for profiles missing configured camera spectra.",
                     );
                 } else {
-                    report.pass("录入覆盖范围", "所有人脸档案均覆盖已配置摄像头的光谱");
+                    report.pass(
+                        "Enrollment coverage",
+                        "all profiles cover the configured camera spectra",
+                    );
                 }
             }
         }
         Ok(Err(err)) if dbus_is_file_not_found(&err) => report.warning(
-            "录入",
-            format!("尚未为 {username} 录入人脸"),
-            "运行 `gaze add-face default`。",
+            "Enrollment",
+            format!("no faces are enrolled for {username}"),
+            "Run `gaze add-face default`.",
         ),
         Ok(Err(err)) => report.error(
-            "录入",
-            format!("无法列出 {username} 的人脸：{}", dbus_error_message(&err)),
-            "运行 `gaze list-faces` 并查看守护进程日志。",
+            "Enrollment",
+            format!(
+                "could not list faces for {username}: {}",
+                dbus_error_message(&err)
+            ),
+            "Run `gaze list-faces` and inspect the daemon journal.",
         ),
         Err(_) => report.error(
-            "录入",
-            format!("检查 {username} 的人脸时超时"),
-            "重启 gazed 并查看日志。",
+            "Enrollment",
+            format!("timed out while checking faces for {username}"),
+            "Restart gazed and inspect its journal.",
         ),
     }
 
@@ -357,9 +375,9 @@ pub(super) async fn check_daemon(
 }
 
 pub(super) async fn check_benchmark(report: &mut Report, proxy: &GazeProxy<'_>) {
-    let term = Term::stdout();
+    let term = Term::stderr();
     let _ = term.write_line(&format!(
-        "{} 正在测试模型推理性能（可能需要几秒钟）...",
+        "{} Benchmarking model inference (this can take a few seconds)...",
         style("i").cyan().bold()
     ));
 
@@ -370,7 +388,7 @@ pub(super) async fn check_benchmark(report: &mut Report, proxy: &GazeProxy<'_>) 
         Ok(Ok(Some(results))) => {
             for result in results {
                 let timings = format!(
-                    "{} [{} / {}]：平均 {:.1}毫秒（{:.1} 帧/秒），p95 {:.1}毫秒，最短 {:.1}毫秒",
+                    "{} [{} / {}]: {:.1}ms avg ({:.1} fps), {:.1}ms p95, {:.1}ms min",
                     result.component,
                     result.execution_provider,
                     result.device,
@@ -380,36 +398,40 @@ pub(super) async fn check_benchmark(report: &mut Report, proxy: &GazeProxy<'_>) 
                     result.min_ms
                 );
                 if result.ran_as_configured() {
-                    report.pass("性能测试", timings);
+                    report.pass("Benchmark", timings);
                 } else {
                     report.warning(
-                        "性能测试",
+                        "Benchmark",
                         format!(
-                            "{timings}；未使用已配置的 {}/{}：{}",
+                            "{timings}; configured {}/{} is not in use: {}",
                             result.requested_execution_provider,
                             result.requested_device,
                             if result.fallback_reason.is_empty() {
-                                "未报告原因"
+                                "no reason reported"
                             } else {
                                 result.fallback_reason.as_str()
                             }
                         ),
-                        "检查 /usr/lib/gaze/runtimes 中的厂商运行时，重启 gazed 并查看日志；cpu/cpu 会禁用加速。",
+                        "Check the vendor runtime in /usr/lib/gaze/runtimes, restart gazed, and inspect its journal; cpu/cpu disables acceleration.",
                     );
                 }
             }
         }
         Ok(Ok(None)) => report.warning(
-            "性能测试",
-            "正在运行的守护进程报告的性能测试数据格式无法被此版本读取",
-            "使用 `systemctl restart gazed` 重启。",
+            "Benchmark",
+            "the running daemon reports a benchmark layout this build cannot read",
+            "Restart it with `systemctl restart gazed`.",
         ),
         Ok(Err(err)) => report.warning(
-            "性能测试",
-            format!("gazed 无法运行性能测试：{err}"),
-            "重启 gazed 并查看日志。",
+            "Benchmark",
+            format!("gazed could not run the benchmark: {err}"),
+            "Restart gazed and inspect its journal.",
         ),
-        Err(_) => report.warning("性能测试", "性能测试超时", "重启 gazed 并查看日志。"),
+        Err(_) => report.warning(
+            "Benchmark",
+            "benchmark timed out",
+            "Restart gazed and inspect its journal.",
+        ),
     }
 }
 

@@ -26,6 +26,22 @@ second Gaze entry *below* the password module, giving face authentication one
 more chance after a rejected password. See
 [Retry after a rejected password](#retry-after-a-rejected-password).
 
+### Trusted daemon connection
+
+PAM connects directly to `/run/dbus/system_bus_socket`, ignoring
+`DBUS_SYSTEM_BUS_ADDRESS`. It verifies that the Gaze bus name is owned by UID 0
+and pins requests to that unique owner. A missing, untrusted, or disconnected
+daemon causes password fallback, never a successful face login.
+
+### Face-only GDM lockout
+
+The packaged `gdm-face` stacks, including NixOS, apply `pam_faillock` before
+scanning, record explicit face rejections, and clear the tally on successful face
+authentication. The system's faillock policy controls the attempt limit and
+unlock interval. Unavailable cameras and unenrolled users fail the face-only
+stack without adding or clearing failures, so automatic scans cannot lock out
+password login merely because face authentication is unavailable.
+
 ### Network logins are skipped
 
 A camera attached to this machine cannot see whoever is at the other end of a
@@ -48,6 +64,39 @@ This matters on Debian and Ubuntu, where enabling a Gaze profile through
 nearly every service on the system, not just the desktop ones. Those services
 keep authenticating by password exactly as before.
 
+### Root services must be known to be local
+
+A name list cannot cover every network daemon. JupyterHub, Webmin, RStudio
+Server and VNC servers authenticate as root, often without setting `PAM_RHOST`,
+so a list of exclusions would let someone on the network submit your username
+while you sit at your desk and have the camera approve them. A PAM host running
+as root therefore only gets face authentication for services Gaze knows run for
+someone at this machine:
+
+- elevation: `sudo`, `sudo-i`, `su`, `su-l`, `doas`, `run0`, `systemd-run0`,
+  `polkit-1`, `pkexec`
+- login greeters: `gdm-password`, `gdm-launch-environment`, `gdm-face`, `sddm`,
+  `plasmalogin`, `plasmalogin-fingerprint`, `lightdm`, `greetd`,
+  `cosmic-greeter`, `ly`, `lemurs`, `lxdm`
+- the KDE lock screen slots and the Omarchy face service
+- `login`, but only on a virtual console (`PAM_TTY` of `ttyN`), because
+  `login` is also the default service of web logins such as JupyterHub
+
+Any other root service falls through to the password. Lock screens that run as
+you (hyprlock, swaylock, the KDE and Cinnamon lockers) are not affected, since
+they can only ask about their own user.
+
+If a root greeter or locker you use is missing, add the `local` option to the
+`pam_gaze.so` line in that service's own file under `/etc/pam.d`, never in a
+shared file such as `common-auth` or `system-auth`:
+
+```text
+auth    [success=done default=ignore]    pam_gaze.so local
+```
+
+Unknown options are ignored with a warning in the system log, so run
+`journalctl -g pam_gaze` if an option seems to have no effect.
+
 ## Debian / Ubuntu
 
 Packages install PAM profiles for `pam-auth-update`.
@@ -64,7 +113,7 @@ Pick one of the Gaze entries, then test with a real PAM prompt:
 sudo -v
 ```
 
-If camera opens and face auth runs, PAM wiring is active.
+If camera opens and face authentication runs, PAM wiring is active.
 
 ### Selective setup: password at GDM, face authentication for sudo and Polkit
 
@@ -192,7 +241,9 @@ RPM packages install an authselect profile at:
 
 `/usr/share/authselect/vendor/gaze`
 
-The profile adds Gaze to both shared authentication stacks: `system-auth`, used by tools such as `sudo`, and `password-auth`, used by KDE's lock screen, SDDM, and Plasma Login Manager. RPM upgrades refresh these generated PAM files automatically when the Gaze profile is active.
+The profile adds Gaze to both shared authentication stacks: `system-auth`, used by tools such as `sudo`, and `password-auth`, used by KDE's lock screen, SDDM, and Plasma Login Manager. RPM upgrades refresh these generated PAM files automatically when the Gaze profile is active. authselect regenerates `/etc/pam.d/system-auth` and `password-auth`, so edit the profile's features instead of those files.
+
+With `with-fingerprint` enabled, Gaze runs before `pam_fprintd`, so the fingerprint prompt only appears after face authentication fails. If you also enable `with-pam-u2f-2fa`, the security key is required before fingerprint as well as before face.
 
 ::: tip KDE lock screen needs `gaze-kde` to be hands-free
 Being in `password-auth` means Gaze runs when KDE's lock screen authenticates, but on its own that only happens once you submit the password field. For face unlock that starts by itself, install `gaze-kde`, which runs Gaze in the slot KScreenLocker starts up front for biometrics. It also stops Gaze running twice on one lock screen, since `/etc/pam.d/kde` includes `password-auth`. See the [KDE Plasma guide](/guide/kde).
@@ -259,7 +310,7 @@ After that, `sudo` authenticates you with your own password or face. Outside
 ### Simultaneous mode on openSUSE
 
 There is no `pam-config` definition for simultaneous mode. The package ships
-only `--gaze` (sequential) and `--gaze_retry`, so add the `simultaneous` option
+only `--gaze` (sequential), so add the `simultaneous` option
 by hand: run `sudo pam-config --add --gaze && sudo pam-config --update`, then
 edit the generated `/etc/pam.d/common-auth-pc` so the Gaze line reads
 
@@ -279,21 +330,14 @@ notice on every authentication and will be removed in a future release. If
 instead. `gaze doctor` reports a stack that still loads it.
 :::
 
-To add a retry after a rejected password, enable the retry definition alongside
-whichever of the above you use:
+### Retry mode on openSUSE
 
-```bash
-sudo pam-config --add --gaze_retry
-sudo pam-config --update
-```
-
-::: warning
-The openSUSE retry definition is newer than the others and has had less testing
-on Tumbleweed than the Debian and Fedora profiles. Check the generated
-`/etc/pam.d/common-auth` afterwards and confirm the `pam_gaze.so retry` line
-landed *below* `pam_unix.so`. If it did not, remove it with
-`sudo pam-config --delete --gaze_retry` and add the line by hand instead.
-:::
+Retry mode is not available on openSUSE. `pam-config` writes `pam_unix.so` as
+`required` unless an LDAP, Kerberos, SSSD or Winbind module is also enabled, and
+once a `required` module has failed, a later face match cannot turn the result
+into a success. Earlier packages shipped a `--gaze_retry` definition anyway; it
+showed "Face Verified." and `sudo` still refused. Upgrading removes that line
+from `/etc/pam.d/common-auth-pc`.
 
 Check that the managed file contains Gaze and that the common-auth link still
 points at the generated file:
@@ -370,7 +414,7 @@ Removing the Gaze package deletes the marker along with the rest of `/etc/gaze`.
 
 ### Polkit (graphical "Authentication Required" prompts)
 
-Arch's `polkit` package ships no `/etc/pam.d/polkit-1`, so the `polkit-1` PAM service falls back to the vendor default at `/usr/lib/pam.d/polkit-1`, which just does `include system-auth`. Since Gaze avoids patching `system-auth` (see above), graphical polkit prompts (`pkexec`, GNOME Settings, package manager GUIs, etc.) don't get face auth unless a `/etc/pam.d/polkit-1` override is installed too. The Arch package and `dev-link-system.sh` create one automatically, and only on Arch:
+Arch's `polkit` package ships no `/etc/pam.d/polkit-1`, so the `polkit-1` PAM service falls back to the vendor default at `/usr/lib/pam.d/polkit-1`, which just does `include system-auth`. Since Gaze avoids patching `system-auth` (see above), graphical polkit prompts (`pkexec`, GNOME Settings, package manager GUIs, etc.) don't get face authentication unless a `/etc/pam.d/polkit-1` override is installed too. The Arch package and `dev-link-system.sh` create one automatically, and only on Arch:
 
 ```text
 #%PAM-1.0
@@ -391,7 +435,7 @@ pkexec true
 
 Some Arch derivatives (Omarchy, for one) do ship an `/etc/pam.d/polkit-1` of their own. There the package adds only the `pam_gaze.so` line, above the first `auth` line, and keeps the rest of the file as it is; the original is copied to `/etc/gaze/polkit-1.pam.bak` first (`dev-link-system.sh` does the same, to `polkit-1.pam.dev.bak`). Removing Gaze strips that line back out and leaves the file in place, rather than deleting a file Gaze did not create.
 
-Debian/Ubuntu and Fedora ship their own `polkit-1` PAM service and do not use `system-auth` the way Arch does, so Gaze never writes this file there. On those systems polkit picks up face auth through the shared auth stack (`pam-auth-update` on Debian/Ubuntu, the `gaze` authselect feature on Fedora). Recent Debian and Ubuntu releases ship that file as a vendor default in `/usr/lib/pam.d/polkit-1` instead of `/etc/pam.d/polkit-1`, but it still includes `common-auth`, so the shared-stack route works either way. An explicit `/etc/pam.d/polkit-1` override is only needed there if you deliberately took Gaze out of the shared stack, as in [Selective setup](#selective-setup-password-at-gdm-face-authentication-for-sudo-and-polkit).
+Debian/Ubuntu and Fedora ship their own `polkit-1` PAM service and do not use `system-auth` the way Arch does, so Gaze never writes this file there. On those systems polkit picks up face authentication through the shared auth stack (`pam-auth-update` on Debian/Ubuntu, the `gaze` authselect feature on Fedora). Recent Debian and Ubuntu releases ship that file as a vendor default in `/usr/lib/pam.d/polkit-1` instead of `/etc/pam.d/polkit-1`, but it still includes `common-auth`, so the shared-stack route works either way. An explicit `/etc/pam.d/polkit-1` override is only needed there if you deliberately took Gaze out of the shared stack, as in [Selective setup](#selective-setup-password-at-gdm-face-authentication-for-sudo-and-polkit).
 
 ## Other distros (manual)
 
@@ -433,6 +477,10 @@ auth    sufficient    pam_gaze.so retry
 The first line still gives you face-or-password. The third line is what catches
 a typo: the password is rejected, and Gaze looks once more instead of failing
 the attempt outright.
+
+The password module must not be `required`. Once a `required` module has
+failed, PAM fails the whole stack whatever a later `sufficient` line returns,
+so the retry could match your face and the login would still be refused.
 
 Retry composes with either mode, so `pam_gaze.so` on its own works as the first
 line too.

@@ -28,6 +28,11 @@ pub fn enroll(username: &str, config: &Config, backend: Backend) -> anyhow::Resu
         unsafe { libc::setrlimit(libc::RLIMIT_CORE, &limit) } == 0,
         "无法禁用凭据进程的核心转储"
     );
+    if let Some(warning) = gaze_security::storage::encryption_warning(
+        gaze_security::storage::disk_encryption(std::path::Path::new(backend.store_dir())),
+    ) {
+        eprintln!("Warning: {warning}");
+    }
     // Check the account before prompting. Enrollment checks again in case it changes meanwhile.
     gaze_security::keyring::Account::lookup(username)?;
     println!("请输入 {username} 的 {} 密码。", backend.name());

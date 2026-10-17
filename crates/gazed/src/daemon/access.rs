@@ -3,7 +3,29 @@
 
 use super::*;
 
+static GAZE_ADMIN_PROMPTS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+struct AdminPromptGuard;
+
+impl AdminPromptGuard {
+    fn new() -> Self {
+        GAZE_ADMIN_PROMPTS.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        Self
+    }
+}
+
+impl Drop for AdminPromptGuard {
+    fn drop(&mut self) {
+        GAZE_ADMIN_PROMPTS.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+    }
+}
+
 impl AuthDaemon {
+    pub(super) fn face_barred_for_admin_prompt(pam_service: Option<&str>) -> bool {
+        GAZE_ADMIN_PROMPTS.load(std::sync::atomic::Ordering::SeqCst) > 0
+            && pam_service.is_some_and(|s| Self::normalize_pam_service(s) == "polkit-1")
+    }
+
     pub fn normalize_pam_service(service: &str) -> String {
         let trimmed = service.trim();
         std::path::Path::new(trimmed)
@@ -14,8 +36,7 @@ impl AuthDaemon {
     }
 
     pub(super) async fn current_config(&self) -> Config {
-        let mut last_good = self.last_good_config.lock().await;
-        resolve_config(Config::load_from(CONFIG_PATH), &mut last_good)
+        self.settings.read().await.clone()
     }
 
     pub(super) fn map_user_db_error(err: UserDbError) -> fdo::Error {
@@ -28,10 +49,6 @@ impl AuthDaemon {
             UserDbError::InvalidName(_) => fdo::Error::InvalidArgs(message),
             UserDbError::Io(_) => fdo::Error::Failed(message),
         }
-    }
-
-    pub(super) fn may_query_extension(caller_uid: u32, target_uid: u32) -> bool {
-        caller_uid == 0 || caller_uid == target_uid
     }
 
     pub(super) async fn emit_effective_face_status(
@@ -55,7 +72,7 @@ impl AuthDaemon {
         UserDatabase::validate_username(username).map_err(Self::map_user_db_error)?;
 
         let c_username = CString::new(username)
-            .map_err(|_| fdo::Error::InvalidArgs("用户名包含 NUL 字节".into()))?;
+            .map_err(|_| fdo::Error::InvalidArgs("username contains NUL byte".into()))?;
         let mut pwd = unsafe { std::mem::zeroed::<libc::passwd>() };
         let mut result: *mut libc::passwd = ptr::null_mut();
         let buf_size = unsafe { libc::sysconf(libc::_SC_GETPW_R_SIZE_MAX) };
@@ -66,21 +83,32 @@ impl AuthDaemon {
         };
         let mut buf = vec![0u8; buf_size];
 
-        let ret = unsafe {
-            libc::getpwnam_r(
-                c_username.as_ptr(),
-                &mut pwd,
-                buf.as_mut_ptr() as *mut libc::c_char,
-                buf.len(),
-                &mut result,
-            )
+        // Directory-backed (LDAP/AD) entries can exceed the advertised size.
+        let ret = loop {
+            let ret = unsafe {
+                libc::getpwnam_r(
+                    c_username.as_ptr(),
+                    &mut pwd,
+                    buf.as_mut_ptr() as *mut libc::c_char,
+                    buf.len(),
+                    &mut result,
+                )
+            };
+            if ret != libc::ERANGE || buf.len() >= 1024 * 1024 {
+                break ret;
+            }
+            buf.resize(buf.len() * 2, 0);
         };
 
         if ret != 0 {
-            return Err(fdo::Error::Failed(format!("无法解析用户 '{username}'")));
+            return Err(fdo::Error::Failed(format!(
+                "failed to resolve user '{username}'"
+            )));
         }
         if result.is_null() {
-            return Err(fdo::Error::AccessDenied(format!("未知用户 '{username}'")));
+            return Err(fdo::Error::AccessDenied(format!(
+                "unknown user '{username}'"
+            )));
         }
 
         Ok(pwd.pw_uid)
@@ -89,23 +117,23 @@ impl AuthDaemon {
     pub(super) async fn caller_uid(header: &Header<'_>) -> fdo::Result<u32> {
         let sender = header
             .sender()
-            .ok_or_else(|| fdo::Error::AccessDenied("缺少 DBus 发送者".into()))?;
+            .ok_or_else(|| fdo::Error::AccessDenied("Missing DBus sender".into()))?;
         dbus_proxy()
             .await?
             .get_connection_unix_user(sender.to_owned().into())
             .await
-            .map_err(|e| fdo::Error::Failed(format!("无法获取调用者 UID：{e}")))
+            .map_err(|e| fdo::Error::Failed(format!("Failed to get caller uid: {e}")))
     }
 
     pub(super) async fn caller_pid(header: &Header<'_>) -> fdo::Result<u32> {
         let sender = header
             .sender()
-            .ok_or_else(|| fdo::Error::AccessDenied("缺少 DBus 发送者".into()))?;
+            .ok_or_else(|| fdo::Error::AccessDenied("Missing DBus sender".into()))?;
         dbus_proxy()
             .await?
             .get_connection_unix_process_id(sender.to_owned().into())
             .await
-            .map_err(|e| fdo::Error::Failed(format!("无法获取调用者 PID：{e}")))
+            .map_err(|e| fdo::Error::Failed(format!("Failed to get caller pid: {e}")))
     }
 
     pub(super) fn environ_has_ssh_marker(environ: &[u8]) -> bool {
@@ -220,18 +248,20 @@ impl AuthDaemon {
         abort_before_first_resume && !resume_seen
     }
 
-    pub(super) async fn ensure_auth_not_aborted(&self, header: &Header<'_>) -> fdo::Result<()> {
-        let abort_before_first_resume = *self.abort_before_first_resume.lock().await;
+    pub(super) async fn ensure_auth_not_aborted(
+        &self,
+        header: &Header<'_>,
+        auth: &gaze_core::config::AuthConfig,
+    ) -> fdo::Result<()> {
         if Self::resume_gate_blocks(
-            abort_before_first_resume,
+            auth.abort_before_first_resume,
             self.resume_seen.load(Ordering::SeqCst),
         ) {
             warn!("No suspend/resume since boot, aborting face auth");
-            return Err(fdo::Error::Failed("启动后尚未挂起并恢复".into()));
+            return Err(fdo::Error::Failed("no suspend/resume since boot".into()));
         }
 
-        let abort_if_ssh = *self.abort_if_ssh.lock().await;
-        if abort_if_ssh {
+        if auth.abort_if_ssh {
             let caller_pid = Self::caller_pid(header).await.ok();
             let heuristic_is_ssh =
                 Self::caller_is_ssh_session_at(std::path::Path::new("/proc"), caller_pid);
@@ -241,17 +271,83 @@ impl AuthDaemon {
             };
             if Self::ssh_session_verdict(heuristic_is_ssh, session_remote) {
                 warn!(caller_pid, "SSH session detected, aborting face auth");
-                return Err(fdo::Error::Failed("检测到 SSH 会话".into()));
+                return Err(fdo::Error::Failed("SSH session detected".into()));
             }
         }
 
-        let abort_if_lid_closed = *self.abort_if_lid_closed.lock().await;
-        if abort_if_lid_closed && Self::is_lid_closed().await {
-            warn!("Laptop lid is closed, aborting face auth");
-            return Err(fdo::Error::Failed("笔记本已合盖".into()));
-        }
-
         Ok(())
+    }
+
+    pub(super) async fn lid_closed_wait(&self, abort_if_lid_closed: bool) -> fdo::Result<bool> {
+        if !abort_if_lid_closed || !Self::is_lid_closed().await {
+            return Ok(false);
+        }
+        let sleeping = *self.sleeping.borrow();
+        if sleeping || Self::lid_close_sleeps().await {
+            return Ok(true);
+        }
+        warn!("Laptop lid is closed, aborting face auth");
+        Err(fdo::Error::Failed("lid closed".into()))
+    }
+
+    pub(super) fn lid_close_action<'a>(
+        docked: bool,
+        on_external_power: bool,
+        handle: &'a str,
+        handle_external_power: &'a str,
+        handle_docked: &'a str,
+    ) -> &'a str {
+        if docked {
+            handle_docked
+        } else if on_external_power && !handle_external_power.is_empty() {
+            handle_external_power
+        } else {
+            handle
+        }
+    }
+
+    pub(super) fn action_sleeps(action: &str) -> bool {
+        matches!(
+            action,
+            "suspend" | "hibernate" | "hybrid-sleep" | "suspend-then-hibernate" | "sleep"
+        )
+    }
+
+    pub(super) async fn lid_close_sleeps() -> bool {
+        let Ok(conn) = system_bus().await else {
+            return false;
+        };
+        let Ok(proxy) = zbus::Proxy::new(
+            &conn,
+            "org.freedesktop.login1",
+            "/org/freedesktop/login1",
+            "org.freedesktop.login1.Manager",
+        )
+        .await
+        else {
+            return false;
+        };
+        let docked: bool = proxy.get_property("Docked").await.unwrap_or(false);
+        let on_external_power: bool = proxy.get_property("OnExternalPower").await.unwrap_or(false);
+        let handle: String = proxy
+            .get_property("HandleLidSwitch")
+            .await
+            .unwrap_or_default();
+        let handle_external_power: String = proxy
+            .get_property("HandleLidSwitchExternalPower")
+            .await
+            .unwrap_or_default();
+        let handle_docked: String = proxy
+            .get_property("HandleLidSwitchDocked")
+            .await
+            .unwrap_or_default();
+        Self::action_sleeps(Self::lid_close_action(
+            docked,
+            on_external_power,
+            &handle,
+            &handle_external_power,
+            &handle_docked,
+        ))
     }
 
     pub(super) async fn ensure_user_access(
@@ -297,7 +393,7 @@ impl AuthDaemon {
         let target_uid = Self::username_uid(&claim.username)?;
         if !Self::seat_camera_available(caller_uid, target_uid).await {
             return Err(fdo::Error::AccessDenied(
-                "拒绝采集：此席位的摄像头属于其他用户的会话".into(),
+                "refusing capture: the seat camera belongs to another user's session".into(),
             ));
         }
         Ok((caller_uid, target_uid))
@@ -316,7 +412,7 @@ impl AuthDaemon {
             return Ok(());
         }
         Err(fdo::Error::AccessDenied(
-            "仅 root 或活动会话可以读取 Gaze 配置".into(),
+            "only root or the active session may read the Gaze configuration".into(),
         ))
     }
 
@@ -340,6 +436,13 @@ impl AuthDaemon {
         Ok(Self::pam_internal_owner(caller_uid, active_uid))
     }
 
+    pub(super) fn pam_internal_sender(header: &Header<'_>) -> fdo::Result<String> {
+        header
+            .sender()
+            .map(|s| s.to_string())
+            .ok_or_else(|| fdo::Error::AccessDenied("Missing DBus sender".into()))
+    }
+
     pub(super) async fn pam_internal_write_owner(header: &Header<'_>) -> fdo::Result<u32> {
         let caller_uid = Self::caller_uid(header).await?;
         let active_uid = active_session_uid_and_class().await.map(|(uid, _)| uid);
@@ -347,7 +450,7 @@ impl AuthDaemon {
             return Ok(Self::pam_internal_owner(caller_uid, active_uid));
         }
         Err(fdo::Error::AccessDenied(
-            "仅 root 或活动会话可以修改 PAM 内部服务列表".into(),
+            "only root or the active session may modify the PAM internal services list".into(),
         ))
     }
 
@@ -381,7 +484,7 @@ impl AuthDaemon {
 
     pub(super) fn signal_destination(sender: &str) -> fdo::Result<BusName<'static>> {
         BusName::try_from(sender.to_string())
-            .map_err(|e| fdo::Error::Failed(format!("信号目标无效：{e}")))
+            .map_err(|e| fdo::Error::Failed(format!("Invalid signal destination: {e}")))
     }
 
     pub(super) async fn ensure_authorized(header: &Header<'_>, action_id: &str) -> fdo::Result<()> {
@@ -395,29 +498,28 @@ impl AuthDaemon {
     ) -> fdo::Result<()> {
         let conn = system_bus().await?;
 
-        let authority = zbus_polkit::policykit1::AuthorityProxy::new(&conn)
+        let authority = gaze_core::polkit::AuthorityProxy::new(&conn)
             .await
-            .map_err(|e| fdo::Error::Failed(format!("无法创建 polkit 代理：{e}")))?;
+            .map_err(|e| fdo::Error::Failed(format!("Failed to create polkit proxy: {e}")))?;
 
-        let subject = zbus_polkit::policykit1::Subject::new_for_message_header(header)
-            .map_err(|e| fdo::Error::Failed(format!("无法创建 polkit 主体：{e}")))?;
+        let subject = gaze_core::polkit::Subject::for_message_header(header)
+            .map_err(|e| fdo::Error::Failed(format!("Failed to create polkit subject: {e}")))?;
 
         let details: HashMap<&str, &str> = HashMap::new();
         let flags = match interaction {
-            Interaction::Allow => {
-                zbus_polkit::policykit1::CheckAuthorizationFlags::AllowUserInteraction.into()
-            }
-            Interaction::Deny => Default::default(),
+            Interaction::Allow => gaze_core::polkit::ALLOW_USER_INTERACTION,
+            Interaction::Deny => gaze_core::polkit::NO_INTERACTION,
         };
 
+        let _admin_prompt = matches!(interaction, Interaction::Allow).then(AdminPromptGuard::new);
         let result = authority
             .check_authorization(&subject, action_id, &details, flags, "")
             .await
-            .map_err(|e| fdo::Error::Failed(format!("PolicyKit 授权检查失败：{e}")))?;
+            .map_err(|e| fdo::Error::Failed(format!("PolicyKit CheckAuthorization failed: {e}")))?;
 
         if !result.is_authorized {
             return Err(fdo::Error::AccessDenied(format!(
-                "操作 '{action_id}' 的授权被拒绝"
+                "Authorization denied for action '{action_id}'"
             )));
         }
 
@@ -428,22 +530,23 @@ impl AuthDaemon {
         let sender = header
             .sender()
             .map(|s| s.to_string())
-            .ok_or_else(|| fdo::Error::AccessDenied("缺少 DBus 发送者".into()))?;
+            .ok_or_else(|| fdo::Error::AccessDenied("Missing DBus sender".into()))?;
 
         let state = self.claim_state.lock().await;
         if let Some(claim) = &*state {
             if claim.sender == sender {
                 return Ok(claim.clone());
             } else {
-                return Err(fdo::Error::Failed("守护进程已被其他进程占用".into()));
+                return Err(fdo::Error::Failed(
+                    "Daemon is claimed by another process".into(),
+                ));
             }
         }
-        Err(fdo::Error::Failed("尚未取得守护进程使用权".into()))
+        Err(fdo::Error::Failed("Daemon is not claimed".into()))
     }
 
-    // Every capture opens the seat's V4L2 device, so a bystander's camera must never
-    // authenticate another user: the target, or a caller vouching for them, has to hold the seat.
-    // `active` is (uid, is_greeter) for the active seat; `seat_unoccupied` is its own check.
+    // Protect bystanders' cameras by checking seat ownership before capture.
+    // `active` is (uid, is_greeter); `seat_unoccupied` is checked separately.
     pub(super) fn seat_camera_allowed(
         caller_uid: u32,
         target_uid: u32,
@@ -526,6 +629,20 @@ mod tests {
     use gaze_core::config::AuthSurface;
     use gaze_core::dbus::ActiveSession;
     use std::sync::Arc;
+
+    #[test]
+    fn polkit_face_auth_is_barred_while_a_gaze_admin_prompt_is_open() {
+        assert!(!AuthDaemon::face_barred_for_admin_prompt(Some("polkit-1")));
+        let guard = AdminPromptGuard::new();
+        assert!(AuthDaemon::face_barred_for_admin_prompt(Some("polkit-1")));
+        assert!(AuthDaemon::face_barred_for_admin_prompt(Some(
+            "/etc/pam.d/polkit-1"
+        )));
+        assert!(!AuthDaemon::face_barred_for_admin_prompt(Some("sudo")));
+        assert!(!AuthDaemon::face_barred_for_admin_prompt(None));
+        drop(guard);
+        assert!(!AuthDaemon::face_barred_for_admin_prompt(Some("polkit-1")));
+    }
 
     fn session(class: &str) -> ActiveSession {
         ActiveSession {
@@ -623,6 +740,42 @@ mod tests {
         assert!(AuthDaemon::lid_state_is_closed("state:      closed\n"));
         assert!(AuthDaemon::lid_state_is_closed("State: CLOSED\n"));
         assert!(!AuthDaemon::lid_state_is_closed("state:      open\n"));
+    }
+
+    #[test]
+    fn lid_close_action_follows_logind_precedence() {
+        assert_eq!(
+            AuthDaemon::lid_close_action(true, true, "suspend", "lock", "ignore"),
+            "ignore"
+        );
+        assert_eq!(
+            AuthDaemon::lid_close_action(false, true, "suspend", "lock", "ignore"),
+            "lock"
+        );
+        assert_eq!(
+            AuthDaemon::lid_close_action(false, true, "suspend", "", "ignore"),
+            "suspend"
+        );
+        assert_eq!(
+            AuthDaemon::lid_close_action(false, false, "suspend", "lock", "ignore"),
+            "suspend"
+        );
+    }
+
+    #[test]
+    fn only_sleeping_lid_actions_wait_for_suspend() {
+        for action in [
+            "suspend",
+            "hibernate",
+            "hybrid-sleep",
+            "suspend-then-hibernate",
+            "sleep",
+        ] {
+            assert!(AuthDaemon::action_sleeps(action), "{action}");
+        }
+        for action in ["ignore", "lock", "poweroff", "reboot", "halt", "kexec", ""] {
+            assert!(!AuthDaemon::action_sleeps(action), "{action}");
+        }
     }
 
     #[test]
@@ -904,13 +1057,6 @@ mod tests {
             Some((1000, false)),
             false
         ));
-    }
-
-    #[test]
-    fn extension_state_is_visible_only_to_root_or_the_target_user() {
-        assert!(AuthDaemon::may_query_extension(0, 1000));
-        assert!(AuthDaemon::may_query_extension(1000, 1000));
-        assert!(!AuthDaemon::may_query_extension(1001, 1000));
     }
 
     #[test]

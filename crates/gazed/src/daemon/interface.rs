@@ -10,9 +10,7 @@ enum EnrollMsg {
     Error(String),
 }
 
-/// Restricts KWallet unlock to KDE greeter services. Any other caller likely
-/// indicates a client bug or a confused-deputy attempt from another login path.
-/// Keeping this as a pure predicate lets us test the allowlist without D-Bus.
+/// Restrict KWallet unlock to KDE greeter PAM services.
 fn is_kwallet_pam_service(pam_service: &str) -> bool {
     matches!(
         pam_service,
@@ -30,26 +28,8 @@ impl AuthDaemon {
         let caller_uid = Self::caller_uid(&header)
             .await
             .map_err(|e| zbus::fdo::Error::Failed(e.to_string()))?;
-        let mut extensions = self.active_extensions.lock().await;
-        extensions.insert(caller_uid, active);
         info!(caller_uid, active, "Registered extension status");
         Ok(())
-    }
-
-    async fn is_extension_active(
-        &self,
-        #[zbus(header)] header: Header<'_>,
-        uid: u32,
-    ) -> fdo::Result<bool> {
-        let caller_uid = Self::caller_uid(&header).await?;
-        if !Self::may_query_extension(caller_uid, uid) {
-            return Err(fdo::Error::AccessDenied(
-                "不允许查询其他用户的扩展状态".into(),
-            ));
-        }
-        let extensions = self.active_extensions.lock().await;
-        let is_active = extensions.get(&uid).copied().unwrap_or(false);
-        Ok(is_active)
     }
 
     async fn claim(
@@ -61,7 +41,7 @@ impl AuthDaemon {
         let sender = header
             .sender()
             .map(|s| s.to_string())
-            .ok_or_else(|| fdo::Error::AccessDenied("缺少 DBus 发送者".into()))?;
+            .ok_or_else(|| fdo::Error::AccessDenied("Missing DBus sender".into()))?;
 
         let caller_uid = Self::caller_uid(&header).await?;
         let target_uid = Self::username_uid(&username)?;
@@ -71,14 +51,21 @@ impl AuthDaemon {
 
         if !Self::seat_camera_available(caller_uid, target_uid).await {
             return Err(fdo::Error::AccessDenied(
-                "拒绝人脸认证：此席位的摄像头属于其他用户的会话".into(),
+                "refusing face authentication: the seat camera belongs to another user's session"
+                    .into(),
             ));
         }
 
         let mut state = self.claim_state.lock().await;
         if let Some(existing) = &*state {
             if existing.sender == sender {
-                return Ok(());
+                if existing.username == username {
+                    return Ok(());
+                }
+                return Err(fdo::Error::Failed(format!(
+                    "Device already claimed for '{}'; release it before claiming for another user",
+                    existing.username
+                )));
             }
             if caller_uid == 0 {
                 self.cancel_active_tasks().await;
@@ -88,7 +75,9 @@ impl AuthDaemon {
                     "Root caller preempting existing daemon claim"
                 );
             } else {
-                return Err(fdo::Error::Failed("设备已被其他接口占用".into()));
+                return Err(fdo::Error::Failed(
+                    "Device already claimed by another interface".into(),
+                ));
             }
         }
 
@@ -100,18 +89,11 @@ impl AuthDaemon {
             "Claimed daemon"
         );
         let epoch = CLAIM_EPOCH.fetch_add(1, Ordering::Relaxed);
-        *state = Some(ClaimState {
-            username,
-            sender: sender.clone(),
-            epoch,
-        });
-        drop(state);
 
         let claim_state = self.claim_state.clone();
         let active_cancel = self.active_cancel.clone();
-
         let timeout_sender = sender.clone();
-        self.rt_handle.spawn(async move {
+        let timeout = self.rt_handle.spawn(async move {
             tokio::time::sleep(std::time::Duration::from_secs(CLAIM_TIMEOUT_SECS)).await;
             if release_claim_epoch(&claim_state, &active_cancel, epoch).await {
                 warn!(
@@ -121,6 +103,14 @@ impl AuthDaemon {
                 );
             }
         });
+
+        *state = Some(ClaimState {
+            username,
+            sender: sender.clone(),
+            epoch,
+            _timeout: Some(Arc::new(ClaimTimeout(timeout.abort_handle()))),
+        });
+        drop(state);
 
         let claim_state = self.claim_state.clone();
         let active_cancel = self.active_cancel.clone();
@@ -181,12 +171,12 @@ impl AuthDaemon {
         let sender = header
             .sender()
             .map(|s| s.to_string())
-            .ok_or_else(|| fdo::Error::AccessDenied("缺少 DBus 发送者".into()))?;
+            .ok_or_else(|| fdo::Error::AccessDenied("Missing DBus sender".into()))?;
 
         let mut state = self.claim_state.lock().await;
         if let Some(claim) = &*state {
             if claim.sender != sender {
-                return Err(fdo::Error::Failed("发送者未持有使用权".into()));
+                return Err(fdo::Error::Failed("Sender does not own the claim".into()));
             }
 
             self.cancel_active_tasks().await;
@@ -194,13 +184,13 @@ impl AuthDaemon {
             info!(sender = %sender, "Released daemon");
             Ok(())
         } else {
-            Err(fdo::Error::Failed("尚未取得守护进程使用权".into()))
+            Err(fdo::Error::Failed("Daemon not claimed".into()))
         }
     }
 
     async fn verify_start(
         &self,
-        #[zbus(signal_context)] ctxt: SignalEmitter<'_>,
+        #[zbus(signal_emitter)] ctxt: SignalEmitter<'_>,
         #[zbus(header)] header: Header<'_>,
         _face_name: String,
     ) -> fdo::Result<()> {
@@ -209,7 +199,7 @@ impl AuthDaemon {
 
     async fn verify_start_for(
         &self,
-        #[zbus(signal_context)] ctxt: SignalEmitter<'_>,
+        #[zbus(signal_emitter)] ctxt: SignalEmitter<'_>,
         #[zbus(header)] header: Header<'_>,
         _face_name: String,
         pam_service: String,
@@ -220,7 +210,7 @@ impl AuthDaemon {
 
     async fn verify_start_for_keyring(
         &self,
-        #[zbus(signal_context)] ctxt: SignalEmitter<'_>,
+        #[zbus(signal_emitter)] ctxt: SignalEmitter<'_>,
         #[zbus(header)] header: Header<'_>,
     ) -> fdo::Result<()> {
         self.start_verification(ctxt, header, Some("gdm-face".into()), true)
@@ -229,12 +219,14 @@ impl AuthDaemon {
 
     async fn verify_start_for_kwallet(
         &self,
-        #[zbus(signal_context)] ctxt: SignalEmitter<'_>,
+        #[zbus(signal_emitter)] ctxt: SignalEmitter<'_>,
         #[zbus(header)] header: Header<'_>,
         pam_service: String,
     ) -> fdo::Result<()> {
         if !is_kwallet_pam_service(pam_service.as_str()) {
-            return Err(fdo::Error::InvalidArgs("KWallet 需要 KDE 登录服务".into()));
+            return Err(fdo::Error::InvalidArgs(
+                "KWallet requires a KDE login service".into(),
+            ));
         }
         self.start_verification(ctxt, header, Some(pam_service), true)
             .await
@@ -262,19 +254,21 @@ impl AuthDaemon {
 
     async fn set_ir_frame_size(
         &self,
-        #[zbus(signal_context)] ctxt: SignalEmitter<'_>,
+        #[zbus(signal_emitter)] ctxt: SignalEmitter<'_>,
         #[zbus(header)] header: Header<'_>,
         width: u32,
         height: u32,
     ) -> fdo::Result<()> {
         Self::ensure_authorized(&header, POLKIT_ACTION_MANAGE_CONFIG).await?;
-        let mut config = self.current_config().await;
         let requested = ((width, height) != (0, 0)).then_some((width, height));
-        if config.cameras.ir_frame_size() == requested {
+        if self.current_config().await.cameras.ir_frame_size() == requested {
             return Ok(());
         }
-        config.cameras.set_ir_frame_size(requested);
-        self.apply_config(config).await?;
+        self.apply_config(move |mut config| {
+            config.cameras.set_ir_frame_size(requested);
+            Ok(config)
+        })
+        .await?;
         self.config_invalidate(&ctxt).await.map_err(Into::into)
     }
 
@@ -285,7 +279,7 @@ impl AuthDaemon {
 
     async fn enroll_start(
         &self,
-        #[zbus(signal_context)] ctxt: SignalEmitter<'_>,
+        #[zbus(signal_emitter)] ctxt: SignalEmitter<'_>,
         #[zbus(header)] header: Header<'_>,
         face_name: String,
     ) -> fdo::Result<()> {
@@ -296,12 +290,16 @@ impl AuthDaemon {
 
         UserDatabase::validate_face_name(&face_name).map_err(Self::map_user_db_error)?;
 
-        let detector_arc = self.detector.clone();
-        let recognizer_rgb_arc = self.recognizer_rgb.clone();
-        let recognizer_ir_arc = self.recognizer_ir.clone();
         let db_arc = self.db.clone();
 
-        let config = self.current_config().await;
+        let (caller_uid, target_uid) = Self::ensure_claim_camera_access(&header, &claim).await?;
+        let mut rx =
+            replace_claim_task(&self.claim_state, &self.active_cancel, claim.epoch).await?;
+        let config = self.settings.for_run(&mut rx).await?;
+        let sessions = self.capture_models(&config)?;
+        let detector_arc = sessions.rgb.detector;
+        let recognizer_rgb_arc = sessions.rgb.recognizer;
+        let ir_models = sessions.ir;
         let sources = resolve_configured_sources(&config.cameras);
         let rgb_device = sources.rgb;
         let ir_device = sources.ir;
@@ -310,9 +308,7 @@ impl AuthDaemon {
         let conn = ctxt.connection().clone();
         let path = ctxt.path().to_owned();
         let claim_state = self.claim_state.clone();
-        Self::ensure_claim_camera_access(&header, &claim).await?;
-        let mut rx =
-            replace_claim_task(&self.claim_state, &self.active_cancel, claim.epoch).await?;
+        let camera_lease = self.camera_lease.clone();
 
         self.rt_handle.spawn(async move {
             let ctxt = match SignalEmitter::new(&conn, path) {
@@ -327,7 +323,25 @@ impl AuthDaemon {
             let run_ir = !ir_device.is_empty();
 
             if !run_rgb && !run_ir {
-                error!("未配置用于录入的摄像头");
+                error!("No cameras configured for enrollment");
+                let _ = Self::enroll_status(&ctxt, &face_name, 0, 5, true, EnrollPrompt::Cancelled, -1.0).await;
+                return;
+            }
+
+            let _camera_lease_guard = match acquire_camera_lease(
+                &camera_lease,
+                &mut rx,
+                None,
+                Self::seat_camera_available(caller_uid, target_uid),
+            ).await {
+                Ok(guard) => guard,
+                Err(reason) => {
+                    info!(?reason, "EnrollStart: camera lease refused");
+                    let _ = Self::enroll_status(&ctxt, &face_name, 0, 5, true, EnrollPrompt::Cancelled, -1.0).await;
+                    return;
+                }
+            };
+            if rx.try_recv() != Err(oneshot::error::TryRecvError::Empty) {
                 let _ = Self::enroll_status(&ctxt, &face_name, 0, 5, true, EnrollPrompt::Cancelled, -1.0).await;
                 return;
             }
@@ -397,7 +411,7 @@ impl AuthDaemon {
                                 Err(e) => {
                                     dead_streams += 1;
                                     if dead_streams >= 3 {
-                                        let _ = tx.blocking_send(EnrollMsg::Error(format!("打开 RGB 摄像头出错：{e}")));
+                                        let _ = tx.blocking_send(EnrollMsg::Error(format!("RGB Camera open error: {e}")));
                                         return;
                                     }
                                     std::thread::sleep(Duration::from_millis(200));
@@ -426,7 +440,12 @@ impl AuthDaemon {
                                     let mut recognizer = recognizer_rgb_arc.blocking_lock();
                                     match process_frame_sync(&mut checker, &mut recognizer, &frame, false) {
                                         Ok(res) => res,
-                                        Err(_) => (CaptureStatus::NoFace, None),
+                                        Err(error) => {
+                                            let message = format!("RGB inference failed: {error:#}");
+                                            error!("{message}");
+                                            let _ = tx.blocking_send(EnrollMsg::Error(message));
+                                            return;
+                                        }
                                     }
                                 };
 
@@ -445,6 +464,8 @@ impl AuthDaemon {
                                         if prompt == EnrollPrompt::LookStraight {
                                             pose_baseline = Some((data.yaw, data.pitch));
                                         }
+                                        // The flag hands the device to the IR thread, so it must be closed first.
+                                        drop(cam);
                                         rgb_captured_for_step_clone.store(true, std::sync::atomic::Ordering::Relaxed);
                                         let _ = tx.blocking_send(EnrollMsg::Captured(current_step, Spectrum::Rgb, data.embedding));
                                         dead_streams = 0;
@@ -458,7 +479,7 @@ impl AuthDaemon {
                             dead_streams += 1;
                             if dead_streams >= 3 {
                                 let _ = tx.blocking_send(EnrollMsg::Error(
-                                    "RGB 摄像头数据流意外停止".into(),
+                                    "RGB camera stream stopped unexpectedly".into(),
                                 ));
                                 return;
                             }
@@ -469,7 +490,7 @@ impl AuthDaemon {
                     let mut cam = match Camera::open_privileged(&rgb_device_clone) {
                         Ok(c) => c,
                         Err(e) => {
-                            let _ = tx.blocking_send(EnrollMsg::Error(format!("打开 RGB 摄像头出错：{e}")));
+                            let _ = tx.blocking_send(EnrollMsg::Error(format!("RGB Camera open error: {e}")));
                             return;
                         }
                     };
@@ -506,7 +527,12 @@ impl AuthDaemon {
                             let mut recognizer = recognizer_rgb_arc.blocking_lock();
                             match process_frame_sync(&mut checker, &mut recognizer, &frame, false) {
                                 Ok(res) => res,
-                                Err(_) => (CaptureStatus::NoFace, None),
+                                Err(error) => {
+                                    let message = format!("RGB inference failed: {error:#}");
+                                    error!("{message}");
+                                    let _ = tx.blocking_send(EnrollMsg::Error(message));
+                                    return;
+                                }
                             }
                         };
 
@@ -537,19 +563,19 @@ impl AuthDaemon {
                         && completed_steps_clone.load(std::sync::atomic::Ordering::Relaxed) < max_steps
                     {
                         let _ = tx.blocking_send(EnrollMsg::Error(
-                            "RGB 摄像头数据流意外停止".into(),
+                            "RGB camera stream stopped unexpectedly".into(),
                         ));
                     }
                 }));
             }
 
             let mut ir_thread = None;
-            if run_ir {
+            if let Some(ir_models) = ir_models.filter(|_| run_ir) {
                 let stop_clone = stop_flag.clone();
                 let tx = enroll_tx.clone();
-                let detector_arc = detector_arc.clone();
+                let detector_arc = ir_models.detector;
                 let config_clone = config.clone();
-                let recognizer_ir_arc = recognizer_ir_arc.clone();
+                let recognizer_ir_arc = ir_models.recognizer;
                 let completed_steps_clone = completed_steps_atomic.clone();
                 let ir_device_clone = ir_device.clone();
                 let ir_node_clone = ir_node.clone();
@@ -593,7 +619,7 @@ impl AuthDaemon {
                                 Err(e) => {
                                     dead_streams += 1;
                                     if dead_streams >= 3 {
-                                        let _ = tx.blocking_send(EnrollMsg::Error(format!("打开红外摄像头出错：{e}")));
+                                        let _ = tx.blocking_send(EnrollMsg::Error(format!("IR Camera open error: {e}")));
                                         return;
                                     }
                                     std::thread::sleep(Duration::from_millis(200));
@@ -629,7 +655,12 @@ impl AuthDaemon {
                                     let mut recognizer = recognizer_ir_arc.blocking_lock();
                                     match process_frame_sync(&mut checker, &mut recognizer, &frame, false) {
                                         Ok(res) => res,
-                                        Err(_) => (CaptureStatus::NoFace, None),
+                                        Err(error) => {
+                                            let message = format!("IR inference failed: {error:#}");
+                                            error!("{message}");
+                                            let _ = tx.blocking_send(EnrollMsg::Error(message));
+                                            return;
+                                        }
                                     }
                                 };
 
@@ -646,7 +677,7 @@ impl AuthDaemon {
                             dead_streams += 1;
                             if dead_streams >= 3 {
                                 let _ = tx.blocking_send(EnrollMsg::Error(
-                                    "红外摄像头数据流意外停止".into(),
+                                    "IR camera stream stopped unexpectedly".into(),
                                 ));
                                 return;
                             }
@@ -662,7 +693,7 @@ impl AuthDaemon {
                     let mut cam = match Camera::open_ir_privileged(&ir_device_clone, config_clone.cameras.ir_frame_size()) {
                         Ok(c) => c,
                         Err(e) => {
-                            let _ = tx.blocking_send(EnrollMsg::Error(format!("打开红外摄像头出错：{e}")));
+                            let _ = tx.blocking_send(EnrollMsg::Error(format!("IR Camera open error: {e}")));
                             return;
                         }
                     };
@@ -710,7 +741,12 @@ impl AuthDaemon {
                             let mut recognizer = recognizer_ir_arc.blocking_lock();
                             match process_frame_sync(&mut checker, &mut recognizer, &frame, false) {
                                 Ok(res) => res,
-                                Err(_) => (CaptureStatus::NoFace, None),
+                                Err(error) => {
+                                    let message = format!("IR inference failed: {error:#}");
+                                    error!("{message}");
+                                    let _ = tx.blocking_send(EnrollMsg::Error(message));
+                                    return;
+                                }
                             }
                         };
 
@@ -741,7 +777,7 @@ impl AuthDaemon {
                         && completed_steps_clone.load(std::sync::atomic::Ordering::Relaxed) < max_steps
                     {
                         let _ = tx.blocking_send(EnrollMsg::Error(
-                            "红外摄像头数据流意外停止".into(),
+                            "IR camera stream stopped unexpectedly".into(),
                         ));
                     }
                 }));
@@ -896,15 +932,22 @@ impl AuthDaemon {
                         let _ = Self::enroll_status(&ctxt, &face_name, completed_steps as u32, max_steps, true, EnrollPrompt::Cancelled, -1.0).await;
                     }
                 }
+            } else if !aborted {
+                // The claim was revoked while enrollment ran, so the client still needs a final status.
+                let _ = Self::enroll_status(&ctxt, &face_name, completed_steps as u32, max_steps, true, EnrollPrompt::Cancelled, -1.0).await;
             }
             drop(state);
 
-            if let Some(t) = rgb_thread {
-                let _ = t.join();
-            }
-            if let Some(t) = ir_thread {
-                let _ = t.join();
-            }
+            let _ = tokio::task::spawn_blocking(move || {
+                if let Some(t) = rgb_thread {
+                    let _ = t.join();
+                }
+                if let Some(t) = ir_thread {
+                    let _ = t.join();
+                }
+            })
+            .await;
+            drop(config);
         });
 
         Ok(())
@@ -949,26 +992,25 @@ impl AuthDaemon {
             Self::ensure_authorized(&header, POLKIT_ACTION_MANAGE_CONFIG).await?;
         }
 
-        let Some(_slot) = BenchmarkSlot::acquire(&self.benchmark_running) else {
-            return Err(fdo::Error::Failed("RETRYABLE: 性能测试已在运行".into()));
+        let Some(slot) = BenchmarkSlot::acquire(&self.benchmark_running) else {
+            return Err(fdo::Error::Failed(
+                "RETRYABLE: a benchmark is already running".into(),
+            ));
         };
 
-        let detector_arc = self.detector.clone();
-        let recognizer_rgb_arc = self.recognizer_rgb.clone();
-        let recognizer_ir_arc = self.recognizer_ir.clone();
         let liveness_arc = self.liveness.clone();
+        let config = self.settings.read().await;
+        let sessions = self.capture_models(&config)?;
 
         self.rt_handle
             .spawn_blocking(move || {
-                run_inference_benchmark(
-                    detector_arc,
-                    recognizer_rgb_arc,
-                    recognizer_ir_arc,
-                    liveness_arc,
-                )
+                let _slot = slot;
+                let result = run_inference_benchmark(sessions, liveness_arc);
+                drop(config);
+                result
             })
             .await
-            .map_err(|e| fdo::Error::Failed(format!("性能测试任务异常终止：{e}")))?
+            .map_err(|e| fdo::Error::Failed(format!("benchmark task panicked: {e}")))?
     }
 
     async fn delete_face(
@@ -1029,7 +1071,7 @@ impl AuthDaemon {
         let cleared = self
             .duress_lockout
             .clear(&username)
-            .map_err(|e| fdo::Error::Failed(format!("无法解除胁迫锁定：{e}")))?;
+            .map_err(|e| fdo::Error::Failed(format!("Failed to clear duress lockout: {e}")))?;
         if cleared {
             info!(
                 "Cleared the duress lockout for {}; face authentication is available again",
@@ -1039,19 +1081,23 @@ impl AuthDaemon {
         Ok(cleared)
     }
 
-    #[zbus(property)]
+    // The value depends on who asks, so there is no single value to broadcast. zbus would
+    // also build the change signal through this getter without a header, failing every Set.
+    #[zbus(property(emits_changed_signal = "false"))]
     async fn pam_internal(
         &self,
         #[zbus(header)] header: Option<Header<'_>>,
     ) -> fdo::Result<Vec<String>> {
-        let header = header.ok_or_else(|| fdo::Error::Failed("未提供消息头".to_string()))?;
+        let header =
+            header.ok_or_else(|| fdo::Error::Failed("No message header provided".to_string()))?;
         let owner = Self::pam_internal_read_owner(&header).await?;
         let sets = self.pam_internal.lock().await;
         let mut list: Vec<String> = sets
             .get(&owner)
-            .map(|set| set.iter().cloned().collect())
+            .map(|senders| senders.values().flatten().cloned().collect())
             .unwrap_or_default();
         list.sort();
+        list.dedup();
         Ok(list)
     }
 
@@ -1061,10 +1107,12 @@ impl AuthDaemon {
         #[zbus(header)] header: Option<Header<'_>>,
         services: Vec<String>,
     ) -> fdo::Result<()> {
-        let header = header.ok_or_else(|| fdo::Error::Failed("未提供消息头".to_string()))?;
+        let header =
+            header.ok_or_else(|| fdo::Error::Failed("No message header provided".to_string()))?;
         let owner = Self::pam_internal_write_owner(&header).await?;
+        let sender = Self::pam_internal_sender(&header)?;
         let mut sets = self.pam_internal.lock().await;
-        let set = sets.entry(owner).or_default();
+        let set = sets.entry(owner).or_default().entry(sender).or_default();
         set.clear();
         for s in services {
             let normalized = Self::normalize_pam_service(&s);
@@ -1082,10 +1130,15 @@ impl AuthDaemon {
         service: String,
     ) -> fdo::Result<()> {
         let owner = Self::pam_internal_write_owner(&header).await?;
+        let sender = Self::pam_internal_sender(&header)?;
         let normalized = Self::normalize_pam_service(&service);
         if !normalized.is_empty() {
             let mut sets = self.pam_internal.lock().await;
-            sets.entry(owner).or_default().insert(normalized.clone());
+            sets.entry(owner)
+                .or_default()
+                .entry(sender)
+                .or_default()
+                .insert(normalized.clone());
             info!(uid = owner, service = %normalized, "Added to PAM internal services");
         }
         Ok(())
@@ -1100,8 +1153,11 @@ impl AuthDaemon {
         let normalized = Self::normalize_pam_service(&service);
         if !normalized.is_empty() {
             let mut sets = self.pam_internal.lock().await;
-            if let Some(set) = sets.get_mut(&owner) {
-                set.remove(&normalized);
+            if let Some(senders) = sets.get_mut(&owner) {
+                for set in senders.values_mut() {
+                    set.remove(&normalized);
+                }
+                senders.retain(|_, set| !set.is_empty());
             }
             info!(uid = owner, service = %normalized, "Removed from PAM internal services");
         }
@@ -1117,7 +1173,8 @@ impl AuthDaemon {
 
     #[zbus(property(emits_changed_signal = "invalidates"))]
     async fn config(&self, #[zbus(header)] header: Option<Header<'_>>) -> fdo::Result<DbusConfig> {
-        let header = header.ok_or_else(|| fdo::Error::Failed("未提供消息头".to_string()))?;
+        let header =
+            header.ok_or_else(|| fdo::Error::Failed("No message header provided".to_string()))?;
         Self::ensure_config_read_access(&header).await?;
         Ok(self.current_config().await.into())
     }
@@ -1128,55 +1185,61 @@ impl AuthDaemon {
         #[zbus(header)] header: Option<Header<'_>>,
         new_config: DbusConfig,
     ) -> fdo::Result<()> {
-        let header = header.ok_or_else(|| fdo::Error::Failed("未提供消息头".to_string()))?;
+        let header =
+            header.ok_or_else(|| fdo::Error::Failed("No message header provided".to_string()))?;
         Self::ensure_authorized(&header, POLKIT_ACTION_MANAGE_CONFIG).await?;
 
         let mut new_config: Config = new_config.into();
-        // Legacy clients do not send these flags; preserve the existing opt-ins.
-        let current = self.current_config().await;
-        new_config.storage.unlock_gnome_keyring = current.storage.unlock_gnome_keyring;
-        new_config.storage.unlock_kwallet = current.storage.unlock_kwallet;
-        new_config
-            .cameras
-            .set_ir_frame_size(current.cameras.ir_frame_size());
-        // A legacy client cannot see or clear the flag, so treat it as turning the feature off
-        // rather than rejecting every later write with an error it cannot act on.
-        if new_config.clamp_keyring() {
-            warn!(
-                "a legacy config update removed a keyring prerequisite; disabling keyring unlock"
-            );
-        }
-        self.apply_config(new_config).await
+        self.apply_config(move |current| {
+            // Legacy clients do not send these flags; preserve the existing opt-ins.
+            new_config.storage.unlock_gnome_keyring = current.storage.unlock_gnome_keyring;
+            new_config.storage.unlock_kwallet = current.storage.unlock_kwallet;
+            new_config
+                .cameras
+                .set_ir_frame_size(current.cameras.ir_frame_size());
+            // A legacy client cannot see or clear the flag, so treat it as turning the feature
+            // off rather than rejecting every later write with an error it cannot act on.
+            if new_config.clamp_keyring() {
+                warn!(
+                    "a legacy config update removed a keyring prerequisite; disabling keyring \
+                     unlock"
+                );
+            }
+            Ok(new_config)
+        })
+        .await
     }
 
     async fn set_config_with_keyring(
         &self,
-        #[zbus(signal_context)] ctxt: SignalEmitter<'_>,
+        #[zbus(signal_emitter)] ctxt: SignalEmitter<'_>,
         #[zbus(header)] header: Header<'_>,
-        config: zbus::zvariant::OwnedValue,
+        config: zbus::OwnedVariant,
         unlock_gnome_keyring: bool,
     ) -> fdo::Result<()> {
         Self::ensure_authorized(&header, POLKIT_ACTION_MANAGE_CONFIG).await?;
         let mut config = gaze_core::dbus::config_update_from_property(config, unlock_gnome_keyring)
             .map_err(|e| fdo::Error::InvalidArgs(e.to_string()))?;
-        let current = self.current_config().await;
-        config.storage.unlock_kwallet = current.storage.unlock_kwallet;
-        config
-            .cameras
-            .set_ir_frame_size(current.cameras.ir_frame_size());
-        // This older client cannot clear a KWallet opt-in when removing prerequisites.
-        if config.storage.validate_keyring(&config.liveness).is_err() {
-            config.storage.unlock_kwallet = false;
-        }
-        self.apply_config(config).await?;
+        self.apply_config(move |current| {
+            config.storage.unlock_kwallet = current.storage.unlock_kwallet;
+            config
+                .cameras
+                .set_ir_frame_size(current.cameras.ir_frame_size());
+            // This older client cannot clear a KWallet opt-in when removing prerequisites.
+            if config.storage.validate_keyring(&config.liveness).is_err() {
+                config.storage.unlock_kwallet = false;
+            }
+            Ok(config)
+        })
+        .await?;
         self.config_invalidate(&ctxt).await.map_err(Into::into)
     }
 
     async fn set_config_with_wallets(
         &self,
-        #[zbus(signal_context)] ctxt: SignalEmitter<'_>,
+        #[zbus(signal_emitter)] ctxt: SignalEmitter<'_>,
         #[zbus(header)] header: Header<'_>,
-        config: zbus::zvariant::OwnedValue,
+        config: zbus::OwnedVariant,
         unlock_gnome_keyring: bool,
         unlock_kwallet: bool,
     ) -> fdo::Result<()> {
@@ -1185,22 +1248,27 @@ impl AuthDaemon {
             .map_err(|e| fdo::Error::InvalidArgs(e.to_string()))?;
         config.storage.unlock_kwallet = unlock_kwallet;
         config
-            .cameras
-            .set_ir_frame_size(self.current_config().await.cameras.ir_frame_size());
-        config
             .storage
             .validate_keyring(&config.liveness)
             .map_err(|e| fdo::Error::InvalidArgs(e.to_string()))?;
-        self.apply_config(config).await?;
+        self.apply_config(move |current| {
+            config
+                .cameras
+                .set_ir_frame_size(current.cameras.ir_frame_size());
+            Ok(config)
+        })
+        .await?;
         self.config_invalidate(&ctxt).await.map_err(Into::into)
     }
 
     async fn get_gdm_face_auth(&self, #[zbus(header)] header: Header<'_>) -> fdo::Result<bool> {
         Self::ensure_config_read_access(&header).await?;
-        if let Some(enabled) = gdm_face_auth_from_dconf() {
-            return Ok(enabled);
-        }
-        Ok(std::path::Path::new(GDM_FACE_OVERRIDE_PATH).exists())
+        tokio::task::spawn_blocking(|| {
+            gdm_face_auth_from_dconf()
+                .unwrap_or_else(|| std::path::Path::new(GDM_FACE_OVERRIDE_PATH).exists())
+        })
+        .await
+        .map_err(|e| fdo::Error::Failed(format!("Failed to read GDM face login: {e}")))
     }
 
     async fn set_gdm_face_auth(
@@ -1209,38 +1277,9 @@ impl AuthDaemon {
         enabled: bool,
     ) -> fdo::Result<bool> {
         Self::ensure_authorized(&header, POLKIT_ACTION_MANAGE_GDM_PROFILE).await?;
-
-        let path = std::path::Path::new(GDM_FACE_OVERRIDE_PATH);
-        // Already in the requested state elsewhere, so don't write a read-only /etc.
-        if !path.exists() && gdm_face_auth_from_dconf() == Some(enabled) {
-            info!(enabled, "GDM face authentication already set outside Gaze");
-            return Ok(enabled);
-        }
-
-        if enabled {
-            if let Some(parent) = path.parent() {
-                std::fs::create_dir_all(parent)
-                    .map_err(|e| gdm_override_error("创建", parent, e))?;
-            }
-            std::fs::write(path, GDM_DCONF_OVERRIDE_CONTENT)
-                .map_err(|e| gdm_override_error("写入", path, e))?;
-        } else if path.exists() {
-            std::fs::remove_file(path).map_err(|e| gdm_override_error("删除", path, e))?;
-        }
-
-        let status = std::process::Command::new("dconf")
-            .arg("update")
-            .status()
-            .map_err(|e| fdo::Error::Failed(format!("无法运行 dconf update：{e}")))?;
-        if !status.success() {
-            return Err(fdo::Error::Failed(format!(
-                "dconf update 退出，状态码为 {}",
-                status.code().unwrap_or(-1)
-            )));
-        }
-
-        info!(enabled, "Updated GDM face authentication override");
-        Ok(enabled)
+        tokio::task::spawn_blocking(move || write_gdm_face_auth(enabled))
+            .await
+            .map_err(|e| fdo::Error::Failed(format!("Failed to update GDM face login: {e}")))?
     }
 
     #[zbus(signal)]

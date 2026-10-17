@@ -17,7 +17,10 @@ nfpm := require("nfpm")
 # Required by the `srpm` recipe only.
 rpmbuild := require("rpmbuild")
 # ONNX Runtime release bundled into the offline builds (flatpak and srpm).
-ort_version := env("ORT_VERSION", "1.30.0")
+ort_version := env("ORT_VERSION", "1.31.0")
+# Intel's onnxruntime-openvino build, which trails `ort_version`. Only `test-openvino` uses it.
+ort_openvino_version := env("ORT_OPENVINO_VERSION", "1.24.1")
+ort_openvino_dir := justfile_directory() / "target/ort-openvino"
 
 # The opencv crate probes only the `opencv4`/`opencv` pkg-config names, so distros shipping
 # OpenCV 5 (e.g. Arch) need this override. Empty when opencv4/opencv resolve or opencv5 doesn't.
@@ -30,6 +33,10 @@ gui_off := if gui =~ '^(0|false|no|off)$' { "1" } else { "" }
 gui_pkg := if gui_off == "1" { "" } else { "-p gaze-gui" }
 gui_exclude := if gui_off == "1" { "--exclude gaze-gui" } else { "" }
 gui_notice := if gui_off == "1" { "echo 'note: GAZE_GUI is off, gaze-gui is excluded here; CI still checks it'" } else { "true" }
+
+# `GAZE_KCM=legacy` stages the System Settings entry that opens gaze-gui instead of the Plasma 6 page,
+# for hosts without KDE Frameworks 6 such as Ubuntu 24.04, which still ships Plasma 5.
+kcm := lowercase(env("GAZE_KCM", "plasma6"))
 
 # Derived vars
 multiarch := if arch == "aarch64" { "aarch64-linux-gnu" } else { "x86_64-linux-gnu" }
@@ -48,13 +55,41 @@ default:
 # Build all Rust workspace binaries (release)
 [group("build")]
 build-rust: prepare-ort
-    {{ opencv_env }} cargo build -p gazed --release
-    {{ opencv_env }} cargo build -p gaze-cli {{ gui_pkg }} -p pam-gaze -p pam-gaze-grosshack --release
+    {{ opencv_env }} cargo build --locked -p gazed --release
+    {{ opencv_env }} cargo build --locked -p gaze-cli {{ gui_pkg }} -p pam-gaze -p pam-gaze-grosshack --release
     scripts/check-pam-link.sh target/release/libpam_gaze.so target/release/libpam_gaze_grosshack.so
+
+# Stage the gaze-kde System Settings files in dist/kcm
+[arg("format", pattern="deb|rpm|archlinux")]
+[group("build")]
+build-kcm format="rpm":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    rm -rf dist/kcm
+    case {{ quote(kcm) }} in
+    plasma6)
+        cmake -S integrations/kde/kcm -B target/kcm -DCMAKE_INSTALL_PREFIX=/usr -DCMAKE_BUILD_TYPE=Release
+        cmake --build target/kcm
+        DESTDIR="$PWD/dist/kcm" cmake --install target/kcm
+        ;;
+    legacy)
+        [ "{{ format }}" != rpm ] || { echo "build-kcm: every RPM target runs Plasma 6, so GAZE_KCM=legacy is for deb and Arch only" >&2; exit 1; }
+        install -Dm0644 integrations/kde/gaze-face-unlock.desktop \
+            dist/kcm/usr/share/plasma/systemsettings/externalmodules/gaze-face-unlock.desktop
+        ;;
+    *)
+        echo "build-kcm: GAZE_KCM must be plasma6 or legacy, got {{ kcm }}" >&2
+        exit 1
+        ;;
+    esac
 
 [private]
 prepare-ort:
     bash scripts/prepare-ort.sh {{ quote(ort_version) }} {{ quote(arch) }}
+
+[private]
+prepare-ort-openvino:
+    bash scripts/prepare-ort-openvino.sh {{ quote(ort_openvino_version) }} {{ quote(ort_openvino_dir / "lib") }}
 
 # Compile the SELinux policy module
 [group("build")]
@@ -142,6 +177,33 @@ _nfpm config format:
         [ -f "$src" ] || { echo "_nfpm: {{ config }} ships $src, which has not been built" >&2; exit 1; }
         binaries+=("$src")
     done < <(grep -oE 'target/release/(gaze-gui|gazed|gaze|lib[A-Za-z0-9_.+-]+)' {{ quote(config) }} | sort -u)
+    # build-kcm stages either the Plasma 6 page or the legacy entry, with paths that vary by distro.
+    export KCM_CONTENTS="  # unused for {{ config }}"
+    export KCM_DEPENDS="      # unused for {{ config }}"
+    export KCM_RECOMMENDS="      # unused for {{ config }}"
+    if grep -q 'KCM_CONTENTS' {{ quote(config) }}; then
+        [ -d dist/kcm ] || { echo "_nfpm: {{ config }} ships dist/kcm, which is not staged; run just build-kcm {{ format }}" >&2; exit 1; }
+        KCM_CONTENTS=""
+        native=""
+        while read -r src; do
+            mode=0644
+            [ -x "$src" ] && mode=0755
+            printf -v entry '  - src: "%s"\n    dst: "%s"\n    file_info:\n      mode: %s\n' "$src" "${src#dist/kcm}" "$mode"
+            KCM_CONTENTS+=$entry
+            case "$src" in *.so) binaries+=("$src"); native=1 ;; esac
+        done < <(find dist/kcm -type f | sort)
+        [ -n "$KCM_CONTENTS" ] || { echo "_nfpm: dist/kcm is empty; run just build-kcm {{ format }}" >&2; exit 1; }
+        [ -n "$native" ] || [ "{{ format }}" != rpm ] || { echo "_nfpm: RPM packages must ship the Plasma 6 page" >&2; exit 1; }
+        if [ -n "$native" ]; then
+            case "{{ format }}" in
+            deb) KCM_DEPENDS=$(printf '      - %s\n' qml6-module-org-kde-kirigami qml6-module-org-kde-kcmutils) ;;
+            rpm) KCM_DEPENDS=$(printf '      - %s\n' kf6-kirigami) ;;
+            archlinux) KCM_DEPENDS=$(printf '      - %s\n' kcmutils kirigami) ;;
+            esac
+        else
+            KCM_RECOMMENDS="      - gaze-gui"
+        fi
+    fi
 
     needed() { objdump -p "${binaries[@]}" | awk '/NEEDED/ { print $2 }' | sort -u; }
 
@@ -245,7 +307,7 @@ _nfpm config format:
     esac
 
     tmp_config=$(mktemp)
-    envsubst '$MULTIARCH $OPENCV_MIN $OPENCV_NEXT $DEB_LIB_DEPENDS $RPM_LIB_DEPENDS $RPM_GSTREAMER_BASE $RPM_GSTREAMER_GOOD $RPM_GSTREAMER_PIPEWIRE' < {{ quote(config) }} > "$tmp_config"
+    envsubst '$MULTIARCH $OPENCV_MIN $OPENCV_NEXT $DEB_LIB_DEPENDS $RPM_LIB_DEPENDS $RPM_GSTREAMER_BASE $RPM_GSTREAMER_GOOD $RPM_GSTREAMER_PIPEWIRE $KCM_CONTENTS $KCM_DEPENDS $KCM_RECOMMENDS' < {{ quote(config) }} > "$tmp_config"
     {{ quote(nfpm) }} pkg -f "$tmp_config" --packager {{ format }} --target dist/packages
     rm -f "$tmp_config"
 
@@ -440,13 +502,19 @@ _verify-package format:
     esac
 
     load gaze
-    want_files /usr/bin/gazed /usr/bin/gaze /etc/gaze/config.toml \
+    want_files /usr/bin/gazed /usr/bin/gaze \
         /etc/dbus-1/system.d/com.gundulabs.Gaze.conf \
         /usr/share/polkit-1/actions/com.gundulabs.gaze.policy \
         /usr/lib/systemd/system/gazed.service
     want_size /usr/bin/gazed 100000
     want_size /usr/bin/gaze 100000
-    want_config /etc/gaze/config.toml /etc/dbus-1/system.d/com.gundulabs.Gaze.conf
+    want_config /etc/dbus-1/system.d/com.gundulabs.Gaze.conf
+    if [ "{{ format }}" = deb ]; then
+        want_files /usr/share/gaze/config.toml
+    else
+        want_files /etc/gaze/config.toml
+        want_config /etc/gaze/config.toml
+    fi
     want_scripts "$post" "$preun"
     want_depends "${gst[@]}"
     case "{{ format }}" in
@@ -549,8 +617,24 @@ _verify-package format:
     ok "$base ships both hyprlock PAM stacks"
 
     load gaze-kde
-    want_files /usr/bin/gaze-kde-pam \
-        /usr/share/plasma/systemsettings/externalmodules/gaze-face-unlock.desktop
+    want_files /usr/bin/gaze-kde-pam
+    legacy_entry=/usr/share/plasma/systemsettings/externalmodules/gaze-face-unlock.desktop
+    if grep -Eq '^/usr/lib(64)?/([^/]+/)?qt6/plugins/plasma/kcms/systemsettings/kcm_gaze\.so$' <<< "$paths"; then
+        want_files /usr/share/applications/kcm_gaze.desktop \
+            /usr/share/applications/com.gundulabs.Gaze.Settings.desktop \
+            /usr/share/icons/hicolor/scalable/apps/com.gundulabs.Gaze.Settings.svg
+        case "{{ format }}" in
+        deb) want_depends qml6-module-org-kde-kirigami qml6-module-org-kde-kcmutils ;;
+        rpm) want_depends kf6-kirigami ;;
+        archlinux) want_depends kcmutils kirigami ;;
+        esac
+        ! grep -Fxq "$legacy_entry" <<< "$paths" \
+            || fail "$base ships both the Plasma 6 page and the legacy entry; System Settings would list Gaze twice"
+    elif [ "{{ format }}" = rpm ]; then
+        fail "$base does not ship the System Settings plugin"
+    else
+        want_files "$legacy_entry"
+    fi
     want_size /usr/bin/gaze-kde-pam 1000
     want_scripts "$post" "$postun"
     if [ "{{ format }}" = archlinux ]; then
@@ -589,7 +673,7 @@ _verify-package format:
 [arg("format", pattern="deb|rpm|archlinux")]
 [group("package")]
 [parallel]
-package format: build-rust build-selinux && (package-prebuilt format)
+package format: build-rust build-selinux (build-kcm format) && (package-prebuilt format)
 
 # Package already-built artifacts for a given packager
 [arg("format", pattern="deb|rpm|archlinux")]
@@ -724,10 +808,13 @@ test: prepare-ort
     bash scripts/test-keyring-pam.sh
     bash scripts/test-kwallet-pam.sh
 
-# Run the inference tests against the runtime in ORT_DYLIB_PATH, such as Intel's OpenVINO build.
+# Run the inference tests, plus the ignored OpenVINO session test, against Intel's OpenVINO runtime
 [group("checks")]
-test-openvino: prepare-ort
-    GAZE_TEST_OPENVINO=1 {{ opencv_env }} cargo test -p gaze-vision --release -- inference::
+test-openvino: prepare-ort-openvino
+    ORT_DYLIB_PATH={{ quote(ort_openvino_dir / "lib/libonnxruntime.so") }} \
+    LD_LIBRARY_PATH={{ quote(ort_openvino_dir / "lib") }} \
+    XDG_CACHE_HOME={{ quote(ort_openvino_dir / "cache") }} \
+    {{ opencv_env }} cargo test -p gaze-vision --release -- --include-ignored inference::
 
 # Check dependencies for known security advisories
 [group("checks")]

@@ -24,6 +24,9 @@ pub enum PamMode {
 pub struct PamOptions {
     pub mode: PamMode,
     pub kde_login: bool,
+    /// Vouches that this stack only serves someone at the machine, for a root greeter or
+    /// locker Gaze does not know by name.
+    pub local: bool,
 }
 
 pub fn parse_pam_options<'a, I>(args: I) -> PamOptions
@@ -36,37 +39,42 @@ where
             "simultaneous" => options.mode = PamMode::Simultaneous,
             "retry" => options.mode = PamMode::Retry,
             "kde-login" => options.kde_login = true,
-            _ => {}
+            "local" => options.local = true,
+            unknown => log_unknown_option(unknown),
         }
     }
     options
 }
 
-pub fn parse_pam_mode<'a, I>(args: I) -> PamMode
-where
-    I: IntoIterator<Item = &'a str>,
-{
-    parse_pam_options(args).mode
+// A typo such as `retyr` would otherwise run a different mode with nothing to explain why.
+fn log_unknown_option(arg: &str) {
+    let Ok(message) = CString::new(format!("pam_gaze: ignoring unknown module option '{arg}'"))
+    else {
+        return;
+    };
+    unsafe {
+        libc::syslog(
+            libc::LOG_AUTHPRIV | libc::LOG_WARNING,
+            c"%s".as_ptr(),
+            message.as_ptr(),
+        )
+    };
 }
 
 pub unsafe fn parse_raw_pam_options(argc: c_int, argv: *const *const c_char) -> PamOptions {
     if argc <= 0 || argv.is_null() {
         return PamOptions::default();
     }
-    let mut options = PamOptions::default();
-    for i in 0..argc as isize {
-        let arg_ptr = unsafe { *argv.offset(i) };
-        if arg_ptr.is_null() {
-            continue;
-        }
-        match unsafe { CStr::from_ptr(arg_ptr) }.to_str() {
-            Ok("simultaneous") => options.mode = PamMode::Simultaneous,
-            Ok("retry") => options.mode = PamMode::Retry,
-            Ok("kde-login") => options.kde_login = true,
-            _ => {}
-        }
-    }
-    options
+    let args: Vec<String> = (0..argc as isize)
+        .map(|i| unsafe { *argv.offset(i) })
+        .filter(|arg| !arg.is_null())
+        .map(|arg| {
+            unsafe { CStr::from_ptr(arg) }
+                .to_string_lossy()
+                .into_owned()
+        })
+        .collect();
+    parse_pam_options(args.iter().map(String::as_str))
 }
 
 // Polkit dialogs ignore echo-off confirmation prompts, so keep a password request pending
@@ -95,9 +103,13 @@ enum Verdict {
 
 type Attempt<E> = Result<(AuthOutcome, Option<gaze_core::dbus::CaptureStatus>), E>;
 
-/// A dark frame is likely to remain dark; an empty frame may be only a brief delay.
+/// A dark frame is likely to remain dark; an empty frame may be only a brief delay. An idle
+/// camera means the daemon refused outright (duress lock, lid closed, no usable templates).
 fn worth_another_look(status: Option<gaze_core::dbus::CaptureStatus>) -> bool {
-    !matches!(status, Some(gaze_core::dbus::CaptureStatus::TooDark))
+    !matches!(
+        status,
+        Some(gaze_core::dbus::CaptureStatus::TooDark | gaze_core::dbus::CaptureStatus::Unused)
+    )
 }
 
 async fn verify_within(
@@ -193,6 +205,9 @@ unsafe fn do_authenticate_sequential(pamh: PamHandle, flags: c_int, options: Pam
 
     let matched = rt.block_on(async {
         let (config, proxy) = setup_auth_env().await.map_err(|_| PAM_AUTHINFO_UNAVAIL)?;
+        if confirmation_requires_fallback(Some(&config.auth), service.as_deref()) {
+            return Err(PAM_IGNORE);
+        }
 
         match enrollment_disposition(has_enrolled_faces_on(&proxy, &username).await) {
             EnrollmentDisposition::Ignore => return Err(PAM_IGNORE),
@@ -219,7 +234,8 @@ unsafe fn do_authenticate_sequential(pamh: PamHandle, flags: c_int, options: Pam
             LOOK_PROMPT
         };
         // KScreenLocker reads an info message as "this unlock had a prompt".
-        let prompt_line = unsafe { announce_prompt(pamh, silent, prompt, is_internal) };
+        let prompt_line =
+            unsafe { announce_prompt(pamh, service.as_deref(), silent, prompt, is_internal) };
 
         let budget = camera_auth_timeout(&config.auth, service.as_deref());
 
@@ -281,10 +297,7 @@ unsafe fn do_authenticate_sequential(pamh: PamHandle, flags: c_int, options: Pam
     };
 
     let authenticated = if !confirmation_required(Some(&loaded_config.auth), service.as_deref()) {
-        unsafe { report_face_verified(pamh, silent, prompt_line, is_internal) };
-        PAM_SUCCESS
-    } else if service_cannot_be_prompted(service.as_deref()) {
-        // A prompt on a slot nobody answers blocks until the lock ends.
+        unsafe { report_face_verified(pamh, service.as_deref(), silent, prompt_line, is_internal) };
         PAM_SUCCESS
     } else if is_polkit {
         unsafe { confirm_via_polkit_dialog(pamh, is_internal) }
@@ -292,27 +305,42 @@ unsafe fn do_authenticate_sequential(pamh: PamHandle, flags: c_int, options: Pam
         let confirmed = if is_internal {
             unsafe { confirm_authentication_internal(pamh) }
         } else {
-            unsafe { confirm_authentication(pamh, prompt_line) }
+            unsafe { confirm_authentication(pamh, service.as_deref(), prompt_line) }
         };
         if confirmed { PAM_SUCCESS } else { PAM_AUTH_ERR }
     };
-    let result = finish_keyring(
-        authenticated,
-        service.as_deref(),
-        &loaded_config,
-        || unsafe {
-            supply_keyring_token(
-                pamh,
-                &username,
-                keyring_backend(service.as_deref(), &loaded_config).unwrap(),
-            )
-        },
-    );
+    unsafe {
+        finish_face_login(
+            pamh,
+            authenticated,
+            service.as_deref(),
+            &loaded_config,
+            &username,
+            silent,
+            is_internal,
+        )
+    }
+}
+
+/// Release the keyring credential after a face login, and keep pam_kwallet5 from prompting a
+/// second time when there is none. Every mode needs this, or the greeter asks again.
+unsafe fn finish_face_login(
+    pamh: PamHandle,
+    authenticated: c_int,
+    service: Option<&str>,
+    config: &gaze_core::config::Config,
+    username: &str,
+    silent: bool,
+    is_internal: bool,
+) -> c_int {
+    let result = finish_keyring(authenticated, service, config, || unsafe {
+        supply_keyring_token(pamh, username, keyring_backend(service, config).unwrap())
+    });
     if authenticated == PAM_SUCCESS && result == PAM_AUTHINFO_UNAVAIL {
         unsafe {
             report_outcome(
                 pamh,
-                service.as_deref(),
+                service,
                 silent,
                 "钥匙环解锁不可用。请输入密码。",
                 is_internal,
@@ -321,7 +349,7 @@ unsafe fn do_authenticate_sequential(pamh: PamHandle, flags: c_int, options: Pam
     }
     // pam_kwallet5 prompts when PAM_AUTHTOK is null, but ignores an empty token.
     // Successful unenrolled/opted-out face logins must not create a second greeter prompt.
-    if result == PAM_SUCCESS && is_kwallet_login(service.as_deref()) {
+    if result == PAM_SUCCESS && is_kwallet_login(service) {
         let mut existing = std::ptr::null();
         if unsafe { pam_get_item(pamh, PAM_AUTHTOK, &mut existing) } != PAM_SUCCESS {
             return PAM_AUTHINFO_UNAVAIL;
@@ -443,21 +471,20 @@ const PROMPT_RETIRE_TIMEOUT: Duration = Duration::from_secs(2);
 const PROMPT_SIGNAL_INTERVAL: Duration = Duration::from_millis(50);
 
 async fn authenticate_biometric_with_timeout(
+    proxy: &GazeProxy<'static>,
     username: &str,
     service: Option<&str>,
     timeout_duration: Duration,
+    require_keyring: bool,
 ) -> Option<AuthOutcome> {
-    let auth_future = async {
-        let (_config, proxy) = setup_auth_env().await.ok()?;
-        authenticate_biometric_with_status_on(&proxy, username, service, false)
-            .await
-            .ok()
-            .map(|(outcome, _)| outcome)
-    };
-
-    tokio::select! {
-        res = auth_future => res,
-        _ = tokio::time::sleep(timeout_duration) => None,
+    match timeout(
+        timeout_duration,
+        authenticate_biometric_with_status_on(proxy, username, service, require_keyring),
+    )
+    .await
+    {
+        Ok(Ok((outcome, _))) => Some(outcome),
+        Ok(Err(_)) | Err(_) => None,
     }
 }
 
@@ -544,18 +571,10 @@ fn wait_for_prompt_finish_within(state: &SharedAuthState, deadline: Duration) ->
     shared_state.finished
 }
 
-const TTY_CONVERSATION_SERVICES: [&str; 6] = ["sudo", "sudo-i", "su", "su-l", "doas", "login"];
-
-/// Whether a prompt started now could be unblocked again, rather than parking a thread inside
-/// the caller's conversation with no way back out. An open `/dev/tty` is not enough: a locker
-/// launched from a shell has one, but its conversation waits on a condition variable that
-/// neither an injected newline nor EINTR can end.
+/// Only terminal-reading conversations can be retired with newline injection or EINTR.
+/// A graphical locker may inherit /dev/tty while still waiting on its own uninterruptible dialog.
 fn prompt_is_retirable(service: Option<&str>) -> bool {
     service_reads_the_tty(service) && has_interactive_tty()
-}
-
-fn service_reads_the_tty(service: Option<&str>) -> bool {
-    service.is_some_and(|s| TTY_CONVERSATION_SERVICES.contains(&s))
 }
 
 fn prompt_is_finished(state: &SharedAuthState) -> bool {
@@ -563,10 +582,23 @@ fn prompt_is_finished(state: &SharedAuthState) -> bool {
     lock.lock().finished
 }
 
-fn retire_prompt(state: &SharedAuthState, prompt_thread: thread::JoinHandle<()>) {
+/// sudo records a password read cut short by a signal as an interrupt and fails the command
+/// even though PAM succeeded, and its askpass path waits out every signal for the helper to exit.
+fn host_fails_interrupted_prompt(service: Option<&str>) -> bool {
+    matches!(service, Some("sudo" | "sudo-i"))
+}
+
+const FINISH_PROMPT_HINT: &str = "Face Verified. Press Enter to continue.";
+
+fn retire_prompt(
+    state: &SharedAuthState,
+    prompt_thread: thread::JoinHandle<()>,
+    service: Option<&str>,
+) {
     let tid = prompt_thread.as_pthread_t();
     // Held past the join, so no signal outlives the handler.
     let _interrupts = InterruptHandler::install();
+    let no_signals = host_fails_interrupted_prompt(service);
 
     // Nothing to unblock if the user already answered, and an injected newline would be left
     // for the confirmation prompt, which takes a bare newline as the confirmation.
@@ -575,12 +607,20 @@ fn retire_prompt(state: &SharedAuthState, prompt_thread: thread::JoinHandle<()>)
     if !retired {
         retired = match unblock_terminal() {
             PromptUnblock::Injected => wait_for_prompt_finish_within(state, PROMPT_RETIRE_TIMEOUT),
+            PromptUnblock::SignalOnly | PromptUnblock::NoTerminal if no_signals => false,
             // Signalling interrupts the blocking read itself, so it needs no terminal and is the
             // only lever left when there is none.
             PromptUnblock::SignalOnly | PromptUnblock::NoTerminal => {
                 signal_prompt_until_finished(state, tid, PROMPT_RETIRE_TIMEOUT)
             }
         };
+    }
+
+    // An askpass helper or a terminal that refused the newline: only the user can end the read.
+    if !retired && no_signals {
+        let _ = write_tty_line(service, FINISH_PROMPT_HINT);
+        wait_for_prompt_finish(state);
+        retired = true;
     }
 
     // The thread holds the handle `pam_end` is about to free, so it cannot be abandoned. Keep
@@ -612,11 +652,34 @@ fn unblock_terminal() -> PromptUnblock {
     }
 }
 
+/// Block prompt signals on this thread and its children so only the prompt thread receives them.
+/// That thread unblocks them to let Ctrl-C and host timeouts interrupt the intended read.
+struct RouteSignalsToPrompt {
+    previous: libc::sigset_t,
+}
+
+impl RouteSignalsToPrompt {
+    fn install() -> Self {
+        let set = host_prompt_signals();
+        let mut previous: libc::sigset_t = unsafe { std::mem::zeroed() };
+        unsafe { libc::pthread_sigmask(libc::SIG_BLOCK, &set, &mut previous) };
+        Self { previous }
+    }
+}
+
+impl Drop for RouteSignalsToPrompt {
+    fn drop(&mut self) {
+        unsafe { libc::pthread_sigmask(libc::SIG_SETMASK, &self.previous, std::ptr::null_mut()) };
+    }
+}
+
 unsafe fn do_authenticate_simultaneous(
     pamh: PamHandle,
     flags: c_int,
     _options: PamOptions,
 ) -> c_int {
+    // Before the runtime and the D-Bus connection exist, so their threads inherit the mask.
+    let signals_to_prompt = RouteSignalsToPrompt::install();
     let service = unsafe { get_pam_service(pamh) };
     if service_defers_to_face_service(service.as_deref())
         || service_defers_to_face_slot(service.as_deref())
@@ -636,42 +699,70 @@ unsafe fn do_authenticate_simultaneous(
         Err(code) => return code,
     };
 
-    match enrollment_disposition(rt.block_on(has_enrolled_faces(&username))) {
+    let (config, proxy) = match rt.block_on(setup_auth_env()) {
+        Ok(environment) => environment,
+        Err(_) => return PAM_AUTHINFO_UNAVAIL,
+    };
+    if confirmation_requires_fallback(Some(&config.auth), service.as_deref()) {
+        return PAM_IGNORE;
+    }
+    match enrollment_disposition(rt.block_on(has_enrolled_faces_on(&proxy, &username))) {
         EnrollmentDisposition::Ignore => return PAM_IGNORE,
         EnrollmentDisposition::Unavailable => return PAM_AUTHINFO_UNAVAIL,
         EnrollmentDisposition::Continue => {}
     }
 
-    let (loaded_auth, pam_internal) = match rt.block_on(setup_auth_env()) {
-        Ok((cfg, proxy)) => {
-            let internal = rt.block_on(gaze_core::dbus::get_pam_internal(&proxy));
-            (Some(cfg.auth), internal)
-        }
-        Err(_) => (None, Vec::new()),
-    };
+    let pam_internal = rt.block_on(gaze_core::dbus::get_pam_internal(&proxy));
     let is_internal = service
         .as_deref()
         .is_some_and(|s| is_service_internal(s, &pam_internal));
 
-    let require_confirmation = confirmation_required(loaded_auth.as_ref(), service.as_deref());
-    let auth = loaded_auth.unwrap_or_default();
-
-    let opening_prompt = if is_internal {
-        GAZE_MSG_LOOK_OR_PASSWORD
-    } else {
-        LOOK_OR_PASSWORD_PROMPT
+    let require_confirmation = confirmation_required(Some(&config.auth), service.as_deref());
+    let auth = config.auth.clone();
+    let require_keyring = keyring_backend(service.as_deref(), &config).is_some();
+    let finish = |authenticated: c_int| unsafe {
+        finish_face_login(
+            pamh,
+            authenticated,
+            service.as_deref(),
+            &config,
+            &username,
+            silent,
+            is_internal,
+        )
     };
-    let prompt_line = unsafe { announce_prompt(pamh, silent, opening_prompt, is_internal) };
 
     let is_polkit = matches!(service, Some(ref s) if s == "polkit-1");
-
     // Only a terminal conversation can be retired; any other one would resume its wait after
     // every signal. Polkit is exempt: it consumes the prompt for confirmation.
-    if !prompt_is_retirable(service.as_deref()) && !is_polkit {
+    let concurrent = prompt_is_retirable(service.as_deref()) || is_polkit;
+
+    // Without a concurrent prompt the password is only asked for after the scan, so offering
+    // it now would invite typing into a field that is not listening yet.
+    let opening_prompt = match (is_internal, concurrent) {
+        (true, true) => GAZE_MSG_LOOK_OR_PASSWORD,
+        (true, false) => GAZE_MSG_LOOK_CAMERA,
+        (false, true) => LOOK_OR_PASSWORD_PROMPT,
+        (false, false) => LOOK_PROMPT,
+    };
+    let prompt_line = unsafe {
+        announce_prompt(
+            pamh,
+            service.as_deref(),
+            silent,
+            opening_prompt,
+            is_internal,
+        )
+    };
+
+    if !concurrent {
+        drop(signals_to_prompt);
         let bio = rt.block_on(authenticate_biometric_with_timeout(
+            &proxy,
             &username,
             service.as_deref(),
             camera_auth_timeout(&auth, service.as_deref()),
+            require_keyring,
         ));
         if bio != Some(AuthOutcome::Match) {
             unsafe { record_first_pass_verdict(pamh, first_pass_verdict(bio)) };
@@ -682,12 +773,12 @@ unsafe fn do_authenticate_simultaneous(
             let confirmed = if is_internal {
                 unsafe { confirm_authentication_internal(pamh) }
             } else {
-                unsafe { confirm_authentication(pamh, prompt_line) }
+                unsafe { confirm_authentication(pamh, service.as_deref(), prompt_line) }
             };
-            return if confirmed { PAM_SUCCESS } else { PAM_AUTH_ERR };
+            return finish(if confirmed { PAM_SUCCESS } else { PAM_AUTH_ERR });
         }
-        unsafe { report_face_verified(pamh, silent, prompt_line, is_internal) };
-        return PAM_SUCCESS;
+        unsafe { report_face_verified(pamh, service.as_deref(), silent, prompt_line, is_internal) };
+        return finish(PAM_SUCCESS);
     }
 
     let state = new_auth_state();
@@ -699,9 +790,11 @@ unsafe fn do_authenticate_simultaneous(
     });
 
     let biometric_fut = authenticate_biometric_with_timeout(
+        &proxy,
         &username,
         service.as_deref(),
         camera_auth_timeout(&auth, service.as_deref()),
+        require_keyring,
     );
     let password_fut = notify.notified();
 
@@ -719,6 +812,8 @@ unsafe fn do_authenticate_simultaneous(
 
     match select_res {
         SelectorResult::Password => {
+            // The cancelled verifier's drop guard needs the runtime to run its release task.
+            let _ = rt.block_on(async { timeout(PROMPT_RETIRE_TIMEOUT, proxy.release()).await });
             unsafe { record_first_pass_verdict(pamh, FirstPassVerdict::Preempted) };
             let fallback = unsafe { wait_for_password_and_fallback(pamh, &state) };
             let _ = prompt_thread.join();
@@ -733,21 +828,31 @@ unsafe fn do_authenticate_simultaneous(
             }
 
             if !require_confirmation {
-                retire_prompt(&state, prompt_thread);
-                unsafe { report_face_verified(pamh, silent, PromptLine::Printed, is_internal) };
-                return PAM_SUCCESS;
+                retire_prompt(&state, prompt_thread, service.as_deref());
+                unsafe {
+                    report_face_verified(
+                        pamh,
+                        service.as_deref(),
+                        silent,
+                        PromptLine::Printed,
+                        is_internal,
+                    )
+                };
+                return finish(PAM_SUCCESS);
             }
 
             if !is_polkit {
-                retire_prompt(&state, prompt_thread);
+                retire_prompt(&state, prompt_thread, service.as_deref());
                 let confirmed = if is_internal {
                     unsafe { confirm_authentication_internal(pamh) }
                 } else {
-                    unsafe { confirm_authentication(pamh, PromptLine::Printed) }
+                    unsafe { confirm_authentication(pamh, service.as_deref(), PromptLine::Printed) }
                 };
-                if confirmed { PAM_SUCCESS } else { PAM_AUTH_ERR }
+                finish(if confirmed { PAM_SUCCESS } else { PAM_AUTH_ERR })
             } else {
-                unsafe { confirm_graphical_polkit(pamh, &state, prompt_thread, is_internal) }
+                finish(unsafe {
+                    confirm_graphical_polkit(pamh, &state, prompt_thread, is_internal)
+                })
             }
         }
     }
@@ -762,7 +867,24 @@ pub unsafe fn do_authenticate(pamh: PamHandle, flags: c_int, options: PamOptions
     {
         return PAM_IGNORE;
     }
+    if unsafe { libc::geteuid() } == 0
+        && !root_service_is_local(
+            service.as_deref(),
+            unsafe { get_pam_tty(pamh) }.as_deref(),
+            options.local,
+        )
+    {
+        return PAM_IGNORE;
+    }
+    // Retry entries keep their own first-pass logic and are meant to scan again.
+    let rescan = options.mode != PamMode::Retry;
+    if rescan && unsafe { scanned_in_this_pass(pamh) } {
+        return PAM_IGNORE;
+    }
     let result = unsafe { authenticate_face(pamh, flags, options) };
+    if rescan && result != PAM_SUCCESS && result != PAM_IGNORE {
+        unsafe { record_scan_finished(pamh) };
+    }
     unsafe { track_duress_clear(pamh, result) };
     result
 }
@@ -813,6 +935,23 @@ mod tests {
         config.storage.unlock_gnome_keyring = true;
         config.liveness.enabled = true;
         config
+    }
+
+    #[test]
+    fn a_refusal_or_a_dark_frame_is_not_retried() {
+        use gaze_core::dbus::CaptureStatus;
+        assert!(worth_another_look(Some(CaptureStatus::NoFace)));
+        assert!(worth_another_look(None));
+        assert!(!worth_another_look(Some(CaptureStatus::TooDark)));
+        assert!(!worth_another_look(Some(CaptureStatus::Unused)));
+    }
+
+    #[test]
+    fn only_sudo_is_never_signalled_out_of_its_prompt() {
+        assert!(host_fails_interrupted_prompt(Some("sudo")));
+        assert!(host_fails_interrupted_prompt(Some("sudo-i")));
+        assert!(!host_fails_interrupted_prompt(Some("su")));
+        assert!(!host_fails_interrupted_prompt(None));
     }
 
     #[test]
@@ -937,6 +1076,9 @@ mod tests {
             PAM_SUCCESS
         );
         assert!(parse_pam_options(["kde-login"]).kde_login);
+        assert!(parse_pam_options(["local"]).local);
+        assert!(!parse_pam_options(["retyr"]).local);
+        assert_eq!(parse_pam_options(["retyr"]).mode, PamMode::Sequential);
     }
 
     #[test]
@@ -995,21 +1137,30 @@ mod tests {
 
     #[test]
     fn mode_parsing_defaults_to_sequential() {
-        assert_eq!(parse_pam_mode(Vec::<&str>::new()), PamMode::Sequential);
-        assert_eq!(parse_pam_mode(["debug", "silent"]), PamMode::Sequential);
+        assert_eq!(
+            parse_pam_options(Vec::<&str>::new()).mode,
+            PamMode::Sequential
+        );
+        assert_eq!(
+            parse_pam_options(["debug", "silent"]).mode,
+            PamMode::Sequential
+        );
     }
 
     #[test]
     fn mode_parsing_detects_retry() {
-        assert_eq!(parse_pam_mode(["retry"]), PamMode::Retry);
-        assert_eq!(parse_pam_mode(["debug", "retry"]), PamMode::Retry);
+        assert_eq!(parse_pam_options(["retry"]).mode, PamMode::Retry);
+        assert_eq!(parse_pam_options(["debug", "retry"]).mode, PamMode::Retry);
     }
 
     #[test]
     fn last_mode_token_wins() {
-        assert_eq!(parse_pam_mode(["simultaneous", "retry"]), PamMode::Retry);
         assert_eq!(
-            parse_pam_mode(["retry", "simultaneous"]),
+            parse_pam_options(["simultaneous", "retry"]).mode,
+            PamMode::Retry
+        );
+        assert_eq!(
+            parse_pam_options(["retry", "simultaneous"]).mode,
             PamMode::Simultaneous
         );
     }
@@ -1083,12 +1234,15 @@ mod tests {
 
     #[test]
     fn mode_parsing_detects_simultaneous() {
-        assert_eq!(parse_pam_mode(["simultaneous"]), PamMode::Simultaneous);
         assert_eq!(
-            parse_pam_mode(["debug", "simultaneous", "other"]),
+            parse_pam_options(["simultaneous"]).mode,
             PamMode::Simultaneous
         );
-        assert_eq!(parse_pam_mode(["grosshack"]), PamMode::Sequential);
+        assert_eq!(
+            parse_pam_options(["debug", "simultaneous", "other"]).mode,
+            PamMode::Simultaneous
+        );
+        assert_eq!(parse_pam_options(["grosshack"]).mode, PamMode::Sequential);
     }
 
     #[test]
@@ -1098,6 +1252,7 @@ mod tests {
             PamOptions {
                 mode: PamMode::Sequential,
                 kde_login: false,
+                local: false,
             }
         );
         assert_eq!(
@@ -1105,6 +1260,7 @@ mod tests {
             PamOptions {
                 mode: PamMode::Simultaneous,
                 kde_login: false,
+                local: false,
             }
         );
         assert_eq!(
@@ -1112,6 +1268,7 @@ mod tests {
             PamOptions {
                 mode: PamMode::Simultaneous,
                 kde_login: false,
+                local: false,
             }
         );
     }
@@ -1360,7 +1517,7 @@ mod tests {
 
         assert!(prompt_is_finished(&state));
         drop(tx);
-        retire_prompt(&state, handle);
+        retire_prompt(&state, handle, None);
     }
 
     #[test]
@@ -1409,7 +1566,7 @@ mod tests {
         // Let the thread itself exit; `retire_prompt` still has to notice `finished` before it
         // stops signalling, which is what this exercises.
         drop(tx);
-        retire_prompt(&state, handle);
+        retire_prompt(&state, handle, None);
         let _ = waker.join();
     }
 }

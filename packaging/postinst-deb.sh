@@ -31,6 +31,12 @@ check_deprecated_pam_grosshack() {
 	fi
 }
 
+seed_config() {
+	[ -e /etc/gaze/config.toml ] || [ -L /etc/gaze/config.toml ] && return 0
+	install -D -m 0644 /usr/share/gaze/config.toml /etc/gaze/config.toml
+}
+
+seed_config
 check_deprecated_pam_grosshack
 warn_missing_avx2
 
@@ -43,5 +49,5 @@ if [ -d /run/systemd/system ]; then
 		systemctl enable --now gazed >/dev/null 2>&1 || true
 		systemctl try-restart gazed >/dev/null 2>&1 || true
 	fi
-	pam-auth-update --package >/dev/null 2>&1 || true
+	[ -e /etc/gaze/pam.optout ] || pam-auth-update --package >/dev/null 2>&1 || true
 fi

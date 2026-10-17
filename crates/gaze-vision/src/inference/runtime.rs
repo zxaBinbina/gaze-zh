@@ -14,6 +14,7 @@ pub struct RuntimeLibrary {
     pub version: String,
     pub provider: String,
     pub fallback_reason: Option<String>,
+    pub environment: ort::environment::Environment,
 }
 
 static RUNTIME: OnceLock<RuntimeLibrary> = OnceLock::new();
@@ -71,7 +72,7 @@ pub fn prepare_environment(config: &InferenceConfig) -> anyhow::Result<()> {
         Some(env) if env == provider => {
             // The CPU fallback must not resolve its dependencies from the vendor's
             // directories, so drop them while this process is still single-threaded.
-            let Err(error) = library_version(&acceleration::vendor_runtime(provider)) else {
+            let Err(error) = library_version(&acceleration::provider_runtime(provider)) else {
                 return Ok(());
             };
             tracing::warn!(provider, error = %format!("{error:#}"), "Vendor runtime unusable; restarting without its library path");
@@ -85,7 +86,8 @@ pub fn prepare_environment(config: &InferenceConfig) -> anyhow::Result<()> {
                 None => command.env_remove("LD_LIBRARY_PATH"),
             };
             let error = command.exec();
-            return Err(error).context("无法在不使用厂商 SDK 库路径的情况下重启 gazed");
+            return Err(error)
+                .context("failed to restart gazed without the vendor SDK library path");
         }
         Some(_) => return Ok(()),
     }
@@ -112,7 +114,7 @@ pub fn prepare_environment(config: &InferenceConfig) -> anyhow::Result<()> {
         .env("LD_LIBRARY_PATH", search)
         .env("GAZE_RUNTIME_ENV", provider)
         .exec();
-    Err(error).context("无法使用厂商 SDK 库路径重启 gazed")
+    Err(error).context("failed to restart gazed with the vendor SDK library path")
 }
 
 /// Validate the actual API, not only the version label, before ort's global initialization.
@@ -136,35 +138,35 @@ fn library_version(path: &Path) -> anyhow::Result<String> {
     if handle.is_null() {
         let error = unsafe { libc::dlerror() };
         let reason = if error.is_null() {
-            "未知动态加载器错误".to_string()
+            "unknown dynamic loader error".to_string()
         } else {
             unsafe { CStr::from_ptr(error) }
                 .to_string_lossy()
                 .into_owned()
         };
-        anyhow::bail!("无法加载 {}：{reason}", path.display());
+        anyhow::bail!("cannot load {}: {reason}", path.display());
     }
     let handle = Handle(handle);
     let symbol = unsafe { libc::dlsym(handle.0, c"OrtGetApiBase".as_ptr()) };
     if symbol.is_null() {
-        anyhow::bail!("{} 未导出 OrtGetApiBase", path.display());
+        anyhow::bail!("{} does not export OrtGetApiBase", path.display());
     }
     let get_base: unsafe extern "system" fn() -> *const ort::sys::OrtApiBase =
         unsafe { std::mem::transmute(symbol) };
     let base = unsafe { get_base() };
     if base.is_null() {
-        anyhow::bail!("{} 返回了空的 ONNX Runtime API 基址", path.display());
+        anyhow::bail!("{} returned a null ONNX Runtime API base", path.display());
     }
     let version_ptr = unsafe { ((*base).GetVersionString)() };
     if version_ptr.is_null() {
-        anyhow::bail!("{} 返回了空的版本字符串", path.display());
+        anyhow::bail!("{} returned a null version string", path.display());
     }
     let version = unsafe { CStr::from_ptr(version_ptr) }
         .to_string_lossy()
         .into_owned();
     if unsafe { ((*base).GetApi)(ort::sys::ORT_API_VERSION) }.is_null() {
         anyhow::bail!(
-            "位于 {} 的 ONNX Runtime {version} 不支持 API {}；Gaze 需要 1.{}.x 或更新版本",
+            "ONNX Runtime {version} at {} does not support API {}; Gaze requires 1.{}.x or newer",
             path.display(),
             ort::sys::ORT_API_VERSION,
             ort::MINOR_VERSION
@@ -189,7 +191,10 @@ pub fn initialize_runtime(config: &InferenceConfig) -> anyhow::Result<&'static R
     if let Some(path) = std::env::var_os("ORT_DYLIB_PATH") {
         candidates.push((provider.to_string(), PathBuf::from(path)));
     } else if provider != "cpu" {
-        candidates.push((provider.to_string(), acceleration::vendor_runtime(provider)));
+        candidates.push((
+            provider.to_string(),
+            acceleration::provider_runtime(provider),
+        ));
     }
     candidates.extend(
         cpu_candidates()
@@ -202,22 +207,21 @@ pub fn initialize_runtime(config: &InferenceConfig) -> anyhow::Result<&'static R
         let path = path.canonicalize().unwrap_or(path);
         let attempt = (|| {
             let version = library_version(&path)?;
-            let initialized = ort::init_from(&path)?
+            let environment = ort::init_from(&path)?
                 .with_name("gazed")
                 .with_logger(std::sync::Arc::new(
                     |level, category, _id, _location, message| {
                         tracing::debug!(target: "ort", "[{category}] ({level:?}) {message}");
                     },
                 ))
-                .commit();
-            anyhow::ensure!(initialized, "Gaze 选择运行时前，ONNX Runtime 已初始化");
-            Ok::<_, anyhow::Error>(version)
+                .build()?;
+            Ok::<_, anyhow::Error>((version, environment))
         })();
         match attempt {
-            Ok(version) => {
+            Ok((version, environment)) => {
                 let fallback_reason = if active_provider == "cpu" && provider != "cpu" {
                     Some(format!(
-                        "{provider} 运行时不可用：{}。请在 {} 下注册并重启 gazed",
+                        "{provider} runtime unavailable: {}. Register it under {} and restart gazed",
                         errors.join("; "),
                         acceleration::RUNTIME_DIR
                     ))
@@ -232,6 +236,7 @@ pub fn initialize_runtime(config: &InferenceConfig) -> anyhow::Result<&'static R
                     version,
                     provider: active_provider,
                     fallback_reason,
+                    environment,
                 };
                 RUNTIME
                     .set(runtime)
@@ -242,10 +247,12 @@ pub fn initialize_runtime(config: &InferenceConfig) -> anyhow::Result<&'static R
         }
     }
     Err(anyhow::anyhow!(
-        "没有可用的 ONNX Runtime：{}",
+        "no usable ONNX Runtime: {}",
         errors.join("; ")
     ))
-    .context("安装 Gaze 运行时软件包，或将 GAZE_CPU_ORT_PATH 设为兼容的 CPU 库")
+    .context(
+        "install the Gaze runtime package, or set GAZE_CPU_ORT_PATH to a compatible CPU library",
+    )
 }
 
 #[cfg(test)]
@@ -275,7 +282,7 @@ mod tests {
     #[test]
     fn missing_runtime_returns_an_actionable_error_without_panicking() {
         let error = library_version(Path::new("/nonexistent/gaze/libonnxruntime.so")).unwrap_err();
-        assert!(error.to_string().contains("无法加载"));
+        assert!(error.to_string().contains("cannot load"));
     }
 
     #[test]

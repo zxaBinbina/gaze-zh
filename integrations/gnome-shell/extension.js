@@ -34,10 +34,6 @@ const GAZE_DBUS_INTERFACE = `
     <method name="RegisterExtension">
       <arg name="active" type="b" direction="in"/>
     </method>
-    <method name="IsExtensionActive">
-      <arg name="uid" type="u" direction="in"/>
-      <arg name="active" type="b" direction="out"/>
-    </method>
     <method name="HasEnrolledFaces">
       <arg name="username" type="s" direction="in"/>
       <arg name="result" type="b" direction="out"/>
@@ -848,6 +844,7 @@ export default class GazeFaceAuthExtension extends Extension {
         "/com/gundulabs/Gaze",
         (proxy, error) => {
           if (error) {
+            logError(error, "[gaze] Failed to connect to gazed");
             return;
           }
           try {
@@ -1936,6 +1933,16 @@ export default class GazeFaceAuthExtension extends Extension {
           };
         },
       );
+
+      const existingVerifier =
+        Main.screenShield?._dialog?._authPrompt?._userVerifier;
+      if (existingVerifier) {
+        try {
+          installVerifierHooks(Object.getPrototypeOf(existingVerifier));
+        } catch (e) {
+          logError(e, "[gaze] Failed to hook the user verifier");
+        }
+      }
     }
 
 

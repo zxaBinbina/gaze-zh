@@ -18,7 +18,7 @@ Each line is marked with what it found:
 | Mark | Meaning |
 |---|---|
 | `✓` | Working. |
-| `○` | A working feature you have switched off, such as GDM login face auth or template encryption. Not a problem. The dim line underneath is the recipe that switches it on. |
+| `○` | An optional feature you have switched off, such as GDM login face authentication. The dim line underneath is the recipe that switches it on. Disabled template encryption is reported as a warning because templates are stored in plaintext. |
 | `!` | Warning: Gaze still works, but something is degraded or not wired up. |
 | `✗` | Error: this part will not work until you fix it. `gaze doctor` exits `1`. |
 
@@ -53,7 +53,7 @@ That command shows the most recent daemon log messages.
 
 ### Daemon exits when template encryption is enabled
 
-If `gazed` refuses to start and the logs show a message like *"template encryption is enabled ([storage] encrypt_templates) but no usable TPM is available"*, the daemon is failing closed on purpose: it will not store biometric data unencrypted once you have asked for encryption.
+If `gazed` refuses to start and the logs show a message like *"template encryption is enabled ([storage] encrypt_templates) but no usable TPM is available"*, the daemon is failing closed on purpose. Encryption is enabled by default for new or omitted storage settings; it will not silently store biometric data unencrypted.
 
 ```bash
 journalctl -u gazed -n 50 --no-pager
@@ -81,9 +81,38 @@ sudo systemctl restart gazed
 If the TPM was reset/cleared after you enrolled, the previously sealed key can no longer be unsealed. Delete the stale key directory and re-enroll your faces:
 
 ```bash
-sudo rm -rf /var/lib/gaze/tpm
-sudo systemctl restart gazed
+sudo systemctl stop gazed
+# Destructive: only after confirming TPM reset and backing up any state you need.
+# The old encrypted templates cannot be recovered without their original TPM key.
+sudo rm -rf /var/lib/gaze/tpm /var/lib/gaze/users
+sudo systemctl start gazed
 ```
+
+### Legacy template or incomplete TPM key errors after upgrading
+
+If logs mention `unbound or plaintext templates require explicit migration` or
+`legacy unbound templates require explicit migration`, stop the daemon and run the
+[template maintenance procedure](/guide/configuration#upgrade-legacy-encrypted-templates).
+This also applies to mixed stores left by an interrupted older migration. Do not
+simply keep retrying startup: plaintext and legacy ciphertext are deliberately not
+authenticated or rebound automatically. If the store's account ownership cannot be
+trusted, re-enroll instead.
+
+If logs mention an `incomplete legacy TPM key pair`, restore the missing `dek.pub`
+or `dek.priv` from a protected backup. Do not delete the surviving file to bypass
+the error; a new key cannot decrypt the existing templates. An invalid `dek.blob`
+is also an error and never triggers fallback to legacy files.
+
+A `template storage needs recovery` error means a storage/config rollback failed.
+Matching and writes are disabled in that daemon process. Stop it, preserve a
+protected copy of `/var/lib/gaze` (including any `.gaze-recode-users-*` sibling
+store), check disk space and filesystem errors, then restart. The active `users`
+directory is a complete store. Startup removes abandoned staging copies and
+validates the active format against the configured setting. If a crash occurred
+after publishing plaintext but before saving an encryption-disable request, the
+still-enabled setting rejects that plaintext; verify the active store's ownership
+and run the explicit maintenance migration above. It is not silently trusted on
+restart. Keep password login available throughout recovery.
 
 ### Daemon fails with "error while loading shared libraries: libopencv_*" (Arch Linux)
 
@@ -104,7 +133,7 @@ or build and install Gaze from source against the new OpenCV.
 
 ### Gaze disappears after an AUR helper upgrade (Arch Linux)
 
-If face auth stops working across every surface at once (sudo, polkit, the lock
+If face authentication stops working across every surface at once (sudo, polkit, the lock
 screen, greetd) and `systemctl status gazed` reports that the unit does not
 exist, check whether an AUR helper replaced Gaze with an unrelated package:
 
@@ -224,6 +253,39 @@ You can also point `rgb` at a camera directly with a `/dev/video*` node or a `us
 
 For authentication, the daemon always captures the kernel `/dev/video*` node directly and never needs a PipeWire session, not even on the GDM login screen. `rgb = "primary"` means the first color node; set `rgb` to a specific `/dev/video*` node or `usb:VVVV:PPPP` id if that picks the wrong camera. A `pipewiresrc target-object=` value is resolved to the V4L2 node behind that same camera.
 
+### Intel IPU6/IPU7 MIPI cameras (`does not support ... colorimetry`)
+
+Many recent Intel laptops (Meteor Lake, Lunar Lake, and others) use a MIPI camera behind an Intel IPU. Its `/dev/video*` nodes are raw capture nodes that only stream after libcamera configures the camera, so opening one directly fails with an error like `Device '/dev/video0' does not support 2:0:0:0 colorimetry`.
+
+With `rgb = "primary"`, Gaze falls back to libcamera when the color node it picked can only be driven through libcamera, or when no color node is visible. The daemon runs libcamera itself and never uses the user's PipeWire session. Install the libcamera GStreamer plugin and restart the daemon:
+
+::: code-group
+
+```bash [Debian/Ubuntu]
+sudo apt install gstreamer1.0-libcamera
+```
+
+```bash [Fedora/RHEL]
+sudo dnf install libcamera-gstreamer
+```
+
+```bash [openSUSE Tumbleweed]
+sudo zypper install gstreamer-plugins-libcamera
+```
+
+```bash [Arch Linux / Manjaro]
+sudo pacman -S libcamera gst-plugin-libcamera
+```
+
+:::
+
+If `gaze auth` reports `libcamera fallback also failed` with `reason not-negotiated`, and the daemon log shows `Failed to fork: Function not implemented` from libcamera, your libcamera build ships IPA modules whose signatures do not verify. libcamera then tries to run them in a separate sandboxed process, which the daemon's hardening blocks, and without its software ISP the camera offers only raw frames. On Fedora 44 this is fixed in `libcamera-0.7.1-2.fc44` and later. Until that reaches the stable repository, install it from updates-testing:
+
+```bash
+journalctl -u gazed -b | grep -i 'failed to fork'
+sudo dnf upgrade --enablerepo=updates-testing --refresh 'libcamera*'
+```
+
 Restart the daemon to apply the camera change:
 
 ```bash
@@ -307,7 +369,7 @@ ir = "/dev/video2"
 emitter_enabled = true
 ```
 
-## 4. Lock screen does not trigger face auth
+## 4. Lock screen does not trigger face authentication
 
 ### GNOME
 
@@ -328,10 +390,10 @@ journalctl -u gazed -b
 
 Older Gaze builds could try to use the selected user's PipeWire runtime before that user session existed. Update Gaze if you see this behavior.
 
-#### GDM shows no face auth at all, and its journal says nothing
+#### GDM shows no face authentication at all, and its journal says nothing
 
 Different from the SELinux case below: there the prompt appears and the camera
-stays dark, here nothing about face auth appears at the login screen and the
+stays dark, here nothing about face authentication appears at the login screen and the
 greeter logs nothing, while the lock screen, `sudo` and `gaze auth` all work.
 
 The greeter has GNOME Shell's extension kill switch on, which stops every
@@ -354,11 +416,11 @@ sudo reboot
 
 GDM writes the file again with its own defaults. The path is under `/var/lib/gdm3`
 on Debian and Ubuntu, and a multi-seat machine has one directory per seat.
-`gaze doctor` reports this as **GDM login face auth** and names the exact file.
+`gaze doctor` reports this as **GDM login face authentication** and names the exact file.
 
 #### GDM never scans on Fedora or SELinux-enabled systems
 
-If face auth works in your desktop session (`sudo`, the lock screen, `gaze auth`)
+If face authentication works in your desktop session (`sudo`, the lock screen, `gaze auth`)
 but the GDM login screen never opens the camera, SELinux may be denying the
 greeter the camera device. Gaze ships a policy module for this and the
 extension package loads it on install, but that step cannot fail the package
@@ -435,15 +497,15 @@ sudo gaze-kde-pam enable
 gaze-kde-pam status
 ```
 
-The lock screen only starts face auth on its own when `/etc/pam.d/kde-fingerprint`
+The lock screen only starts face authentication on its own when `/etc/pam.d/kde-fingerprint`
 runs `pam_gaze.so`. Without it, KScreenLocker has no biometric slot to start and
-face auth waits until you submit the password field.
+face authentication waits until you submit the password field.
 
 If `gaze doctor` warns that the slot runs `pam_gaze.so` in simultaneous mode, replace it with
 the plain module without `simultaneous`: the simultaneous mode waits for a password prompt the greeter can
 never answer, which wedges the slot for the rest of the lock.
 
-At the **login greeter** (Plasma Login Manager or SDDM), face auth is opt-in and,
+At the **login greeter** (Plasma Login Manager or SDDM), face authentication is opt-in and,
 unless the greeter ships an up-front biometric service, starts only when the login
 form is submitted: press Enter with the password field empty, exactly as you would
 for a fingerprint reader there. See the [KDE Plasma guide](/guide/kde).

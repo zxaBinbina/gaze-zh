@@ -3,10 +3,10 @@
 
 [Desktop Entry]
 Name=Gaze
-Comment=Gaze 的 GTK4/Adwaita 图形界面
+Comment=Enroll faces and configure facial authentication
 Exec=gaze-gui
 Icon=com.gundulabs.Gaze
 Terminal=false
 Type=Application
 Categories=Settings;Security;
-Keywords=人脸;认证;登录;生物识别;
+Keywords=face;auth;login;biometric;

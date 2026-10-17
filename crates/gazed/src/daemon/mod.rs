@@ -1,16 +1,18 @@
 // SPDX-FileCopyrightText: 2026 Gundu Labs
 // SPDX-License-Identifier: GPL-3.0-or-later
 
+use anyhow::Context;
 use futures::StreamExt;
 use ndarray::Array1;
 use opencv::core::Mat;
 use std::collections::HashMap;
 use std::ffi::CString;
+use std::future::{Future, pending};
 use std::ptr;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::{Duration, Instant};
-use tokio::sync::{Mutex, oneshot};
+use tokio::sync::{Mutex, OwnedMutexGuard, oneshot};
 use tracing::{error, info, warn};
 use zbus::names::BusName;
 use zbus::{fdo, message::Header, object_server::SignalEmitter};
@@ -24,7 +26,8 @@ use crate::users::{UserDatabase, UserDbError};
 use gaze_core::config::{CONFIG_PATH, Config};
 use gaze_core::dbus::{CaptureStatus, DbusConfig, EnrollPrompt, VerifyResult};
 use gaze_core::desktop::{
-    GDM_DCONF_FACE_AUTH_KEY, GDM_DCONF_PROFILE, GDM_DCONF_PROFILE_PATH, GDM_FACE_OVERRIDE_PATH,
+    GDM_DCONF_FACE_AUTH_KEY, GDM_FACE_OVERRIDE_PATH, gdm_face_auth_from_dconf,
+    gdm_greeter_dconf_source,
 };
 use gaze_core::ir::led::IrLed;
 use gaze_vision::camera::{Camera, CameraKind, resolve_configured_sources};
@@ -42,6 +45,7 @@ mod verify;
 mod watch;
 
 use benchmark::*;
+pub use config::ConfigState;
 use config::*;
 pub use verify::*;
 pub use watch::*;
@@ -64,13 +68,24 @@ const VERIFY_NO_USABLE_TIMEOUT: Duration = Duration::from_secs(8);
 /// Brio). Caps the RGB phase so it yields to IR even without a match. See `verify_start`.
 const VERIFY_SERIAL_RGB_BUDGET: Duration = Duration::from_secs(4);
 const VERIFY_WATCHDOG_POLL: Duration = Duration::from_millis(250);
+const LID_SLEEP_WAIT: Duration = Duration::from_secs(3);
 const SSH_PROC_CHAIN_MAX_DEPTH: usize = 16;
+
+/// Aborts the claim's timeout task once the last copy of the claim is gone.
+pub struct ClaimTimeout(tokio::task::AbortHandle);
+
+impl Drop for ClaimTimeout {
+    fn drop(&mut self) {
+        self.0.abort();
+    }
+}
 
 #[derive(Clone)]
 pub struct ClaimState {
     pub username: String,
     pub sender: String,
     pub epoch: u64,
+    pub _timeout: Option<Arc<ClaimTimeout>>,
 }
 
 /// The single claim the daemon will honour, if any.
@@ -78,6 +93,93 @@ pub type ClaimStateHandle = Arc<Mutex<Option<ClaimState>>>;
 
 /// Cancellation channel for whatever task the current claim owns.
 pub type ActiveCancelHandle = Arc<Mutex<Option<oneshot::Sender<()>>>>;
+
+/// Internal PAM services per owner uid, kept per registering D-Bus sender so a session that
+/// ends without cleaning up loses its entries when its connection goes away.
+pub type PamInternalSets =
+    Arc<Mutex<HashMap<u32, HashMap<String, std::collections::HashSet<String>>>>>;
+
+/// Held through capture-thread teardown.
+pub type CameraLease = Arc<Mutex<()>>;
+
+#[derive(Debug, PartialEq, Eq)]
+enum CameraLeaseError {
+    Cancelled,
+    SleepChanged,
+    AccessDenied,
+}
+
+/// Detect coalesced suspend/resume cycles even when the final value is false.
+fn take_sleep_change(
+    sleeping: &mut tokio::sync::watch::Receiver<bool>,
+) -> Result<bool, CameraLeaseError> {
+    sleeping
+        .has_changed()
+        .map_err(|_| CameraLeaseError::Cancelled)?;
+    let state = sleeping.borrow_and_update();
+    Ok(state.has_changed() || *state)
+}
+
+/// Recheck authorization after acquiring the lease; both waits are cancellable.
+async fn acquire_camera_lease(
+    lease: &CameraLease,
+    cancel: &mut oneshot::Receiver<()>,
+    mut sleeping: Option<&mut tokio::sync::watch::Receiver<bool>>,
+    authorized: impl Future<Output = bool>,
+) -> Result<OwnedMutexGuard<()>, CameraLeaseError> {
+    if let Some(receiver) = sleeping.as_deref_mut()
+        && take_sleep_change(receiver)?
+    {
+        return Err(CameraLeaseError::SleepChanged);
+    }
+
+    let result = tokio::select! {
+        biased;
+        _ = &mut *cancel => Err(CameraLeaseError::Cancelled),
+        changed = async {
+            match sleeping.as_deref_mut() {
+                Some(receiver) => receiver.changed().await,
+                None => pending().await,
+            }
+        } => {
+            match changed {
+                Ok(()) => Err(CameraLeaseError::SleepChanged),
+                Err(_) => Err(CameraLeaseError::Cancelled),
+            }
+        }
+        result = async {
+            let guard = lease.clone().lock_owned().await;
+            if authorized.await {
+                Ok(guard)
+            } else {
+                Err(CameraLeaseError::AccessDenied)
+            }
+        } => result,
+    };
+
+    // Catch notifications arriving during authorization's final poll.
+    if cancel.try_recv() != Err(oneshot::error::TryRecvError::Empty) {
+        return Err(CameraLeaseError::Cancelled);
+    }
+    if let Some(receiver) = sleeping
+        && take_sleep_change(receiver)?
+    {
+        return Err(CameraLeaseError::SleepChanged);
+    }
+    result
+}
+
+fn forget_pam_internal_sender(
+    sets: &mut HashMap<u32, HashMap<String, std::collections::HashSet<String>>>,
+    sender: &str,
+) -> bool {
+    let mut removed = false;
+    sets.retain(|_, senders| {
+        removed |= senders.remove(sender).is_some();
+        !senders.is_empty()
+    });
+    removed
+}
 
 static CLAIM_EPOCH: AtomicU64 = AtomicU64::new(0);
 
@@ -177,11 +279,14 @@ async fn release_claim_epoch(
     if !claim_has_epoch(&state, epoch) {
         return false;
     }
-    *state = None;
+    // Dropped only after the last await: the timeout task calls this, and dropping the claim
+    // aborts that task at its next await.
+    let released = state.take();
     let mut cancel = active_cancel.lock().await;
     if let Some(tx) = cancel.take() {
         let _ = tx.send(());
     }
+    drop(released);
     true
 }
 
@@ -311,39 +416,96 @@ fn eyes_from_kpss(kpss: &ndarray::Array3<f32>) -> Option<[(f32, f32); 5]> {
     Some(pts)
 }
 
-pub struct AuthDaemon {
+#[derive(Clone)]
+pub struct CaptureModels {
     pub detector: Arc<std::sync::Mutex<FaceDetector>>,
-    pub recognizer_rgb: Arc<Mutex<FaceRecognizer>>,
-    pub recognizer_ir: Arc<Mutex<FaceRecognizer>>,
+    pub recognizer: Arc<Mutex<FaceRecognizer>>,
+}
+
+impl CaptureModels {
+    fn load(
+        detector: &gaze_vision::inference::ModelFile,
+        recognizer: &gaze_vision::inference::ModelFile,
+        inference: &gaze_core::config::InferenceConfig,
+    ) -> anyhow::Result<Self> {
+        Ok(Self {
+            detector: Arc::new(std::sync::Mutex::new(
+                FaceDetector::new_with_inference(detector, inference)
+                    .context("Failed to load detector")?,
+            )),
+            recognizer: Arc::new(Mutex::new(
+                FaceRecognizer::new_with_inference(recognizer, inference)
+                    .context("Failed to load recognizer")?,
+            )),
+        })
+    }
+}
+
+#[derive(Clone)]
+pub struct ModelSessions {
+    pub rgb: CaptureModels,
+    pub ir: Option<CaptureModels>,
+}
+
+fn ir_models_needed(config: &Config) -> bool {
+    !config.cameras.ir.trim().is_empty()
+}
+
+impl ModelSessions {
+    pub fn load(
+        detector: &gaze_vision::inference::ModelFile,
+        recognizer: &gaze_vision::inference::ModelFile,
+        config: &Config,
+    ) -> anyhow::Result<Self> {
+        Ok(Self {
+            rgb: CaptureModels::load(detector, recognizer, &config.inference)
+                .context("RGB model loading failed")?,
+            ir: if ir_models_needed(config) {
+                Some(
+                    CaptureModels::load(detector, recognizer, &config.inference)
+                        .context("IR model loading failed")?,
+                )
+            } else {
+                None
+            },
+        })
+    }
+}
+
+pub struct AuthDaemon {
+    pub models: Arc<std::sync::Mutex<ModelSessions>>,
     pub liveness: Arc<Mutex<Option<LivenessDetector>>>,
     pub eye_state: Arc<Mutex<Option<EyeStateClassifier>>>,
     pub duress_lockout: Arc<DuressLockout>,
     pub db: Arc<Mutex<UserDatabase>>,
-    pub rgb_threshold: Arc<Mutex<f32>>,
-    pub ir_threshold: Arc<Mutex<f32>>,
-    pub rgb_device: Arc<Mutex<String>>,
-    pub ir_device: Arc<Mutex<String>>,
-    pub ir_node: Arc<Mutex<String>>,
-    pub serial_capture: Arc<Mutex<bool>>,
-    pub emitter_enabled: Arc<Mutex<bool>>,
-    pub liveness_config: Arc<Mutex<gaze_core::config::LivenessConfig>>,
-    pub hybrid_policy: Arc<Mutex<String>>,
-    pub abort_if_ssh: Arc<Mutex<bool>>,
-    pub abort_if_lid_closed: Arc<Mutex<bool>>,
-    pub abort_before_first_resume: Arc<Mutex<bool>>,
+    pub settings: ConfigState,
     pub claim_state: ClaimStateHandle,
     pub active_cancel: ActiveCancelHandle,
-    pub active_extensions: Arc<Mutex<std::collections::HashMap<u32, bool>>>,
-    pub pam_internal: Arc<Mutex<std::collections::HashMap<u32, std::collections::HashSet<String>>>>,
+    pub pam_internal: PamInternalSets,
+    pub camera_lease: CameraLease,
     pub resume_pending: Arc<AtomicBool>,
     pub resume_seen: Arc<AtomicBool>,
+    pub sleeping: tokio::sync::watch::Receiver<bool>,
     pub lock_epochs: LockEpochs,
     pub benchmark_running: Arc<AtomicBool>,
-    pub last_good_config: Arc<Mutex<Config>>,
-    /// Settings used by the loaded sessions, independent of reads from disk. Holding
-    /// this lock also serializes config writes and model replacements.
-    pub loaded_model_config: Mutex<Config>,
     pub rt_handle: tokio::runtime::Handle,
+}
+
+impl AuthDaemon {
+    /// Capture callers hold an applied-config read guard through teardown.
+    fn capture_models(&self, config: &Config) -> fdo::Result<ModelSessions> {
+        let models = self
+            .models
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .clone();
+        if ir_models_needed(config) && models.ir.is_none() {
+            return Err(fdo::Error::Failed(
+                "IR camera is configured but its models are unavailable".into(),
+            ));
+        }
+        Ok(models)
+    }
 }
 
 fn validate_keyring_verification(
@@ -358,30 +520,6 @@ fn validate_keyring_verification(
     }
     .validate_keyring(liveness)
     .map_err(|e| fdo::Error::Failed(format!("钥匙环验证不可用：{e}")))
-}
-
-fn resolve_config(loaded: anyhow::Result<Config>, last_good: &mut Config) -> Config {
-    match loaded {
-        Ok(mut config) => {
-            if config.clamp_keyring() {
-                warn!(
-                    path = CONFIG_PATH,
-                    "keyring unlock needs storage.encrypt_templates and liveness.enabled; \
-                     ignoring the keyring options"
-                );
-            }
-            *last_good = config.clone();
-            config
-        }
-        Err(e) => {
-            error!(
-                error = %e,
-                path = CONFIG_PATH,
-                "config is unreadable; keeping the last valid configuration"
-            );
-            last_good.clone()
-        }
-    }
 }
 
 /// When each logind session last became locked, keyed by session object path.
@@ -408,7 +546,254 @@ mod tests {
     use super::*;
     use std::sync::Arc;
     use tokio::sync::oneshot::error::TryRecvError;
-    use tokio::sync::{Mutex, oneshot};
+    use tokio::sync::{Mutex, oneshot, watch};
+
+    #[test]
+    fn ir_models_are_needed_only_for_a_configured_ir_source() {
+        let mut config = Config::default();
+        for source in ["", " ", "\t"] {
+            config.cameras.ir = source.into();
+            assert!(!ir_models_needed(&config));
+        }
+        for source in [
+            "/dev/video2",
+            "usb:1234:5678",
+            "pipewiresrc target-object=ir",
+        ] {
+            config.cameras.ir = source.into();
+            assert!(ir_models_needed(&config));
+        }
+    }
+
+    #[test]
+    fn invalid_models_return_an_error_instead_of_panicking_at_startup() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("invalid.onnx");
+        std::fs::write(&path, b"not an ONNX model").unwrap();
+        let model = gaze_vision::inference::ModelFile::verify(path, None).unwrap();
+        assert!(ModelSessions::load(&model, &model, &Config::default()).is_err());
+    }
+
+    #[test]
+    fn rgb_only_skips_ir_and_dual_spectrum_uses_independent_sessions() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("identity.onnx");
+        let identity = [
+            8, 8, 18, 4, 103, 97, 122, 101, 58, 87, 10, 16, 10, 1, 120, 18, 1, 121, 34, 8, 73, 100,
+            101, 110, 116, 105, 116, 121, 18, 9, 103, 97, 122, 101, 45, 116, 101, 115, 116, 90, 27,
+            10, 1, 120, 18, 22, 10, 20, 8, 1, 18, 16, 10, 2, 8, 1, 10, 2, 8, 3, 10, 2, 8, 2, 10, 2,
+            8, 2, 98, 27, 10, 1, 121, 18, 22, 10, 20, 8, 1, 18, 16, 10, 2, 8, 1, 10, 2, 8, 3, 10,
+            2, 8, 2, 10, 2, 8, 2, 66, 2, 16, 13,
+        ];
+        std::fs::write(&path, identity).unwrap();
+        let model = gaze_vision::inference::ModelFile::verify(path, None).unwrap();
+        let mut config = Config::default();
+        let rgb_only = ModelSessions::load(&model, &model, &config).unwrap();
+        assert!(rgb_only.ir.is_none());
+        config.cameras.ir = "/dev/video2".into();
+        let dual = ModelSessions::load(&model, &model, &config).unwrap();
+        let ir = dual.ir.as_ref().unwrap();
+        assert!(!Arc::ptr_eq(&dual.rgb.detector, &ir.detector));
+        assert!(!Arc::ptr_eq(&dual.rgb.recognizer, &ir.recognizer));
+    }
+
+    #[tokio::test]
+    async fn seat_authorization_is_rechecked_after_the_previous_capture_stops() {
+        let lease = Arc::new(Mutex::new(()));
+        let previous = lease.clone().lock_owned().await;
+        let allowed = AtomicBool::new(true);
+        let checked = AtomicBool::new(false);
+        let (_cancel_tx, mut cancel) = oneshot::channel();
+        let attempt = acquire_camera_lease(&lease, &mut cancel, None, async {
+            checked.store(true, Ordering::SeqCst);
+            allowed.load(Ordering::SeqCst)
+        });
+        tokio::pin!(attempt);
+        assert!(futures::poll!(&mut attempt).is_pending());
+        assert!(!checked.load(Ordering::SeqCst));
+
+        allowed.store(false, Ordering::SeqCst);
+        drop(previous);
+        assert_eq!(attempt.await.unwrap_err(), CameraLeaseError::AccessDenied);
+        assert!(checked.load(Ordering::SeqCst));
+        assert!(lease.try_lock().is_ok());
+    }
+
+    #[tokio::test]
+    async fn cancellation_while_waiting_never_runs_authorization() {
+        let lease = Arc::new(Mutex::new(()));
+        let previous = lease.clone().lock_owned().await;
+        let checked = AtomicBool::new(false);
+        let (cancel_tx, mut cancel) = oneshot::channel();
+        let attempt = acquire_camera_lease(&lease, &mut cancel, None, async {
+            checked.store(true, Ordering::SeqCst);
+            true
+        });
+        tokio::pin!(attempt);
+        assert!(futures::poll!(&mut attempt).is_pending());
+        cancel_tx.send(()).unwrap();
+        assert_eq!(attempt.await.unwrap_err(), CameraLeaseError::Cancelled);
+        assert!(!checked.load(Ordering::SeqCst));
+        drop(previous);
+    }
+
+    #[tokio::test]
+    async fn cancellation_during_authorization_releases_the_lease() {
+        let lease = Arc::new(Mutex::new(()));
+        let (cancel_tx, mut cancel) = oneshot::channel();
+        let attempt = acquire_camera_lease(&lease, &mut cancel, None, pending());
+        tokio::pin!(attempt);
+        assert!(futures::poll!(&mut attempt).is_pending());
+        assert!(lease.try_lock().is_err());
+        cancel_tx.send(()).unwrap();
+        assert_eq!(attempt.await.unwrap_err(), CameraLeaseError::Cancelled);
+        assert!(lease.try_lock().is_ok());
+    }
+
+    #[tokio::test]
+    async fn suspend_while_waiting_does_not_acquire_the_camera() {
+        let lease = Arc::new(Mutex::new(()));
+        let previous = lease.clone().lock_owned().await;
+        let (_cancel_tx, mut cancel) = oneshot::channel();
+        let (sleep_tx, mut sleeping) = watch::channel(false);
+        let attempt =
+            acquire_camera_lease(&lease, &mut cancel, Some(&mut sleeping), async { true });
+        tokio::pin!(attempt);
+        assert!(futures::poll!(&mut attempt).is_pending());
+        sleep_tx.send_replace(true);
+        assert_eq!(attempt.await.unwrap_err(), CameraLeaseError::SleepChanged);
+        drop(previous);
+    }
+
+    #[tokio::test]
+    async fn a_coalesced_suspend_resume_cycle_interrupts_the_lease_wait() {
+        let lease = Arc::new(Mutex::new(()));
+        let previous = lease.clone().lock_owned().await;
+        let (_cancel_tx, mut cancel) = oneshot::channel();
+        let (sleep_tx, mut sleeping) = watch::channel(false);
+        let attempt =
+            acquire_camera_lease(&lease, &mut cancel, Some(&mut sleeping), async { true });
+        tokio::pin!(attempt);
+        assert!(futures::poll!(&mut attempt).is_pending());
+        sleep_tx.send_replace(true);
+        sleep_tx.send_replace(false);
+        drop(previous);
+        assert_eq!(attempt.await.unwrap_err(), CameraLeaseError::SleepChanged);
+        assert!(lease.try_lock().is_ok());
+    }
+
+    #[tokio::test]
+    async fn suspend_during_authorization_releases_the_lease() {
+        let lease = Arc::new(Mutex::new(()));
+        let (_cancel_tx, mut cancel) = oneshot::channel();
+        let (sleep_tx, mut sleeping) = watch::channel(false);
+        let attempt = acquire_camera_lease(&lease, &mut cancel, Some(&mut sleeping), pending());
+        tokio::pin!(attempt);
+        assert!(futures::poll!(&mut attempt).is_pending());
+        assert!(lease.try_lock().is_err());
+        sleep_tx.send_replace(true);
+        assert_eq!(attempt.await.unwrap_err(), CameraLeaseError::SleepChanged);
+        assert!(lease.try_lock().is_ok());
+    }
+
+    #[tokio::test]
+    async fn successful_authorization_holds_the_lease_until_teardown_finishes() {
+        let lease = Arc::new(Mutex::new(()));
+        let (_cancel_tx, mut cancel) = oneshot::channel();
+        let guard = acquire_camera_lease(&lease, &mut cancel, None, async { true })
+            .await
+            .unwrap();
+        assert!(lease.try_lock().is_err());
+        drop(guard);
+        assert!(lease.try_lock().is_ok());
+    }
+
+    #[tokio::test]
+    async fn a_resume_in_the_final_authorization_poll_is_not_missed() {
+        let lease = Arc::new(Mutex::new(()));
+        let (_cancel_tx, mut cancel) = oneshot::channel();
+        let (sleep_tx, mut sleeping) = watch::channel(false);
+        let result = acquire_camera_lease(&lease, &mut cancel, Some(&mut sleeping), async {
+            sleep_tx.send_replace(true);
+            sleep_tx.send_replace(false);
+            true
+        })
+        .await;
+        assert_eq!(result.unwrap_err(), CameraLeaseError::SleepChanged);
+        assert!(lease.try_lock().is_ok());
+    }
+
+    #[tokio::test]
+    async fn cancellation_in_the_final_authorization_poll_is_not_missed() {
+        let lease = Arc::new(Mutex::new(()));
+        let (cancel_tx, mut cancel) = oneshot::channel();
+        let result = acquire_camera_lease(&lease, &mut cancel, None, async {
+            cancel_tx.send(()).unwrap();
+            true
+        })
+        .await;
+        assert_eq!(result.unwrap_err(), CameraLeaseError::Cancelled);
+        assert!(lease.try_lock().is_ok());
+    }
+
+    #[test]
+    fn lease_future_can_run_on_the_multithreaded_daemon_runtime() {
+        fn assert_send(_: impl Send) {}
+        let lease = Arc::new(Mutex::new(()));
+        let (_cancel_tx, mut cancel) = oneshot::channel();
+        let (_sleep_tx, mut sleeping) = watch::channel(false);
+        assert_send(acquire_camera_lease(
+            &lease,
+            &mut cancel,
+            Some(&mut sleeping),
+            async { true },
+        ));
+    }
+
+    #[tokio::test]
+    async fn a_closed_sleep_watcher_fails_closed() {
+        let lease = Arc::new(Mutex::new(()));
+        let (_cancel_tx, mut cancel) = oneshot::channel();
+        let (sleep_tx, mut sleeping) = watch::channel(false);
+        drop(sleep_tx);
+        assert_eq!(
+            acquire_camera_lease(&lease, &mut cancel, Some(&mut sleeping), async { true })
+                .await
+                .unwrap_err(),
+            CameraLeaseError::Cancelled,
+        );
+        assert!(lease.try_lock().is_ok());
+    }
+
+    #[test]
+    fn a_vanished_sender_loses_only_its_internal_services() {
+        let mut sets: HashMap<u32, HashMap<String, std::collections::HashSet<String>>> =
+            HashMap::new();
+        let owner = sets.entry(1000).or_default();
+        owner.insert(":1.10".to_string(), ["polkit-1".to_string()].into());
+        owner.insert(":1.11".to_string(), ["gdm-face".to_string()].into());
+
+        assert!(forget_pam_internal_sender(&mut sets, ":1.10"));
+        assert_eq!(sets[&1000].len(), 1);
+        assert!(forget_pam_internal_sender(&mut sets, ":1.11"));
+        assert!(sets.is_empty());
+        assert!(!forget_pam_internal_sender(&mut sets, ":1.11"));
+    }
+
+    #[tokio::test]
+    async fn releasing_a_claim_aborts_its_timeout() {
+        let timeout = tokio::spawn(std::future::pending::<()>());
+        let claim_state = Arc::new(Mutex::new(Some(ClaimState {
+            username: "alice".to_string(),
+            sender: ":1.42".to_string(),
+            epoch: 7,
+            _timeout: Some(Arc::new(ClaimTimeout(timeout.abort_handle()))),
+        })));
+        let active_cancel = Arc::new(Mutex::new(None));
+
+        assert!(release_claim_epoch(&claim_state, &active_cancel, 7).await);
+        assert!(timeout.await.unwrap_err().is_cancelled());
+    }
 
     #[test]
     fn stale_claim_epoch_does_not_match_reclaimed_state() {
@@ -416,6 +801,7 @@ mod tests {
             username: "alice".to_string(),
             sender: ":1.42".to_string(),
             epoch: 2,
+            _timeout: None,
         });
 
         assert!(!claim_has_epoch(&state, 1));
@@ -427,6 +813,7 @@ mod tests {
             username: "alice".to_string(),
             sender: ":1.42".to_string(),
             epoch,
+            _timeout: None,
         })))
     }
 
@@ -465,42 +852,39 @@ mod tests {
         }
     }
 
-    #[test]
-    fn a_hand_edited_keyring_opt_in_is_ignored_rather_than_breaking_face_login() {
-        let mut on_disk = gaze_core::config::Config::default();
+    #[tokio::test]
+    async fn a_hand_edited_keyring_opt_in_is_ignored_rather_than_breaking_face_login() {
+        let mut on_disk = Config::default();
         on_disk.storage.unlock_gnome_keyring = true;
         on_disk.storage.encrypt_templates = false;
         on_disk.liveness.enabled = true;
+        let settings = ConfigState::new(on_disk);
+        assert!(!settings.read().await.storage.unlock_gnome_keyring);
+        assert!(!settings.read().await.storage.unlock_gnome_keyring);
 
-        let mut last_good = gaze_core::config::Config::default();
-        let resolved = super::resolve_config(Ok(on_disk), &mut last_good);
-        assert!(!resolved.storage.unlock_gnome_keyring);
-        assert!(
-            !last_good.storage.unlock_gnome_keyring,
-            "the clamped value is what gets remembered"
-        );
-
-        let mut valid = gaze_core::config::Config::default();
+        let mut valid = Config::default();
         valid.storage.unlock_gnome_keyring = true;
-        valid.storage.encrypt_templates = true;
-        valid.liveness.enabled = true;
-        let resolved = super::resolve_config(Ok(valid), &mut last_good);
-        assert!(resolved.storage.unlock_gnome_keyring);
+        let settings = ConfigState::new(valid);
+        assert!(settings.read().await.storage.unlock_gnome_keyring);
     }
 
-    #[test]
-    fn an_unreadable_config_keeps_the_last_good_one() {
-        let mut last_good = hardened_config();
-
-        let resolved = super::resolve_config(
-            Err(anyhow::anyhow!("expected `=` after key, found newline")),
-            &mut last_good,
-        );
-
-        assert_eq!(resolved.security.level, "maximum");
-        assert!(resolved.auth.require_confirmation_lock_screen);
-        assert!(resolved.auth.require_confirmation_elevation);
-        assert_eq!(last_good.security.level, "maximum");
+    #[tokio::test]
+    async fn a_missing_or_unreadable_file_keeps_the_running_snapshot() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("config.toml");
+        let path = path.to_str().unwrap();
+        hardened_config().save_to(path).unwrap();
+        let settings = ConfigState::new(Config::load_from(path).unwrap());
+        std::fs::remove_file(path).unwrap();
+        for unreadable in [false, true] {
+            if unreadable {
+                std::fs::write(path, "[broken").unwrap();
+            }
+            let current = settings.read().await;
+            assert_eq!(current.security.level, "maximum");
+            assert!(current.auth.require_confirmation_lock_screen);
+            assert!(current.auth.require_confirmation_elevation);
+        }
     }
 
     #[test]
@@ -513,17 +897,16 @@ mod tests {
         assert!(!defaults.auth.require_confirmation_elevation);
     }
 
-    #[test]
-    fn a_readable_config_replaces_the_last_good_one() {
-        let mut last_good = hardened_config();
-        let mut updated = gaze_core::config::Config::default();
-        updated.liveness.threshold = 0.95;
-
-        let resolved = super::resolve_config(Ok(updated), &mut last_good);
-
-        assert_eq!(resolved.liveness.threshold, 0.95);
-        assert_eq!(last_good.liveness.threshold, 0.95);
-        assert_eq!(last_good.security.level, "medium");
+    #[tokio::test]
+    async fn disk_edits_do_not_change_the_advertised_or_running_settings() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("config.toml");
+        let path = path.to_str().unwrap();
+        hardened_config().save_to(path).unwrap();
+        let settings = ConfigState::new(Config::load_from(path).unwrap());
+        Config::default().save_to(path).unwrap();
+        assert_eq!(Config::load_from(path).unwrap().security.level, "medium");
+        assert_eq!(settings.read().await.security.level, "maximum");
     }
 
     #[tokio::test]
@@ -654,6 +1037,7 @@ mod tests {
             username: "alice".to_string(),
             sender: ":1.42".to_string(),
             epoch: 12,
+            _timeout: None,
         });
 
         assert!(!release_claim_epoch(&claim_state, &active_cancel, 11).await);

@@ -19,7 +19,7 @@ enabled as a fallback.
 - Gaze processes faces locally on your machine; it does not send face data to a cloud service.
 - No cloud account is required.
 - Face embeddings are stored on disk in Gaze's local data directory, which is readable only by root.
-- You can optionally encrypt them at rest with a key sealed to the TPM. A stolen disk then cannot be used to recover the embeddings on another machine. See [template encryption](/guide/configuration#encrypt-face-templates-with-the-tpm).
+- Template encryption is enabled by default and requires a usable TPM 2.0; an existing explicit opt-out remains respected. AES-GCM binds each encrypted embedding to its account name and filename. TPM sealing protects a disk taken to another machine, not an alternate boot on the same machine: use full-disk encryption too. See [template encryption and legacy migration](/guide/configuration#encrypt-face-templates-with-the-tpm).
 - If you enable [GNOME Keyring unlock](/guide/gnome#optional-tpm-backed-keyring-unlock), your account password is additionally stored in a TPM-protected record so a face login can unlock the keyring. That record is recoverable by root on this machine; read the security notes before turning it on.
 
 ## Authentication pipeline
@@ -53,7 +53,8 @@ same daemon code runs on every surface, so a problem you can reproduce with
 2. Gaze checks three refusals in order: no suspend or resume since boot
    (`auth.abort_before_first_resume`), the caller sits inside an SSH session
    (`auth.abort_if_ssh`), and the laptop lid is closed (`auth.abort_if_lid_closed`). Any of
-   them ends the attempt before a camera is touched.
+   them ends the attempt before a camera is touched. A closed lid is the exception when
+   logind is set to suspend on lid close: see [Suspend during an attempt](#suspend-during-an-attempt).
 3. Gaze works out which spectra can run. RGB runs when `cameras.rgb` is set *and* you have
    RGB templates enrolled; IR runs on the same rule. If neither can run, or if
    `security.hybrid_policy = "and"` demands both but you enrolled only one, the attempt ends
@@ -63,6 +64,28 @@ same daemon code runs on every surface, so a problem you can reproduce with
    `start_delay_ms` starts immediately. The lid is checked once more after the delay, since it
    can close while Gaze waits.
 
+### Suspend during an attempt
+
+A locker started on lid close, such as hyprlock from hypridle's `before_sleep_cmd`, asks
+for face authentication a moment before the machine sleeps. Without special handling that attempt
+fails against a closed lid or a black frame, and the locker shows a password prompt after
+resume with Gaze no longer scanning.
+
+Gaze follows logind's `PrepareForSleep` signal so such an attempt is held instead:
+
+- If the system is already suspending when the request arrives, the request waits for the
+  resume.
+- If the lid is closed and logind's lid action (`HandleLidSwitch`, or its `ExternalPower`
+  and `Docked` variants) is a suspend or hibernate, Gaze waits up to 3 s for the suspend to
+  start before refusing. A docked laptop, or one set to `ignore` or `lock`, is refused at
+  once as before.
+- If the suspend starts during the start delay or mid-capture, the cameras are released and
+  the attempt pauses.
+
+After the resume the attempt starts over with `auth.resume_grace_ms` as its delay. If the
+lid is still closed then, `auth.abort_if_lid_closed` refuses it. A client that cancels
+while the attempt is held ends it as usual.
+
 ### Opening the camera
 
 5. The configured source resolves to a kernel `/dev/videoN` node, which is captured
@@ -70,7 +93,10 @@ same daemon code runs on every surface, so a problem you can reproduce with
    resolves to the node behind that same camera, and a `/dev/videoN` path or USB
    `vid:pid` names its node outright. The user-session PipeWire socket is never
    connected to: it is controlled by the user being authenticated. A source with
-   no kernel node, including a hand-written GStreamer pipeline, is refused.
+   no kernel node, including a hand-written GStreamer pipeline, is refused. The one
+   exception is `primary` on cameras that only libcamera can drive, such as Intel
+   IPU MIPI cameras: when the chosen node can only be driven through libcamera, or
+   no color node is visible, the daemon runs `libcamerasrc` itself.
 6. The pipeline gets 500 ms to reach the playing state. A slower camera is not treated as a
    failure: the frame loop reports any error that arrives later.
 7. Unprivileged previews (for example the GUI camera view) may still open a
@@ -200,7 +226,7 @@ That makes authentication more robust for:
 By default, Gaze stores its data in these locations:
 
 - User embeddings: `/var/lib/gaze/users`
-- TPM-sealed encryption key (only when template encryption is enabled): `/var/lib/gaze/tpm`
+- TPM-sealed encryption key (when template encryption is enabled): `/var/lib/gaze/tpm/dek.blob`
 - TPM-protected GNOME Keyring credentials (only when `gaze keyring` has been run): `/var/lib/gaze/keyring`
 - Model files: `/var/cache/gaze`
 - Config file: `/etc/gaze/config.toml`

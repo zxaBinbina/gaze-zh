@@ -27,7 +27,6 @@ nalgebra.workspace = true
 ndarray.workspace = true
 opencv = { workspace = true, features = ["imgproc"] }
 ort.workspace = true
-sha2.workspace = true
 tokio = { workspace = true, features = ["full", "rt-multi-thread"] }
 ureq.workspace = true
 uuid = { workspace = true, features = ["v4"] }
@@ -36,7 +35,9 @@ zip.workspace = true
 tracing.workspace = true
 tracing-subscriber = { workspace = true, features = ["env-filter"] }
 futures.workspace = true
-zbus_polkit.workspace = true
 tss-esapi.workspace = true
 zeroize.workspace = true
+
+[dev-dependencies]
+tempfile = "=3.27.0"
 

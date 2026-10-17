@@ -44,7 +44,7 @@ pub(super) fn extension_schema_dir_in(data_dirs: &[PathBuf]) -> Option<PathBuf> 
 }
 
 /// Whether the extension files are on disk, which separates "the package is
-/// missing" from "GNOME Shell 尚未识别该软件包".
+/// missing" from "GNOME Shell has not picked the package up yet".
 pub(super) fn extension_installed() -> bool {
     extension_installed_in(&xdg_data_dirs())
 }
@@ -64,101 +64,6 @@ pub(super) fn extension_setting(key: &str) -> std::io::Result<(bool, String)> {
     command_output_env("gsettings", &["get", GNOME_EXTENSION_SCHEMA, key], &env)
 }
 
-/// `None` only when `dconf` itself could not answer. An unset key reads back as an empty
-/// string, which callers layering one db over another must tell apart from a real value.
-pub(super) fn dconf_read_with_profile(
-    tag: &str,
-    profile_body: &str,
-    config_home: Option<&Path>,
-    key: &str,
-) -> Option<String> {
-    let profile =
-        std::env::temp_dir().join(format!("gaze-doctor-{tag}-{}.profile", std::process::id()));
-    fs::write(&profile, profile_body).ok()?;
-    let mut env: Vec<(&str, &OsStr)> = vec![("DCONF_PROFILE", profile.as_os_str())];
-    if let Some(home) = config_home {
-        env.push(("XDG_CONFIG_HOME", home.as_os_str()));
-    }
-    let result = command_output_env("dconf", &["read", key], &env);
-    let _ = fs::remove_file(&profile);
-    match result {
-        Ok((true, value)) => Some(value.trim().to_string()),
-        _ => None,
-    }
-}
-
-pub(super) fn gdm_system_dconf_read(key: &str) -> Option<String> {
-    dconf_read_with_profile(
-        GDM_DCONF_PROFILE,
-        &format!("system-db:{GDM_DCONF_PROFILE}\n"),
-        None,
-        key,
-    )
-}
-
-pub(super) fn gdm_user_db_read(dir: &Path, key: &str) -> Option<String> {
-    dconf_read_with_profile("gdm-user", "user-db:user\n", Some(dir), key)
-        .filter(|value| !value.is_empty())
-}
-
-/// The greeter runs as `gdm` with its own `XDG_CONFIG_HOME`, and the path differs by
-/// distribution and by seat, so every candidate holding a db has to be considered.
-pub(super) fn gdm_greeter_config_dirs() -> Vec<PathBuf> {
-    let mut dirs = Vec::new();
-    for home in GDM_HOME_DIRS {
-        let home = Path::new(home);
-        if !home.is_dir() {
-            continue;
-        }
-        dirs.push(home.join(".config"));
-        if let Ok(entries) = fs::read_dir(home) {
-            for entry in entries.flatten() {
-                dirs.push(entry.path().join("config"));
-            }
-        }
-    }
-    dirs.retain(|dir| dir.join("dconf/user").is_file());
-    dirs.sort();
-    dirs.dedup();
-    dirs
-}
-
-/// `user-db:user` leads the greeter profile, so whatever GDM has written for itself outranks
-/// every `system-db` keyfile. Reading only `system-db:gdm` reports what Gaze installed rather
-/// than what the greeter resolves, which is how a disabled extension system passed as ready.
-pub(super) fn gdm_greeter_dconf_read(key: &str) -> Option<String> {
-    for dir in gdm_greeter_config_dirs() {
-        if let Some(value) = gdm_user_db_read(&dir, key) {
-            return Some(value);
-        }
-    }
-    gdm_system_dconf_read(key)
-}
-
-/// Which greeter db holds `key`, for a fix that has to name the file it must be cleared from.
-pub(super) fn gdm_greeter_dconf_source(key: &str) -> Option<PathBuf> {
-    gdm_greeter_config_dirs()
-        .into_iter()
-        .find(|dir| gdm_user_db_read(dir, key).is_some())
-        .map(|dir| dir.join("dconf/user"))
-}
-
-pub(super) fn dconf_bool(value: &str) -> Option<bool> {
-    match value {
-        "true" => Some(true),
-        "false" => Some(false),
-        _ => None,
-    }
-}
-
-/// The value GDM itself sees, which a NixOS configuration sets without `GDM_FACE_OVERRIDE_PATH`.
-pub(super) fn gdm_face_auth_from_dconf() -> Option<bool> {
-    if !Path::new(GDM_DCONF_PROFILE_PATH).exists() {
-        return None;
-    }
-    dconf_bool(&gdm_greeter_dconf_read(GDM_DCONF_FACE_AUTH_KEY)?)
-}
-
 pub(super) fn profile_reads_system_db(contents: &str, db: &str) -> bool {
     let wanted = format!("system-db:{db}");
     contents.lines().any(|line| line.trim() == wanted)
@@ -173,7 +78,7 @@ pub(super) fn extensions_include(value: &str, uuid: &str) -> bool {
 
 pub(super) enum GdmGreeterReadiness {
     Ready,
-    ProfileMissingSystemDb,
+    ProfileMissingSystemDb(String),
     CompiledDbMissing,
     ExtensionNotEnabled,
     /// `Some` names the greeter db holding the key, `None` means a `system-db` layer set it.
@@ -181,17 +86,36 @@ pub(super) enum GdmGreeterReadiness {
     Unverifiable(String),
 }
 
+fn read_profile(path: &str) -> Option<std::io::Result<String>> {
+    match fs::read_to_string(path) {
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => None,
+        result => Some(result),
+    }
+}
+
 pub(super) fn gdm_greeter_readiness() -> GdmGreeterReadiness {
-    match fs::read_to_string(GDM_DCONF_PROFILE_PATH) {
-        Ok(contents) if !profile_reads_system_db(&contents, GDM_DCONF_PROFILE) => {
-            return GdmGreeterReadiness::ProfileMissingSystemDb;
+    let mut found = false;
+    for name in GDM_GREETER_DCONF_PROFILES {
+        let path = format!("{DCONF_PROFILE_DIR}/{name}");
+        let vendor = format!("{VENDOR_DCONF_PROFILE_DIR}/{name}");
+        let contents = match read_profile(&path).or_else(|| read_profile(&vendor)) {
+            None => continue,
+            Some(Ok(contents)) => contents,
+            Some(Err(err)) => {
+                return GdmGreeterReadiness::Unverifiable(format!(
+                    "could not read the {name} dconf profile: {err}"
+                ));
+            }
+        };
+        if !profile_reads_system_db(&contents, GDM_DCONF_PROFILE) {
+            return GdmGreeterReadiness::ProfileMissingSystemDb(path);
         }
-        Ok(_) => {}
-        Err(err) => {
-            return GdmGreeterReadiness::Unverifiable(format!(
-                "无法读取 {GDM_DCONF_PROFILE_PATH}：{err}"
-            ));
-        }
+        found = true;
+    }
+    if !found {
+        return GdmGreeterReadiness::Unverifiable(format!(
+            "no GDM dconf profile under {DCONF_PROFILE_DIR} or {VENDOR_DCONF_PROFILE_DIR}"
+        ));
     }
 
     if !Path::new(GDM_COMPILED_DB_PATH).exists() {
@@ -203,7 +127,7 @@ pub(super) fn gdm_greeter_readiness() -> GdmGreeterReadiness {
         Some(_) => return GdmGreeterReadiness::ExtensionNotEnabled,
         None => {
             return GdmGreeterReadiness::Unverifiable(
-                "对 GDM 数据库执行 `dconf read` 失败".to_string(),
+                "`dconf read` against the GDM database failed".to_string(),
             );
         }
     }
@@ -226,9 +150,9 @@ pub(super) fn gdm_greeter_readiness() -> GdmGreeterReadiness {
 pub(super) fn gdm_selinux_fix() -> String {
     let path = selinux::policy_path(selinux::GDM_CAMERA_MODULE);
     if Path::new(&path).exists() {
-        format!("运行 `sudo semodule -i {path}`，然后重启。")
+        format!("Run `sudo semodule -i {path}`, then reboot.")
     } else {
-        format!("重新安装 Gaze GNOME 扩展包以恢复 {path}，然后重启。")
+        format!("Reinstall the Gaze GNOME extension package to restore {path}, then reboot.")
     }
 }
 
@@ -244,28 +168,29 @@ pub(super) fn report_gdm_camera_policy(report: &mut Report, policy: ModuleState)
     let module = selinux::GDM_CAMERA_MODULE;
     match policy {
         ModuleState::Loaded => report.pass(
-            "GDM 摄像头 SELinux 策略",
-            format!("{module} 已加载，登录界面可以打开摄像头"),
+            "GDM camera SELinux policy",
+            format!("{module} is loaded, so the greeter can open the camera"),
         ),
         ModuleState::NotLoaded => report.error(
-            "GDM 摄像头 SELinux 策略",
+            "GDM camera SELinux policy",
             format!(
-                "SELinux 处于强制模式，但未加载 {module}，GDM 登录界面被拒绝访问摄像头，因此不会开始扫描"
+                "SELinux is enforcing and {module} is not loaded, so the GDM greeter is denied the camera and the login screen never scans"
             ),
             gdm_selinux_fix(),
         ),
         ModuleState::NeedsRoot => report.warning(
-            "GDM 摄像头 SELinux 策略",
+            "GDM camera SELinux policy",
             format!(
-                "SELinux 处于强制模式，没有 root 权限无法检查 {module} 是否已加载"
+                "SELinux is enforcing, and whether {module} is loaded could not be \
+                 checked without root"
             ),
-            "运行 `sudo gaze doctor` 读取已加载的模块列表。",
+            "Run `sudo gaze doctor` to read the loaded module list.",
         ),
         ModuleState::Unverifiable(why) => report.warning(
-            "GDM 摄像头 SELinux 策略",
-            format!("SELinux 处于强制模式，但无法读取已加载的模块列表：{why}"),
+            "GDM camera SELinux policy",
+            format!("SELinux is enforcing, but the loaded module list could not be read: {why}"),
             format!(
-                "运行 `semodule -l | grep {module}`；如果没有输出，{}",
+                "Run `semodule -l | grep {module}`; if it prints nothing, {}",
                 gdm_selinux_fix()
             ),
         ),
@@ -328,7 +253,7 @@ mod tests {
             let check = report
                 .checks
                 .into_iter()
-                .find(|check| check.name == "GDM 摄像头 SELinux 策略")
+                .find(|check| check.name == "GDM camera SELinux policy")
                 .expect("the SELinux check always reports once it runs");
             (check.level, check.message, check.fix.unwrap_or_default())
         };
@@ -346,7 +271,7 @@ mod tests {
         let (level, message, fix) = reported(ModuleState::NeedsRoot);
         assert_eq!(level, Level::Warning);
         assert!(
-            message.contains("没有 root 权限"),
+            message.contains("without root"),
             "an unprivileged run must say what it could not see: {message}"
         );
         assert!(

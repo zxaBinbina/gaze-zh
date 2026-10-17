@@ -9,11 +9,12 @@ use gaze_core::config::{
 };
 use gaze_core::dbus::{
     GazeProxy, dbus_error_message, dbus_is_file_not_found, dbus_is_not_activatable,
-    try_benchmark_from_daemon,
+    dbus_is_unknown_method, try_benchmark_from_daemon,
 };
 use gaze_core::desktop::{
-    GDM_DCONF_FACE_AUTH_KEY, GDM_DCONF_PROFILE, GDM_DCONF_PROFILE_PATH, GDM_FACE_OVERRIDE_PATH,
-    KDE_FACE_PAM_FILE, KDE_SMARTCARD_PAM_FILE, PLASMALOGIN_FACE_PAM_FILE,
+    GDM_DCONF_PROFILE, GDM_FACE_OVERRIDE_PATH, KDE_FACE_PAM_FILE, KDE_SMARTCARD_PAM_FILE,
+    PLASMALOGIN_FACE_PAM_FILE, dconf_bool, gdm_face_auth_from_dconf, gdm_greeter_dconf_read,
+    gdm_greeter_dconf_source,
 };
 use gaze_security::tpm::TPM_DEVICES;
 use std::collections::BTreeSet;
@@ -25,6 +26,7 @@ use std::process::Command;
 use std::time::{Duration, Instant};
 
 mod acceleration;
+mod bug_report;
 mod camera;
 mod config;
 mod daemon;
@@ -53,6 +55,7 @@ const GNOME_DOCS_URL: &str = "https://gaze.gundulabs.com/guide/gnome";
 /// openSUSE ship these slots only there, so reading `/etc` alone sees nothing.
 const VENDOR_PAM_DIR: &str = "/usr/lib/pam.d";
 const POLKIT_PAM_FILE: &str = "/etc/pam.d/polkit-1";
+const KDE_LOGIN_GREETER_SERVICES: [&str; 2] = ["sddm", "plasmalogin"];
 const ELEVATION_PAM_SERVICE: &str = "sudo";
 const PAM_SUDO_OPTOUT_PATH: &str = "/etc/gaze/pam-sudo.optout";
 
@@ -65,8 +68,10 @@ fn read_pam_service(path: &str) -> Option<String> {
 const GDM_ENABLED_EXTENSIONS_KEY: &str = "/org/gnome/shell/enabled-extensions";
 const GDM_DISABLE_EXTENSIONS_KEY: &str = "/org/gnome/shell/disable-user-extensions";
 /// Returns the display-manager account name: `gdm3` on Debian and Ubuntu, `gdm` elsewhere.
-const GDM_HOME_DIRS: [&str; 2] = ["/var/lib/gdm", "/var/lib/gdm3"];
 const GDM_COMPILED_DB_PATH: &str = "/etc/dconf/db/gdm";
+const GDM_GREETER_DCONF_PROFILES: [&str; 2] = [GDM_DCONF_PROFILE, "Debian-gdm"];
+const DCONF_PROFILE_DIR: &str = "/etc/dconf/profile";
+const VENDOR_DCONF_PROFILE_DIR: &str = "/usr/share/dconf/profile";
 const GDM_FACE_PAM_SERVICE: &str = "gdm-face";
 const GREETD_PAM_FILE: &str = "/etc/pam.d/greetd";
 /// Files that decide what runs as root or who may talk to the daemon. A writable entry here
@@ -87,6 +92,24 @@ enum Level {
     Off,
     Warning,
     Error,
+}
+
+impl Level {
+    fn as_str(self) -> &'static str {
+        match self {
+            Level::Pass => "pass",
+            Level::Off => "off",
+            Level::Warning => "warning",
+            Level::Error => "error",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Output {
+    Human,
+    Json,
+    Report,
 }
 
 #[derive(Debug)]
@@ -145,9 +168,8 @@ impl Report {
         self.count(Level::Error) == 0
     }
 
-    fn print(&self) -> anyhow::Result<()> {
-        let term = Term::stdout();
-        term.write_line(&format!("\n{}\n", style("Gaze 诊断").cyan().bold()))?;
+    fn render(&self) -> String {
+        let mut out = format!("\n{}\n\n", style("Gaze doctor").cyan().bold());
 
         for check in &self.checks {
             let (symbol, label) = match check.level {
@@ -159,10 +181,10 @@ impl Report {
                 ),
                 Level::Error => (style("✗").red().bold(), style(check.name).red().bold()),
             };
-            term.write_line(&format!("  {symbol} {label}: {}", check.message))?;
+            out.push_str(&format!("  {symbol} {label}: {}\n", check.message));
             if let Some(fix) = &check.fix {
                 for line in fix.lines() {
-                    term.write_line(&format!("      {}", style(line).dim()))?;
+                    out.push_str(&format!("      {}\n", style(line).dim()));
                 }
             }
         }
@@ -171,23 +193,55 @@ impl Report {
         let off = self.count(Level::Off);
         let warnings = self.count(Level::Warning);
         let errors = self.count(Level::Error);
-        term.write_line(&format!(
-            "\n{} {passed} 项通过，{off} 项关闭，{warnings} 项警告，{errors} 项错误",
-            style("汇总：").bold()
-        ))?;
+        out.push_str(&format!(
+            "\n{} {passed} passed, {off} off, {warnings} warning{}, {errors} error{}\n",
+            style("Summary:").bold(),
+            if warnings == 1 { "" } else { "s" },
+            if errors == 1 { "" } else { "s" }
+        ));
         if off > 0 {
-            term.write_line(
-                &style("○ 表示正常但已被您关闭的功能；下方列出了启用步骤。")
+            out.push_str(&format!(
+                "{}\n",
+                style("○ marks a working feature you have switched off; the line under it turns it on.")
                     .dim()
-                    .to_string(),
-            )?;
+            ));
         }
-        term.write_line("")?;
+        out.push('\n');
+        out
+    }
+
+    fn print(&self) -> anyhow::Result<()> {
+        Term::stdout().write_str(&self.render())?;
         Ok(())
+    }
+
+    fn to_json(&self) -> String {
+        let checks: Vec<String> = self
+            .checks
+            .iter()
+            .map(|check| {
+                format!(
+                    "{{\"level\":\"{}\",\"name\":{},\"message\":{},\"fix\":{}}}",
+                    check.level.as_str(),
+                    crate::json_string(check.name),
+                    crate::json_string(&check.message),
+                    check
+                        .fix
+                        .as_deref()
+                        .map(crate::json_string)
+                        .unwrap_or_else(|| "null".to_string())
+                )
+            })
+            .collect();
+        format!(
+            "{{\"healthy\":{},\"checks\":[{}]}}",
+            self.is_healthy(),
+            checks.join(",")
+        )
     }
 }
 
-pub async fn run(username: &str, benchmark: bool) -> anyhow::Result<bool> {
+pub async fn run(username: &str, benchmark: bool, output: Output) -> anyhow::Result<bool> {
     let mut report = Report::default();
 
     check_platform(&mut report);
@@ -208,12 +262,16 @@ pub async fn run(username: &str, benchmark: bool) -> anyhow::Result<bool> {
     check_sudo_policy(&mut report, username);
     check_privileged_files(&mut report);
     check_desktop_integration(&mut report);
-    check_kde_confirmation_bypass(
+    check_kde_confirmation(
         &mut report,
         config,
         read_pam_service(KDE_FACE_PAM_FILE).as_deref(),
         read_pam_service(KDE_SMARTCARD_PAM_FILE).as_deref(),
         read_pam_service(PLASMALOGIN_FACE_PAM_FILE).as_deref(),
+        &KDE_LOGIN_GREETER_SERVICES
+            .into_iter()
+            .filter(|service| pam_service_reaches_gaze(service, 2))
+            .collect::<Vec<_>>(),
     );
     check_tpm(&mut report, config);
     check_keyring(&mut report, username, config);
@@ -228,16 +286,27 @@ pub async fn run(username: &str, benchmark: bool) -> anyhow::Result<bool> {
     )
     .await;
 
-    report.print()?;
+    match output {
+        Output::Human => report.print()?,
+        Output::Json => println!("{}", report.to_json()),
+        Output::Report => {
+            report.print()?;
+            let path = bug_report::write(&report, username)?;
+            println!(
+                "Wrote {}. Check it, then attach it to a new issue: https://github.com/GunduLabs/gaze/issues/new/choose",
+                path.display()
+            );
+        }
+    }
     Ok(report.is_healthy())
 }
 
 fn check_platform(report: &mut Report) {
     if std::env::consts::OS != "linux" {
         report.error(
-            "平台",
-            format!("不支持 {}", std::env::consts::OS),
-            "请在 Linux 上运行 Gaze。",
+            "Platform",
+            format!("{} is not supported", std::env::consts::OS),
+            "Run Gaze on Linux.",
         );
         return;
     }
@@ -245,7 +314,7 @@ fn check_platform(report: &mut Report) {
     #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
     {
         if gaze_core::cpu::supports_inference() {
-            report.pass("CPU", "AVX2 可用");
+            report.pass("CPU", "AVX2 is available");
         } else {
             report.error(
                 "CPU",
@@ -258,7 +327,10 @@ fn check_platform(report: &mut Report) {
     #[cfg(not(any(target_arch = "x86", target_arch = "x86_64")))]
     report.pass(
         "CPU",
-        format!("{} 无需进行 x86 AVX2 检查", std::env::consts::ARCH),
+        format!(
+            "{} does not require the x86 AVX2 check",
+            std::env::consts::ARCH
+        ),
     );
 }
 
@@ -306,7 +378,11 @@ mod tests {
     #[test]
     fn a_feature_switched_off_is_not_a_checkmark_and_still_says_how_to_turn_it_on() {
         let mut report = Report::default();
-        report.off("GDM 登录人脸认证", "off", "启用方法：打开开关。");
+        report.off(
+            "GDM login face authentication",
+            "off",
+            "Turn it on: flip the switch.",
+        );
 
         let check = &report.checks[0];
         assert_eq!(check.level, Level::Off);
@@ -322,6 +398,17 @@ mod tests {
         assert!(
             report.is_healthy(),
             "switching a feature off is a choice, not a failure"
+        );
+    }
+
+    #[test]
+    fn json_output_carries_every_check_and_the_verdict() {
+        let mut report = Report::default();
+        report.pass("CPU", "AVX2 is available");
+        report.error("DBus", "gazed \"down\"", "Run it");
+        assert_eq!(
+            report.to_json(),
+            r#"{"healthy":false,"checks":[{"level":"pass","name":"CPU","message":"AVX2 is available","fix":null},{"level":"error","name":"DBus","message":"gazed \"down\"","fix":"Run it"}]}"#
         );
     }
 

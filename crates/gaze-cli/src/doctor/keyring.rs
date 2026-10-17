@@ -7,11 +7,22 @@ pub(super) fn check_tpm(report: &mut Report, config: Option<&Config>) {
     let Some(config) = config else {
         return;
     };
+    let storage = gaze_security::storage::disk_encryption_for_paths(&[
+        Path::new(gaze_core::config::USERS_DIR),
+        Path::new("/var/lib/gaze/tpm"),
+        Path::new(gaze_security::keyring::STORE_DIR),
+        Path::new(gaze_security::keyring::KWALLET_STORE_DIR),
+    ]);
+    if let Some(warning) = gaze_security::storage::encryption_warning(storage) {
+        report.warning("State storage", warning, "Protect the filesystem holding /var/lib/gaze with full-disk encryption. Root on an unlocked machine can still recover TPM-sealed secrets.");
+    } else {
+        report.pass("State storage", "dm-crypt protects every visible backing-device path; TPM secrets remain recoverable by root after unlock");
+    }
     if !config.storage.encrypt_templates {
-        report.off(
+        report.warning(
             "TPM",
-            "模板加密已关闭，人脸模板以未加密形式存储在磁盘上，不需要 TPM",
-            format!("启用方法：在 {CONFIG_PATH} 的 [storage] 中设置 `encrypt_templates = true`，然后重启 gazed。"),
+            "template encryption is off, so face templates sit on disk unencrypted and no TPM is required",
+            format!("Turn it on: set `encrypt_templates = true` under [storage] in {CONFIG_PATH}, then restart gazed."),
         );
         return;
     }
@@ -25,29 +36,32 @@ pub(super) fn check_tpm(report: &mut Report, config: Option<&Config>) {
     if present.is_empty() {
         report.error(
             "TPM",
-            "模板加密已启用，但未发现 TPM 设备",
-            "在固件中启用 TPM 2.0，或设置 storage.encrypt_templates = false，然后重启 gazed。",
+            "template encryption is enabled but no TPM device is present",
+            "Enable TPM 2.0 in firmware or set storage.encrypt_templates = false, then restart gazed.",
         );
         return;
     }
 
     let Some(credentials) = daemon_credentials() else {
-        report.pass("TPM", "存在可用于加密模板的 TPM 设备");
+        report.pass("TPM", "a TPM device is present for encrypted templates");
         return;
     };
 
     let mut blocked = Vec::new();
     for path in &present {
         let Ok(meta) = fs::metadata(path) else {
-            report.pass("TPM", "存在可用于加密模板的 TPM 设备");
+            report.pass("TPM", "a TPM device is present for encrypted templates");
             return;
         };
         if node_openable(meta.uid(), meta.gid(), meta.mode(), &credentials) {
-            report.pass("TPM", format!("存在 TPM 设备，且 gazed 可以打开 {path}"));
+            report.pass(
+                "TPM",
+                format!("a TPM device is present and gazed can open {path}"),
+            );
             return;
         }
         blocked.push(format!(
-            "{path} 的所有者和权限为 {}:{} {:04o}",
+            "{path} is {}:{} {:04o}",
             user_name(meta.uid()),
             group_name(meta.gid()),
             meta.mode() & 0o777
@@ -57,10 +71,12 @@ pub(super) fn check_tpm(report: &mut Report, config: Option<&Config>) {
     report.error(
         "TPM",
         format!(
-            "模板加密已启用，但 gazed 服务无法打开 TPM 设备（{}）",
+            "template encryption is enabled but the gazed unit cannot open the TPM device ({})",
             blocked.join(", ")
         ),
-        "运行 `sudo systemctl edit gazed`，在 [Service] 下添加 `SupplementaryGroups=tss`（或 `CapabilityBoundingSet=CAP_DAC_READ_SEARCH CAP_DAC_OVERRIDE`），然后运行 `sudo systemctl restart gazed`。",
+        "Run `sudo systemctl edit gazed` and add `SupplementaryGroups=tss` (or \
+         `CapabilityBoundingSet=CAP_DAC_READ_SEARCH CAP_DAC_OVERRIDE`) under [Service], then run \
+         `sudo systemctl restart gazed`.",
     );
 }
 
@@ -68,7 +84,7 @@ pub(super) fn pam_entry(line: &str) -> Option<(&str, &str, &str, &str)> {
     let line = line.split('#').next()?.trim();
     let (kind, rest) = line.split_once(char::is_whitespace)?;
     let rest = rest.trim_start();
-    // @include also affects auth; ignoring it would miscount pam_gaze's success=1 jump.
+    // @include also affects auth and must count toward numeric PAM jumps.
     if kind == "@include" {
         return Some(("auth", "include", rest, ""));
     }
@@ -89,28 +105,75 @@ pub(super) fn pam_entry(line: &str) -> Option<(&str, &str, &str, &str)> {
 pub(super) fn gdm_face_stack_passes_the_token(contents: &str) -> bool {
     let entries: Vec<_> = contents.lines().filter_map(pam_entry).collect();
     let auth: Vec<_> = entries.iter().filter(|entry| entry.0 == "auth").collect();
-    let handoff = auth.windows(3).any(|lines| {
-        let (_, control, module, options) = *lines[0];
-        module == "pam_gaze.so"
-            && control
+    let faillock_mode = |options: &str, mode: &str| {
+        options
+            .split_ascii_whitespace()
+            .filter(|option| matches!(*option, "preauth" | "authfail" | "authsucc"))
+            .eq([mode])
+    };
+    let handoff = auth
+        .iter()
+        .enumerate()
+        .any(|(index, &&(_, control, module, options))| {
+            if module != "pam_gaze.so"
+                || options
+                    .split_ascii_whitespace()
+                    .any(|option| option == "simultaneous")
+            {
+                return false;
+            }
+            let after_gaze = &auth[index + 1..];
+            let after_gate = if control
                 .split_ascii_whitespace()
                 .eq(["[success=1", "default=ignore]"])
-            && !options
-                .split_ascii_whitespace()
-                .any(|option| option == "simultaneous")
-            && lines[1].1 == "requisite"
-            && lines[1].2 == "pam_deny.so"
-            && lines[2].1 == "optional"
-            && lines[2].2 == "pam_gnome_keyring.so"
-            && lines[2]
-                .3
-                .split_ascii_whitespace()
-                .any(|option| option == "use_authtok")
-            && !lines[2]
-                .3
-                .split_ascii_whitespace()
-                .any(|option| option == "auto_start" || option.starts_with("only_if="))
-    });
+            {
+                let Some(deny) = after_gaze.first() else {
+                    return false;
+                };
+                if deny.1 != "requisite" || deny.2 != "pam_deny.so" {
+                    return false;
+                }
+                &after_gaze[1..]
+            } else if control.split_ascii_whitespace().eq([
+                "[success=2",
+                "auth_err=ignore",
+                "default=1]",
+            ]) {
+                let [authfail, deny, authsucc, ..] = after_gaze else {
+                    return false;
+                };
+                if !authfail.1.split_ascii_whitespace().eq(["[default=die]"])
+                    || authfail.2 != "pam_faillock.so"
+                    || !faillock_mode(authfail.3, "authfail")
+                    || deny.1 != "requisite"
+                    || deny.2 != "pam_deny.so"
+                    || authsucc.1 != "required"
+                    || authsucc.2 != "pam_faillock.so"
+                    || !faillock_mode(authsucc.3, "authsucc")
+                {
+                    return false;
+                }
+                &after_gaze[3..]
+            } else {
+                return false;
+            };
+            // Permit rows may follow the landing point, but must not change the jump's length.
+            let keyring = after_gate
+                .iter()
+                .find(|entry| !(entry.1 == "required" && entry.2 == "pam_permit.so"));
+            keyring.is_some_and(|entry| {
+                entry.1 == "optional"
+                    && entry.2 == "pam_gnome_keyring.so"
+                    && entry
+                        .3
+                        .split_ascii_whitespace()
+                        .any(|option| option == "use_authtok")
+                    && !entry
+                        .3
+                        .split_ascii_whitespace()
+                        .any(|option| option == "auto_start" || option.starts_with("only_if="))
+            })
+        });
     handoff && starts_keyring_session(&entries)
 }
 
@@ -128,9 +191,8 @@ pub(super) fn starts_keyring_session(entries: &[(&str, &str, &str, &str)]) -> bo
     })
 }
 
-/// greetd has no token-only service like `gdm-face`, so the keyring line just has to come after
-/// whatever runs `pam_gaze.so` without a face match jumping over it. A match then hands it the
-/// released credential and a typed password hands it the one `pam_unix` read.
+/// greetd's keyring hook must follow Gaze without a face match jumping over it.
+/// It receives either the released credential or the password read by pam_unix.
 pub(super) fn greetd_stack_passes_the_token(contents: &str) -> bool {
     let entries: Vec<_> = contents.lines().filter_map(pam_entry).collect();
     let auth: Vec<_> = entries.iter().filter(|entry| entry.0 == "auth").collect();
@@ -192,10 +254,12 @@ pub(super) fn check_keyring(report: &mut Report, username: &str, config: Option<
     };
     if !config.storage.unlock_gnome_keyring {
         report.off(
-            "钥匙环",
-            "GDM 或 greetd 人脸登录后的 GNOME 钥匙环解锁已关闭",
+            "Keyring",
+            "GNOME Keyring unlock after a GDM or greetd face login is off",
             format!(
-                "启用方法：在 {CONFIG_PATH} 的 [storage] 下设置 `unlock_gnome_keyring = true`（还需要 `encrypt_templates = true` 和 [liveness] 下的 `enabled = true`），重启 gazed，然后运行 `sudo gaze keyring`。"
+                "Turn it on: set `unlock_gnome_keyring = true` under [storage] in {CONFIG_PATH} \
+                 (it also needs `encrypt_templates = true` and [liveness] `enabled = true`), \
+                 restart gazed, then run `sudo gaze keyring`."
             ),
         );
         return;
@@ -203,10 +267,11 @@ pub(super) fn check_keyring(report: &mut Report, username: &str, config: Option<
 
     if let Err(err) = config.storage.validate_keyring(&config.liveness) {
         report.error(
-            "钥匙环",
-            format!("GNOME 钥匙环解锁已启用，但不可用：{err}"),
+            "Keyring",
+            format!("GNOME Keyring unlock is enabled but unusable: {err}"),
             format!(
-                "在 {CONFIG_PATH} 的 [storage] 下设置 `encrypt_templates = true`，在 [liveness] 下设置 `enabled = true`，或关闭 `unlock_gnome_keyring`，然后重启 gazed。"
+                "Set `encrypt_templates = true` under [storage] and `enabled = true` under \
+                 [liveness] in {CONFIG_PATH}, or turn off `unlock_gnome_keyring`, then restart gazed."
             ),
         );
         return;
@@ -226,9 +291,13 @@ pub(super) fn check_keyring(report: &mut Report, username: &str, config: Option<
             .is_some_and(|contents| !greetd_stack_passes_the_token(contents))
     {
         report.error(
-            "钥匙环",
-            format!("{GREETD_PAM_FILE} 未向钥匙环传递认证令牌"),
-            "在现有的 `auth optional pam_gnome_keyring.so` 行中添加 `use_authtok`，并保留 `session optional pam_gnome_keyring.so auto_start`。钥匙环行必须位于 system-auth 之后，且其上方的 pam_gaze.so 行不能在匹配成功时结束 auth 部分（`sufficient` 或 `[success=done ...]`）。此文件属于发行版，Gaze 不会修改它。",
+            "Keyring",
+            format!("{GREETD_PAM_FILE} does not hand the keyring the authentication token"),
+            "Add `use_authtok` to the existing `auth optional pam_gnome_keyring.so` line and \
+             keep `session optional pam_gnome_keyring.so auto_start`. The keyring line must come \
+             after system-auth, and no pam_gaze.so line above it may end the auth section on a \
+             match (`sufficient` or `[success=done ...]`). This file belongs to the distribution, \
+             so Gaze does not edit it.",
         );
         return;
     }
@@ -237,23 +306,33 @@ pub(super) fn check_keyring(report: &mut Report, username: &str, config: Option<
     match &gdm_face_stack {
         Some(contents) if !gdm_face_stack_passes_the_token(contents) => {
             report.error(
-                "钥匙环",
+                "Keyring",
                 format!(
-                    "/etc/pam.d/{GDM_FACE_PAM_SERVICE} 缺少软件包提供的钥匙环凭据传递和会话钩子"
+                    "/etc/pam.d/{GDM_FACE_PAM_SERVICE} does not have the packaged keyring \
+                     hand-off and session hook"
                 ),
                 format!(
-                    "此文件会在升级时保留。请将其替换为软件包提供的认证栈（查找 /etc/pam.d/{GDM_FACE_PAM_SERVICE}.rpmnew、.pacnew 或 .dpkg-dist），或修改为 pam_gaze.so 使用 `[success=1 default=ignore]`，随后添加 `auth requisite pam_deny.so` 和 `auth optional pam_gnome_keyring.so use_authtok`，以及 `session optional pam_gnome_keyring.so auto_start`。"
+                    "This file is preserved across upgrades. Replace it with the packaged stack \
+                     (look for /etc/pam.d/{GDM_FACE_PAM_SERVICE}.rpmnew, .pacnew or .dpkg-dist), \
+                     or restore the packaged faillock preauth/authfail/authsucc gates. Gaze uses \
+                     `[success=2 auth_err=ignore default=1]`, followed by \
+                     `auth [default=die] pam_faillock.so authfail`, `auth requisite pam_deny.so`, \
+                     `auth required pam_faillock.so authsucc`, and \
+                     `auth optional pam_gnome_keyring.so use_authtok`, plus \
+                     `session optional pam_gnome_keyring.so auto_start`."
                 ),
             );
             return;
         }
         None if greetd_stack.is_none() => {
             report.error(
-                "钥匙环",
+                "Keyring",
                 format!(
-                    "GNOME 钥匙环解锁已启用，但 /etc/pam.d/{GDM_FACE_PAM_SERVICE} 和 {GREETD_PAM_FILE} 均不存在"
+                    "GNOME Keyring unlock is enabled but neither /etc/pam.d/{GDM_FACE_PAM_SERVICE} \
+                     nor {GREETD_PAM_FILE} exists"
                 ),
-                "安装包含 gdm-face PAM 认证栈的 Gaze GNOME 扩展包，或按照 greetd 指南配置 greetd。",
+                "Install the Gaze GNOME extension package, which ships the gdm-face PAM stack, \
+                 or set up greetd as described in the greetd guide.",
             );
             return;
         }
@@ -280,35 +359,37 @@ pub(super) fn check_greeter_keyring_selinux(report: &mut Report, config: Option<
 }
 
 pub(super) fn report_greeter_keyring_policy(report: &mut Report, policy: ModuleState) {
-    const NAME: &str = "钥匙环 SELinux 策略";
+    const NAME: &str = "Keyring SELinux policy";
     let module = selinux::GREETER_KEYRING_MODULE;
     let fix = format!(
-        "运行 `sudo semodule -i {}`，然后重试人脸登录。",
+        "Run `sudo semodule -i {}`, then retry the face login.",
         selinux::policy_path(module)
     );
     match policy {
         ModuleState::Loaded => report.pass(
             NAME,
-            format!("{module} 已加载，登录界面可以读取钥匙环记录"),
+            format!("{module} is loaded, so the login screen can read the keyring record"),
         ),
         ModuleState::NotLoaded => report.error(
             NAME,
             format!(
-                "SELinux 处于强制模式，但未加载 {module}，登录界面无法读取 shadow 记录或 TPM，每次人脸登录都会回退到密码"
+                "SELinux is enforcing and {module} is not loaded, so the login screen cannot read \
+                 the shadow record or the TPM and every face login falls back to the password"
             ),
             fix,
         ),
         ModuleState::NeedsRoot => report.warning(
             NAME,
             format!(
-                "SELinux 处于强制模式，没有 root 权限无法检查 {module} 是否已加载"
+                "SELinux is enforcing, and whether {module} is loaded could not be checked \
+                 without root"
             ),
-            "运行 `sudo gaze doctor` 读取已加载的模块列表。",
+            "Run `sudo gaze doctor` to read the loaded module list.",
         ),
         ModuleState::Unverifiable(why) => report.warning(
             NAME,
-            format!("SELinux 处于强制模式，但无法读取已加载的模块列表：{why}"),
-            format!("运行 `semodule -l | grep {module}`；如果没有输出，{fix}"),
+            format!("SELinux is enforcing, but the loaded module list could not be read: {why}"),
+            format!("Run `semodule -l | grep {module}`; if it prints nothing, {fix}"),
         ),
     }
 }
@@ -316,20 +397,21 @@ pub(super) fn report_greeter_keyring_policy(report: &mut Report, policy: ModuleS
 pub(super) fn report_keyring_record(report: &mut Report, username: &str, state: Option<bool>) {
     match state {
         Some(true) => report.pass(
-            "钥匙环",
-            format!("已为 {username} 录入受 TPM 保护的钥匙环凭据"),
+            "Keyring",
+            format!("a TPM-protected keyring credential is enrolled for {username}"),
         ),
         Some(false) => report.warning(
-            "钥匙环",
-            format!("GNOME 钥匙环解锁已启用，但 {username} 未录入凭据"),
-            format!("运行 `sudo gaze keyring --user {username}`。"),
+            "Keyring",
+            format!("GNOME Keyring unlock is enabled but {username} has no enrolled credential"),
+            format!("Run `sudo gaze keyring --user {username}`."),
         ),
         None => report.warning(
-            "钥匙环",
+            "Keyring",
             format!(
-                "{GDM_FACE_PAM_SERVICE} 认证栈会传递令牌，但没有 root 权限无法检查 {username} 是否已录入凭据"
+                "the {GDM_FACE_PAM_SERVICE} stack passes the token, but whether {username} has \
+                 an enrolled credential could not be checked without root"
             ),
-            "运行 `sudo gaze doctor` 检查凭据记录。",
+            "Run `sudo gaze doctor` to check the credential record.",
         ),
     }
 }
@@ -372,19 +454,24 @@ pub(super) fn kde_login_stack_passes_the_token(contents: &str) -> bool {
         })
 }
 
+const KDE_LOGIN_PAM_SERVICES: [&str; 3] = ["sddm", "plasmalogin", "plasmalogin-fingerprint"];
+
 pub(super) fn check_kwallet(report: &mut Report, username: &str, config: Option<&Config>) {
     let Some(config) = config else { return };
     if !config.storage.unlock_kwallet {
-        report.off("KWallet", "KDE 人脸登录后的 KWallet 解锁已关闭",
-            "在 `gaze config` 中启用 KWallet 解锁，然后运行 `gaze keyring --kwallet` 和 `sudo gaze-kde-pam enable-login`。");
+        if KDE_LOGIN_PAM_SERVICES
+            .iter()
+            .all(|service| !Path::new(&format!("/etc/pam.d/{service}")).exists())
+        {
+            return;
+        }
+        report.off("KWallet", "KWallet unlock after a KDE face login is off",
+            "Enable KWallet unlock in `gaze config`, then run `gaze keyring --kwallet` and `sudo gaze-kde-pam enable-login`.");
         return;
     }
     if let Err(err) = config.storage.validate_keyring(&config.liveness) {
-        report.error(
-            "KWallet",
-            format!("KWallet 解锁已启用，但不可用：{err}"),
-            "在 `gaze config` 中启用 TPM 模板加密和活体检测，或禁用 KWallet 解锁。",
-        );
+        report.error("KWallet", format!("KWallet unlock is enabled but unusable: {err}"),
+            "Enable TPM template encryption and liveness, or disable KWallet unlock in `gaze config`.");
         return;
     }
     if !pam_search_dirs()
@@ -393,43 +480,43 @@ pub(super) fn check_kwallet(report: &mut Report, username: &str, config: Option<
     {
         report.warning(
             "KWallet",
-            "未找到 pam_kwallet5.so",
-            "安装您的发行版提供的 KWallet PAM 软件包（kwallet-pam 或 libpam-kwallet5）。",
+            "pam_kwallet5.so was not found",
+            "Install your distribution's KWallet PAM package (kwallet-pam or libpam-kwallet5).",
         );
     }
     let mut found = false;
-    for service in ["sddm", "plasmalogin", "plasmalogin-fingerprint"] {
+    for service in KDE_LOGIN_PAM_SERVICES {
         let Some(contents) = read_pam_service(&format!("/etc/pam.d/{service}")) else {
             continue;
         };
         found = true;
         if !kde_login_stack_passes_the_token(&contents) {
-            report.warning("KWallet", format!("{service} 缺少受管理的 KWallet 凭据传递或会话钩子"),
-                "运行 `sudo gaze-kde-pam enable-login`。自定义 PAM 条目必须使用顺序模式，并在结束认证前将令牌传递给 pam_kwallet5。");
+            report.warning("KWallet", format!("{service} lacks the managed KWallet handoff/session hook"),
+                "Run `sudo gaze-kde-pam enable-login`. Custom PAM entries must use sequential mode and pass the token to pam_kwallet5 before ending authentication.");
         }
     }
     if !found {
         report.error(
             "KWallet",
-            "未找到受支持的 KDE 登录 PAM 服务",
-            "安装 SDDM 或 Plasma Login Manager，并运行 `sudo gaze-kde-pam enable-login`。",
+            "No supported KDE login PAM service was found",
+            "Install SDDM or Plasma Login Manager and run `sudo gaze-kde-pam enable-login`.",
         );
         return;
     }
     match keyring_record_state(username, gaze_security::keyring::Backend::KWallet) {
         Some(true) => report.pass(
             "KWallet",
-            format!("已为 {username} 录入受 TPM 保护的 KWallet 凭据"),
+            format!("a TPM-protected KWallet credential is enrolled for {username}"),
         ),
         Some(false) => report.warning(
             "KWallet",
-            format!("{username} 未录入 KWallet 凭据"),
-            format!("运行 `sudo gaze keyring --kwallet --user {username}`。"),
+            format!("{username} has no enrolled KWallet credential"),
+            format!("Run `sudo gaze keyring --kwallet --user {username}`."),
         ),
         None => report.warning(
             "KWallet",
-            "没有 root 权限无法检查 KWallet 录入状态",
-            "运行 `sudo gaze doctor` 检查凭据记录。",
+            "KWallet enrollment could not be checked without root",
+            "Run `sudo gaze doctor` to check the credential record.",
         ),
     }
 }
@@ -446,7 +533,7 @@ mod tests {
             let check = report
                 .checks
                 .into_iter()
-                .find(|check| check.name == "钥匙环 SELinux 策略")
+                .find(|check| check.name == "Keyring SELinux policy")
                 .expect("the keyring SELinux check always reports once it runs");
             (check.level, check.message, check.fix.unwrap_or_default())
         };
@@ -484,7 +571,7 @@ mod tests {
             let check = report
                 .checks
                 .into_iter()
-                .find(|check| check.name == "钥匙环")
+                .find(|check| check.name == "Keyring")
                 .expect("the keyring record always reports");
             (check.level, check.message, check.fix.unwrap_or_default())
         };
@@ -502,7 +589,7 @@ mod tests {
             "an unprivileged run never checked the record, so it cannot pass it"
         );
         assert!(
-            message.contains("没有 root 权限"),
+            message.contains("without root"),
             "say which half of the check ran: {message}"
         );
         assert!(fix.contains("sudo gaze doctor"), "{fix}");
@@ -546,12 +633,73 @@ mod tests {
     }
 
     #[test]
-    fn incomplete_or_misordered_keyring_stacks_are_not_reported_healthy() {
-        let valid = "auth [success=1 default=ignore] /usr/lib/security/pam_gaze.so\n\
+    fn the_nixos_gdm_face_stack_passes_the_keyring_token() {
+        let module = std::fs::read_to_string(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../packaging/nix/nixos-module.nix"
+        ))
+        .unwrap();
+        let stack = module
+            .split("security.pam.services.\"gdm-face\".text = ''")
+            .nth(1)
+            .unwrap()
+            .split("'';")
+            .next()
+            .unwrap();
+        assert!(gdm_face_stack_passes_the_token(stack));
+    }
+
+    #[test]
+    fn faillock_handoffs_require_the_correct_jumps_and_gates() {
+        let valid = "auth [success=2 auth_err=ignore default=1] /usr/lib/security/pam_gaze.so\n\
+            auth [default=die] pam_faillock.so authfail deny=3\n\
             auth requisite pam_deny.so\n\
+            auth required pam_faillock.so authsucc\n\
+            auth required pam_permit.so\n\
             auth optional pam_gnome_keyring.so use_authtok\n\
             session optional pam_gnome_keyring.so auto_start\n";
         assert!(gdm_face_stack_passes_the_token(valid));
+        assert!(gdm_face_stack_passes_the_token(
+            &valid.replace("auth required pam_permit.so\n", "")
+        ));
+        for broken in [
+            valid.replace("success=2", "success=1"),
+            valid.replace("success=2", "success=3"),
+            valid.replace("auth_err=ignore", "auth_err=1"),
+            valid.replace("default=1", "default=ignore"),
+            valid.replace("[default=die] pam_faillock.so", "optional pam_faillock.so"),
+            valid.replace("authfail deny=3", "authsucc deny=3"),
+            valid.replace("authfail deny=3", "authfail authsucc deny=3"),
+            valid.replace("auth required pam_faillock.so authsucc\n", ""),
+            valid.replace("authsucc\n", "preauth\n"),
+            valid.replace(
+                "auth required pam_faillock.so",
+                "auth optional pam_faillock.so",
+            ),
+            valid.replace("requisite pam_deny.so", "optional pam_deny.so"),
+            valid.replace(
+                "auth [default=die]",
+                "auth required pam_permit.so\nauth [default=die]",
+            ),
+            valid.replace("pam_gaze.so", "pam_gaze.so simultaneous"),
+            valid.replace("use_authtok", "use_authtok only_if=login"),
+            valid.replace("session optional pam_gnome_keyring.so auto_start\n", ""),
+        ] {
+            assert!(!gdm_face_stack_passes_the_token(&broken), "{broken}");
+        }
+    }
+
+    #[test]
+    fn incomplete_or_misordered_keyring_stacks_are_not_reported_healthy() {
+        let valid = "auth [success=1 default=ignore] /usr/lib/security/pam_gaze.so\n\
+            auth requisite pam_deny.so\n\
+            auth required pam_permit.so\n\
+            auth optional pam_gnome_keyring.so use_authtok\n\
+            session optional pam_gnome_keyring.so auto_start\n";
+        assert!(gdm_face_stack_passes_the_token(valid));
+        assert!(gdm_face_stack_passes_the_token(
+            &valid.replace("auth required pam_permit.so\n", "")
+        ));
         for broken in [
             valid.replace(
                 "auth [success=1 default=ignore] /usr/lib/security/pam_gaze.so\n",
@@ -560,6 +708,10 @@ mod tests {
             valid.replace("[success=1 default=ignore]", "sufficient"),
             valid.replace("pam_gaze.so", "pam_gaze.so simultaneous"),
             valid.replace("requisite pam_deny.so", "optional pam_deny.so"),
+            valid.replace(
+                "auth requisite",
+                "auth required pam_permit.so\nauth requisite",
+            ),
             valid.replace("auth requisite", "@include common-auth\nauth requisite"),
             valid.replace("use_authtok", "not_use_authtok"),
             valid.replace("use_authtok", "use_authtok only_if=login"),

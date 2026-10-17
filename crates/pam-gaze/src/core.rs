@@ -22,12 +22,15 @@ use zeroize::{Zeroize, Zeroizing};
 
 /// Sensitive PAM responses (passwords). Wiped on drop.
 pub type SecretString = Zeroizing<String>;
+/// A password exactly as typed, which need not be valid UTF-8 in a non-UTF-8 locale.
+pub type SecretBytes = Zeroizing<Vec<u8>>;
 
 pub const PAM_SUCCESS: c_int = 0;
 pub const PAM_AUTH_ERR: c_int = 7;
 pub const PAM_SERVICE_ERR: c_int = 3;
 pub const PAM_CONV: c_int = 5;
 pub const PAM_SERVICE: c_int = 1;
+pub const PAM_TTY: c_int = 3;
 pub const PAM_RHOST: c_int = 4;
 pub const PAM_AUTHTOK: c_int = 6;
 pub const PAM_TEXT_INFO: c_int = 4;
@@ -78,17 +81,17 @@ pub fn camera_auth_timeout(
     std::time::Duration::from_secs(CAMERA_AUTH_TIMEOUT_SECS)
         + std::time::Duration::from_millis(auth.effective_start_delay_ms(true, surface))
 }
-pub const CONFIRMATION_PROMPT: &str = "人脸已验证。按 Enter 确认，按 Esc 取消。";
+pub const CONFIRMATION_PROMPT: &str = "Face Verified. Press Enter to confirm, Esc to cancel.";
 
-pub const LOOK_PROMPT: &str = "请看摄像头";
-pub const LOOK_OR_PASSWORD_PROMPT: &str = "请看摄像头或输入密码";
-pub const LOOK_AFTER_PASSWORD_PROMPT: &str = "密码错误。请看摄像头";
-pub const FACE_VERIFIED: &str = "人脸已验证。";
-pub const FACE_NOT_RECOGNIZED: &str = "未识别到匹配人脸。请输入密码。";
-pub const FACE_NOT_DETECTED: &str = "未检测到人脸。请输入密码。";
-pub const FACE_TOO_DARK: &str = "光线过暗，无法人脸认证。请输入密码。";
-pub const FACE_TIMED_OUT: &str = "人脸认证超时。请输入密码。";
-pub const FACE_UNAVAILABLE: &str = "人脸认证不可用。请输入密码。";
+pub const LOOK_PROMPT: &str = "Please look at the camera";
+pub const LOOK_OR_PASSWORD_PROMPT: &str = "Please look at the camera or enter password";
+pub const LOOK_AFTER_PASSWORD_PROMPT: &str = "Password incorrect. Please look at the camera";
+pub const FACE_VERIFIED: &str = "Face Verified.";
+pub const FACE_NOT_RECOGNIZED: &str = "Face not recognized. Enter your password.";
+pub const FACE_NOT_DETECTED: &str = "Face not detected. Enter your password.";
+pub const FACE_TOO_DARK: &str = "Too dark for face authentication. Enter your password.";
+pub const FACE_TIMED_OUT: &str = "Face authentication timed out. Enter your password.";
+pub const FACE_UNAVAILABLE: &str = "Face authentication unavailable. Enter your password.";
 
 pub use gaze_core::dbus::{
     GAZE_CANCEL, GAZE_CONFIRMED, GAZE_MSG_FACE_NOT_DETECTED, GAZE_MSG_FACE_NOT_RECOGNIZED,
@@ -131,6 +134,12 @@ pub fn internal_prompt_confirmation_accepted(response: Option<&str>) -> bool {
 
 pub type PamHandle = *mut c_void;
 
+/// A panic unwinding out of an `extern "C"` entry point aborts the host: sudo, the greeter or
+/// the lock screen. Report it as a module failure so the stack falls through instead.
+pub fn guard_pam_entry(entry: impl FnOnce() -> c_int) -> c_int {
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(entry)).unwrap_or(PAM_SERVICE_ERR)
+}
+
 #[macro_export]
 macro_rules! pam_success_stubs {
     () => {
@@ -141,8 +150,10 @@ macro_rules! pam_success_stubs {
             _argc: ::std::os::raw::c_int,
             _argv: *const *const ::std::os::raw::c_char,
         ) -> ::std::os::raw::c_int {
-            unsafe { $crate::clear_duress_after_credentials(pamh, flags) };
-            $crate::PAM_SUCCESS
+            $crate::guard_pam_entry(|| {
+                unsafe { $crate::clear_duress_after_credentials(pamh, flags) };
+                $crate::PAM_SUCCESS
+            })
         }
 
         #[unsafe(no_mangle)]
@@ -256,6 +267,41 @@ pub unsafe fn read_first_pass_verdict(pamh: PamHandle) -> Option<FirstPassVerdic
     FirstPassVerdict::from_repr(unsafe { *(data as *const u8) })
 }
 
+const SCAN_FINISHED_DATA_KEY: &CStr = c"gaze_scan_finished";
+
+/// Suppress duplicate Gaze entries in one stack pass, including shared-stack entries.
+/// A new attempt on the same handle first waits for a typed password.
+const SAME_PASS_WINDOW: std::time::Duration = std::time::Duration::from_secs(2);
+
+unsafe extern "C" fn free_scan_finished(_pamh: PamHandle, data: *mut c_void, _status: c_int) {
+    if !data.is_null() {
+        drop(unsafe { Box::from_raw(data as *mut std::time::Instant) });
+    }
+}
+
+pub unsafe fn record_scan_finished(pamh: PamHandle) {
+    let boxed = Box::into_raw(Box::new(std::time::Instant::now()));
+    let rc = unsafe {
+        pam_set_data(
+            pamh,
+            SCAN_FINISHED_DATA_KEY.as_ptr(),
+            boxed as *mut c_void,
+            Some(free_scan_finished),
+        )
+    };
+    if rc != PAM_SUCCESS {
+        drop(unsafe { Box::from_raw(boxed) });
+    }
+}
+
+pub unsafe fn scanned_in_this_pass(pamh: PamHandle) -> bool {
+    let mut data: *const c_void = ptr::null();
+    let rc = unsafe { pam_get_data(pamh, SCAN_FINISHED_DATA_KEY.as_ptr(), &mut data) };
+    rc == PAM_SUCCESS
+        && !data.is_null()
+        && unsafe { *(data as *const std::time::Instant) }.elapsed() < SAME_PASS_WINDOW
+}
+
 pub const DURESS_CLEAR_DATA_KEY: &CStr = c"gaze_duress_clear";
 const DURESS_CLEAR_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(2);
 
@@ -269,6 +315,11 @@ pub fn pam_end_reports_success(status: c_int) -> bool {
 }
 
 pub fn clear_duress_lockout(username: &str) {
+    // The daemon trusts a root host's PAM success. An unprivileged locker would only raise an
+    // administrator challenge that nobody answers before the timeout, on every unlock.
+    if unsafe { libc::geteuid() } != 0 {
+        return;
+    }
     let Ok(rt) = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
@@ -278,6 +329,9 @@ pub fn clear_duress_lockout(username: &str) {
     rt.block_on(async {
         let _ = tokio::time::timeout(DURESS_CLEAR_TIMEOUT, async {
             let proxy = gaze_core::dbus::connect_gaze().await?;
+            if !proxy.duress_locked(username).await? {
+                return Ok(false);
+            }
             proxy.clear_duress(username).await
         })
         .await;
@@ -291,7 +345,10 @@ unsafe extern "C" fn clear_duress_on_pam_end(_pamh: PamHandle, data: *mut c_void
     }
     let username = unsafe { Box::from_raw(data as *mut String) };
     if pam_end_reports_success(status) {
-        clear_duress_lockout(&username);
+        guard_pam_entry(|| {
+            clear_duress_lockout(&username);
+            PAM_SUCCESS
+        });
     }
 }
 
@@ -348,6 +405,17 @@ unsafe fn free_conv_response(resp: *mut c_char) {
 }
 
 pub unsafe fn converse(pamh: PamHandle, msg_style: c_int, text: &str) -> Option<SecretString> {
+    let mut bytes = unsafe { converse_bytes(pamh, msg_style, text) }?;
+    match String::from_utf8(std::mem::take(&mut *bytes)) {
+        Ok(text) => Some(Zeroizing::new(text)),
+        Err(err) => {
+            err.into_bytes().zeroize();
+            None
+        }
+    }
+}
+
+pub unsafe fn converse_bytes(pamh: PamHandle, msg_style: c_int, text: &str) -> Option<SecretBytes> {
     unsafe {
         let mut item: *const c_void = ptr::null();
         if pam_get_item(pamh, PAM_CONV, &mut item) != PAM_SUCCESS || item.is_null() {
@@ -370,13 +438,11 @@ pub unsafe fn converse(pamh: PamHandle, msg_style: c_int, text: &str) -> Option<
             return None;
         }
 
-        let mut result: Option<SecretString> = None;
+        let mut result: Option<SecretBytes> = None;
         if !resp_ptr.is_null() {
             let resp = (*resp_ptr).resp;
             if !resp.is_null() {
-                result = Some(Zeroizing::new(
-                    CStr::from_ptr(resp).to_string_lossy().into_owned(),
-                ));
+                result = Some(Zeroizing::new(CStr::from_ptr(resp).to_bytes().to_vec()));
                 free_conv_response(resp);
             }
             libc::free(resp_ptr as *mut c_void);
@@ -414,14 +480,31 @@ fn replace_previous_line(
     write!(writer, "{}{message}", line_prefix(prompt))
 }
 
-fn write_tty_line(message: &str) -> Option<()> {
-    let mut tty = open_interactive_tty()?;
+pub(crate) const TTY_CONVERSATION_SERVICES: [&str; 6] =
+    ["sudo", "sudo-i", "su", "su-l", "doas", "login"];
+
+/// Only these hosts read the terminal. A locker or greeter that merely inherited one would leave
+/// anything written there unseen, and a key read from it would never come.
+pub fn service_reads_the_tty(service: Option<&str>) -> bool {
+    service.is_some_and(|s| TTY_CONVERSATION_SERVICES.contains(&s))
+}
+
+fn service_tty(service: Option<&str>) -> Option<std::fs::File> {
+    if !service_reads_the_tty(service) {
+        return None;
+    }
+    open_interactive_tty()
+}
+
+pub fn write_tty_line(service: Option<&str>, message: &str) -> Option<()> {
+    let mut tty = service_tty(service)?;
     writeln!(tty, "{message}").ok()?;
     tty.flush().ok()
 }
 
 pub unsafe fn announce_prompt(
     pamh: PamHandle,
+    service: Option<&str>,
     silent: bool,
     prompt: &str,
     is_internal: bool,
@@ -436,14 +519,14 @@ pub unsafe fn announce_prompt(
         unsafe { say(pamh, prompt) };
         return PromptLine::Printed;
     }
-    match write_tty_line(prompt) {
+    match write_tty_line(service, prompt) {
         Some(()) => PromptLine::Printed,
         None => PromptLine::Absent,
     }
 }
 
-fn report_face_verified_to_tty(prompt: PromptLine) -> Option<()> {
-    let mut tty = open_interactive_tty()?;
+fn report_face_verified_to_tty(service: Option<&str>, prompt: PromptLine) -> Option<()> {
+    let mut tty = service_tty(service)?;
     replace_previous_line(&mut tty, prompt, FACE_VERIFIED).ok()?;
     writeln!(tty).ok()?;
     tty.flush().ok()
@@ -453,11 +536,12 @@ fn report_face_verified_to_tty(prompt: PromptLine) -> Option<()> {
 /// Graphical PAM clients receive the same message through their conversation function instead.
 pub unsafe fn report_face_verified(
     pamh: PamHandle,
+    service: Option<&str>,
     silent: bool,
     prompt: PromptLine,
     is_internal: bool,
 ) {
-    if !is_internal && report_face_verified_to_tty(prompt).is_some() {
+    if !is_internal && report_face_verified_to_tty(service, prompt).is_some() {
         return;
     }
     if !silent {
@@ -484,14 +568,14 @@ pub unsafe fn report_outcome(
         return;
     }
     if silent {
-        let _ = write_tty_line(text);
+        let _ = write_tty_line(service, text);
         return;
     }
     unsafe { report(pamh, service, text) }
 }
 
-fn confirm_from_tty(prompt: PromptLine) -> Option<bool> {
-    let mut tty = open_interactive_tty()?;
+fn confirm_from_tty(service: Option<&str>, prompt: PromptLine) -> Option<bool> {
+    let mut tty = service_tty(service)?;
     let fd = tty.as_raw_fd();
 
     let mut original = MaybeUninit::<libc::termios>::uninit();
@@ -538,17 +622,20 @@ pub fn has_interactive_tty() -> bool {
     open_interactive_tty().is_some()
 }
 
-/// Fallback prompt when there is no controlling terminal to read Enter from.
-/// Treat an empty response as no consent. Some hosts answer unknown prompts with
-/// `""`; accepting that would confirm without the user pressing anything.
-pub const TYPED_CONFIRMATION_PROMPT: &str = "人脸已验证。输入 yes 以确认。";
+/// Fallback confirmation without a controlling terminal.
+/// Empty replies are not consent: some hosts return them without user input.
+pub const TYPED_CONFIRMATION_PROMPT: &str = "Face Verified. Type 'yes' to confirm.";
 
 pub fn typed_confirmation_accepted(response: Option<&str>) -> bool {
     response.is_some_and(|resp| resp.trim().eq_ignore_ascii_case("yes"))
 }
 
-pub unsafe fn confirm_authentication(pamh: PamHandle, prompt: PromptLine) -> bool {
-    if let Some(confirmed) = confirm_from_tty(prompt) {
+pub unsafe fn confirm_authentication(
+    pamh: PamHandle,
+    service: Option<&str>,
+    prompt: PromptLine,
+) -> bool {
+    if let Some(confirmed) = confirm_from_tty(service, prompt) {
         return confirmed;
     }
 
@@ -574,8 +661,16 @@ pub fn confirmation_required(
     auth.is_none_or(|auth| auth.requires_confirmation(surface))
 }
 
+pub fn confirmation_requires_fallback(
+    auth: Option<&gaze_core::config::AuthConfig>,
+    service: Option<&str>,
+) -> bool {
+    confirmation_required(auth, service)
+        && (service_cannot_be_prompted(service) || is_kde_login_greeter(service))
+}
+
 pub struct AuthState {
-    pub password: Option<SecretString>,
+    pub password: Option<SecretBytes>,
     pub started: bool,
     pub finished: bool,
 }
@@ -593,6 +688,25 @@ pub fn new_auth_state() -> SharedAuthState {
     ))
 }
 
+/// Signals a host uses to cut its own password prompt short: Ctrl-C, sudo's timeout and the like.
+pub fn host_prompt_signals() -> libc::sigset_t {
+    let mut set: libc::sigset_t = unsafe { std::mem::zeroed() };
+    unsafe {
+        libc::sigemptyset(&mut set);
+        for sig in [
+            libc::SIGINT,
+            libc::SIGQUIT,
+            libc::SIGTERM,
+            libc::SIGHUP,
+            libc::SIGALRM,
+            libc::SIGTSTP,
+        ] {
+            libc::sigaddset(&mut set, sig);
+        }
+    }
+    set
+}
+
 pub fn spawn_prompt_thread(
     pamh: PamHandle,
     state: &SharedAuthState,
@@ -601,6 +715,8 @@ pub fn spawn_prompt_thread(
     let thread_state = Arc::clone(state);
     let pamh_worker = pamh as usize;
     thread::spawn(move || {
+        let host_signals = host_prompt_signals();
+        unsafe { libc::pthread_sigmask(libc::SIG_UNBLOCK, &host_signals, ptr::null_mut()) };
         {
             let (lock, condvar) = &*thread_state;
             let mut shared_state = lock.lock();
@@ -637,7 +753,7 @@ pub fn wait_for_prompt_finish(state: &SharedAuthState) {
     }
 }
 
-pub fn wait_for_prompt_response(state: &SharedAuthState) -> Option<SecretString> {
+pub fn wait_for_prompt_response(state: &SharedAuthState) -> Option<SecretBytes> {
     let (lock, condvar) = &**state;
     let mut shared_state = lock.lock();
     while !shared_state.finished {
@@ -660,23 +776,26 @@ pub unsafe fn wait_for_password_and_fallback(pamh: PamHandle, state: &SharedAuth
     }
 }
 
-pub unsafe fn stash_password_and_fallback(pamh: PamHandle, password: &str) -> c_int {
-    // Password contained a NUL byte, so fail rather than panic.
-    let Ok(pw_cstr) = CString::new(password) else {
+pub unsafe fn stash_password_and_fallback(pamh: PamHandle, password: &[u8]) -> c_int {
+    stash_password(password, |token| unsafe {
+        pam_set_item(pamh, PAM_AUTHTOK, token.as_ptr().cast())
+    })
+}
+
+fn stash_password(password: &[u8], set_token: impl FnOnce(&[u8]) -> c_int) -> c_int {
+    if password.contains(&0) {
         return PAM_AUTH_ERR;
-    };
-    unsafe {
-        pam_set_item(pamh, PAM_AUTHTOK, pw_cstr.as_ptr() as *const c_void);
     }
-    // Linux-PAM copies the token on pam_set_item, so wipe our copy immediately.
-    // This covers both the password fallback and the (empty) confirmation case.
-    unsafe {
-        let ptr = pw_cstr.as_ptr() as *mut u8;
-        let len = pw_cstr.as_bytes_with_nul().len();
-        std::slice::from_raw_parts_mut(ptr, len).zeroize();
+    // Reserve the terminator up front, avoiding an unwiped allocation on reallocation.
+    let mut token = SecretBytes::new(Vec::with_capacity(password.len() + 1));
+    token.extend_from_slice(password);
+    token.push(0);
+    // Linux-PAM copies the token; our mutable, zeroizing buffer is wiped on every exit.
+    if set_token(&token) == PAM_SUCCESS {
+        PAM_AUTHINFO_UNAVAIL
+    } else {
+        PAM_AUTH_ERR
     }
-    // pw_cstr drops here; its (now zeroed) allocation is freed.
-    PAM_AUTHINFO_UNAVAIL
 }
 
 pub fn give_up_message(status: Option<gaze_core::dbus::CaptureStatus>) -> &'static str {
@@ -699,7 +818,7 @@ pub unsafe fn confirm_graphical_polkit(
     let prompt = if is_internal {
         GAZE_REQUIRE_CONFIRMATION
     } else {
-        "人脸已验证。按 Enter 确认。"
+        "Face Verified. Press Enter to confirm."
     };
     unsafe { say(pamh, prompt) };
 
@@ -709,17 +828,16 @@ pub unsafe fn confirm_graphical_polkit(
     let Some(resp) = response else {
         return PAM_AUTH_ERR;
     };
-    let resp_str: &str = &resp;
-    if is_internal {
-        if internal_confirmation_accepted(Some(resp_str)) {
-            PAM_SUCCESS
-        } else {
-            unsafe { stash_password_and_fallback(pamh, resp_str) }
-        }
-    } else if confirmation_accepted(Some(resp_str)) {
+    let resp_str = std::str::from_utf8(&resp).ok();
+    let confirmed = if is_internal {
+        internal_confirmation_accepted(resp_str)
+    } else {
+        confirmation_accepted(resp_str)
+    };
+    if confirmed {
         PAM_SUCCESS
     } else {
-        unsafe { stash_password_and_fallback(pamh, resp_str) }
+        unsafe { stash_password_and_fallback(pamh, &resp) }
     }
 }
 
@@ -743,8 +861,8 @@ pub unsafe fn report(pamh: PamHandle, service: Option<&str>, text: &str) {
     }
 }
 
-pub unsafe fn prompt_password(pamh: PamHandle) -> Option<SecretString> {
-    unsafe { converse(pamh, PAM_PROMPT_ECHO_OFF, "Password: ") }
+pub unsafe fn prompt_password(pamh: PamHandle) -> Option<SecretBytes> {
+    unsafe { converse_bytes(pamh, PAM_PROMPT_ECHO_OFF, "Password: ") }
 }
 
 pub unsafe fn get_username(pamh: PamHandle) -> Option<String> {
@@ -763,7 +881,11 @@ pub unsafe fn username_and_runtime(
         return Err(PAM_AUTH_ERR);
     };
 
-    let rt = tokio::runtime::Runtime::new().map_err(|_| PAM_AUTHINFO_UNAVAIL)?;
+    // One thread per attempt: a worker per CPU inside sudo or a greeter buys nothing here.
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .map_err(|_| PAM_AUTHINFO_UNAVAIL)?;
     Ok((username, rt))
 }
 
@@ -802,7 +924,7 @@ pub async fn setup_auth_env() -> Result<(Config, GazeProxy<'static>), c_int> {
 pub async fn has_enrolled_faces_on(proxy: &GazeProxy<'_>, username: &str) -> anyhow::Result<bool> {
     match proxy.list_faces(username).await {
         // Treat unenrolled users as having no faces.
-        Ok(faces) => Ok(!faces.is_empty()),
+        Ok(faces) => Ok(faces.iter().any(|(_, templates, _, _)| *templates > 0)),
         Err(ref err) if gaze_core::dbus::dbus_is_file_not_found(err) => Ok(false),
         Err(err) => Err(err.into()),
     }
@@ -1003,24 +1125,31 @@ pub async fn authenticate_biometric_with_status_on(
     .await
 }
 
-pub fn get_user_uid(username: &str) -> Option<u32> {
-    let username_cstr = CString::new(username).ok()?;
-    unsafe {
-        let pwd = libc::getpwnam(username_cstr.as_ptr());
-        if !pwd.is_null() {
-            Some((*pwd).pw_uid)
-        } else {
-            None
-        }
-    }
-}
-
 pub unsafe fn get_pam_service(pamh: PamHandle) -> Option<String> {
     unsafe { get_pam_string(pamh, PAM_SERVICE) }
 }
 
+// Lossy rather than `None`: an undecodable host is still a remote one.
 pub unsafe fn get_pam_rhost(pamh: PamHandle) -> Option<String> {
-    unsafe { get_pam_string(pamh, PAM_RHOST) }
+    unsafe { get_pam_bytes(pamh, PAM_RHOST) }
+        .map(|host| String::from_utf8_lossy(&host).into_owned())
+}
+
+pub unsafe fn get_pam_tty(pamh: PamHandle) -> Option<String> {
+    unsafe { get_pam_string(pamh, PAM_TTY) }
+}
+
+unsafe fn get_pam_bytes(pamh: PamHandle, item_type: c_int) -> Option<Vec<u8>> {
+    let mut item_ptr: *const c_void = std::ptr::null();
+    let ret = unsafe { pam_get_item(pamh, item_type, &mut item_ptr) };
+    if ret != PAM_SUCCESS || item_ptr.is_null() {
+        return None;
+    }
+    Some(
+        unsafe { CStr::from_ptr(item_ptr as *const c_char) }
+            .to_bytes()
+            .to_vec(),
+    )
 }
 
 unsafe fn get_pam_string(pamh: PamHandle, item_type: c_int) -> Option<String> {
@@ -1048,14 +1177,6 @@ pub fn caller_is_remote(rhost: Option<&str>) -> bool {
             )
         }
     }
-}
-
-/// KRDP authenticates RDP clients using the generic "login" PAM service without
-/// setting PAM_RHOST. Identify the installed server executable, not argv[0] or
-/// the service name alone, so console login and local biometrics keep working.
-/// Skipping Gaze returns PAM_IGNORE; the password/account stack still decides.
-pub fn is_krdp_network_login(service: Option<&str>, executable: Option<&std::path::Path>) -> bool {
-    service == Some("login") && executable == Some(std::path::Path::new("/usr/bin/krdpserver"))
 }
 
 const NETWORK_PAM_SERVICES: [&str; 20] = [
@@ -1089,6 +1210,58 @@ pub fn face_auth_out_of_scope(service: Option<&str>, rhost: Option<&str>) -> boo
     caller_is_remote(rhost) || service_is_network_facing(service)
 }
 
+/// Local services allowed to face-authenticate from a root PAM host.
+/// Unknown services may serve network clients without PAM_RHOST and must use passwords.
+const LOCAL_ROOT_SERVICES: [&str; 26] = [
+    "sudo",
+    "sudo-i",
+    "su",
+    "su-l",
+    "doas",
+    "run0",
+    "systemd-run0",
+    "polkit-1",
+    "pkexec",
+    "login",
+    "sddm",
+    "lightdm",
+    "greetd",
+    "gdm-password",
+    "gdm-launch-environment",
+    FACE_PAM_SERVICE,
+    KDE_FACE_PAM_SERVICE,
+    KDE_SMARTCARD_PAM_SERVICE,
+    "kde",
+    "plasmalogin",
+    PLASMALOGIN_FACE_PAM_SERVICE,
+    OMARCHY_FACE_PAM_SERVICE,
+    "cosmic-greeter",
+    "ly",
+    "lemurs",
+    "lxdm",
+];
+
+/// `login` is also the default service of web logins such as JupyterHub, so it only counts as
+/// local when it runs on a virtual console.
+fn is_virtual_console(tty: Option<&str>) -> bool {
+    tty.map(|tty| tty.trim_start_matches("/dev/"))
+        .and_then(|tty| tty.strip_prefix("tty"))
+        .is_some_and(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()))
+}
+
+/// Whether a root PAM host may face-authenticate this service. Unprivileged hosts (screen
+/// lockers) can only reach the daemon for their own user, so this applies to root alone.
+pub fn root_service_is_local(service: Option<&str>, tty: Option<&str>, trusted: bool) -> bool {
+    if trusted {
+        return true;
+    }
+    match service.map(pam_service_name) {
+        Some("login") => is_virtual_console(tty),
+        Some(name) => LOCAL_ROOT_SERVICES.contains(&name),
+        None => false,
+    }
+}
+
 pub fn service_defers_to_face_service(service: Option<&str>) -> bool {
     match service {
         Some(name) => name.starts_with("gdm-") && name != FACE_PAM_SERVICE,
@@ -1112,6 +1285,7 @@ pub const OMARCHY_FACE_PAM_FILE: &str = "/etc/pam.d/gaze-omarchy-face";
 /// the shared stack it installs into.
 const KDE_INTERACTIVE_SERVICE: &str = "kde";
 const PLASMALOGIN_INTERACTIVE_SERVICE: &str = "plasmalogin";
+const SDDM_INTERACTIVE_SERVICE: &str = "sddm";
 const OMARCHY_PASSWORD_SERVICE: &str = "omarchy-lock-password";
 const OMARCHY_FINGERPRINT_SERVICE: &str = "omarchy-lock-fingerprint";
 
@@ -1125,6 +1299,13 @@ fn is_kde_noninteractive_service(service: Option<&str>) -> bool {
 /// A slot the greeter starts by itself, with nothing to route a response back.
 fn is_unpromptable_slot(service: Option<&str>) -> bool {
     is_kde_noninteractive_service(service) || service == Some(PLASMALOGIN_FACE_PAM_SERVICE)
+}
+
+fn is_kde_login_greeter(service: Option<&str>) -> bool {
+    matches!(
+        service,
+        Some(SDDM_INTERACTIVE_SERVICE | PLASMALOGIN_INTERACTIVE_SERVICE)
+    )
 }
 
 pub fn pam_stack_runs_gaze(contents: Option<&str>) -> bool {
@@ -1218,40 +1399,54 @@ mod tests {
     }
 
     #[test]
-    fn krdp_without_remote_host_does_not_use_the_local_camera() {
-        assert!(is_krdp_network_login(
-            Some("login"),
-            Some(std::path::Path::new("/usr/bin/krdpserver"))
-        ));
+    fn root_hosts_only_face_authenticate_known_local_services() {
+        for service in ["sudo", "polkit-1", "gdm-password", "sddm", "/etc/pam.d/su"] {
+            assert!(
+                root_service_is_local(Some(service), None, false),
+                "{service}"
+            );
+        }
+        for service in ["jupyterhub", "webmin", "rstudio", "vnc", ""] {
+            assert!(
+                !root_service_is_local(Some(service), None, false),
+                "{service}"
+            );
+        }
+        assert!(!root_service_is_local(None, None, false));
+        assert!(root_service_is_local(Some("webmin"), None, true));
     }
 
     #[test]
-    fn console_login_and_local_biometric_services_keep_face_authentication() {
-        for executable in [
-            "/usr/bin/login",
-            "/usr/bin/plasmalogin",
-            "/usr/libexec/kscreenlocker_greet",
-            "/usr/bin/sudo",
-            "/tmp/krdpserver",
-        ] {
-            assert!(!is_krdp_network_login(
-                Some("login"),
-                Some(std::path::Path::new(executable))
-            ));
+    fn login_is_local_only_on_a_virtual_console() {
+        for tty in ["tty1", "/dev/tty3", "tty12"] {
+            assert!(
+                root_service_is_local(Some("login"), Some(tty), false),
+                "{tty}"
+            );
         }
-        for service in [
+        for tty in [
             None,
-            Some("sudo"),
-            Some("polkit-1"),
-            Some("kde-fingerprint"),
-            Some("plasmalogin"),
+            Some(""),
+            Some("tty"),
+            Some("ttyS0"),
+            Some("pts/0"),
+            Some(":0"),
         ] {
-            assert!(!is_krdp_network_login(
-                service,
-                Some(std::path::Path::new("/usr/bin/krdpserver"))
-            ));
+            assert!(!root_service_is_local(Some("login"), tty, false), "{tty:?}");
         }
-        assert!(!is_krdp_network_login(Some("login"), None));
+    }
+
+    #[test]
+    fn only_terminal_services_use_the_terminal() {
+        for service in ["sudo", "su", "login"] {
+            assert!(service_reads_the_tty(Some(service)), "{service}");
+        }
+        for service in ["hyprlock-gaze", "kde", "sddm", "polkit-1"] {
+            assert!(
+                write_tty_line(Some(service), "unused").is_none(),
+                "{service}"
+            );
+        }
     }
 
     #[test]
@@ -1544,6 +1739,67 @@ mod tests {
     }
 
     #[test]
+    fn kde_confirmation_falls_back_instead_of_unlocking_without_consent() {
+        let on = gaze_core::config::AuthConfig {
+            require_confirmation_lock_screen: true,
+            require_confirmation_elevation: true,
+            ..Default::default()
+        };
+        let off = gaze_core::config::AuthConfig::default();
+        for service in [
+            "kde-fingerprint",
+            "kde-smartcard",
+            "plasmalogin-fingerprint",
+            "sddm",
+            "plasmalogin",
+        ] {
+            assert!(confirmation_required(Some(&on), Some(service)));
+            assert!(confirmation_required(None, Some(service)));
+            assert!(confirmation_requires_fallback(Some(&on), Some(service)));
+            assert!(confirmation_requires_fallback(None, Some(service)));
+            assert!(!confirmation_requires_fallback(Some(&off), Some(service)));
+        }
+        for service in ["kde", "lightdm", "gdm-face", "sudo", "polkit-1"] {
+            assert!(confirmation_required(Some(&on), Some(service)));
+            assert!(!confirmation_requires_fallback(Some(&on), Some(service)));
+        }
+    }
+
+    #[test]
+    fn stashed_passwords_preserve_bytes_and_add_only_the_terminator() {
+        for password in [b"".as_slice(), b"synthetic-password", b"\xff\xfe"] {
+            assert_eq!(
+                stash_password(password, |token| {
+                    assert_eq!(&token[..password.len()], password);
+                    assert_eq!(token.last(), Some(&0));
+                    assert_eq!(token.len(), password.len() + 1);
+                    assert_ne!(token.as_ptr(), password.as_ptr());
+                    PAM_SUCCESS
+                }),
+                PAM_AUTHINFO_UNAVAIL
+            );
+        }
+    }
+
+    #[test]
+    fn a_nul_password_is_rejected_before_copying_or_setting_a_token() {
+        for password in [b"\0".as_slice(), b"a\0b", b"a\0"] {
+            assert_eq!(
+                stash_password(password, |_| panic!("invalid token was handed to PAM")),
+                PAM_AUTH_ERR
+            );
+        }
+    }
+
+    #[test]
+    fn a_failed_token_handoff_does_not_claim_password_fallback_is_ready() {
+        assert_eq!(
+            stash_password(b"synthetic-password", |_| PAM_SERVICE_ERR),
+            PAM_AUTH_ERR
+        );
+    }
+
+    #[test]
     fn confirmation_follows_the_elevation_toggle_independently() {
         let lock_only = gaze_core::config::AuthConfig {
             require_confirmation_lock_screen: true,
@@ -1617,9 +1873,9 @@ mod tests {
 
         assert_eq!(
             String::from_utf8(output).unwrap(),
-            "\x1B[1A\x1B[2K\r人脸已验证。"
+            "\x1B[1A\x1B[2K\rFace Verified."
         );
-        assert!(!FACE_VERIFIED.contains("确认"));
+        assert!(!FACE_VERIFIED.contains("confirm"));
     }
 
     #[test]
@@ -1628,7 +1884,7 @@ mod tests {
 
         replace_previous_line(&mut output, PromptLine::Absent, FACE_VERIFIED).unwrap();
 
-        assert_eq!(String::from_utf8(output).unwrap(), "\r人脸已验证。");
+        assert_eq!(String::from_utf8(output).unwrap(), "\rFace Verified.");
     }
 
     #[test]
@@ -1649,8 +1905,11 @@ mod tests {
             None,
         ] {
             let message = give_up_message(status);
-            assert!(!message.starts_with("请看摄像头"), "{status:?}");
-            assert!(message.contains("密码"), "{status:?}");
+            assert!(
+                !message.starts_with("Please look at the camera"),
+                "{status:?}"
+            );
+            assert!(message.contains("password"), "{status:?}");
         }
     }
 

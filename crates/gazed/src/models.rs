@@ -1,13 +1,16 @@
 // SPDX-FileCopyrightText: 2026 Gundu Labs
 // SPDX-License-Identifier: GPL-3.0-or-later
 
+use gaze_vision::inference::ModelFile;
 use std::fs;
 use std::io::{Read, Write};
 use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
-use tracing::{debug, info};
+use std::time::Duration;
+use tracing::{debug, info, warn};
 
 const RELEASE_BASE: &str = "https://github.com/deepinsight/insightface/releases/download/v0.7";
+const MODEL_DOWNLOAD_TIMEOUT: Duration = Duration::from_secs(10 * 60);
 const BUFFALO_SC_SHA256: &str = "57d31b56b6ffa911c8a73cfc1707c73cab76efe7f13b675a05223bf42de47c72";
 const BUFFALO_L_SHA256: &str = "80ffe37d8a5940d59a7384c201a2a38d4741f2f3c51eef46ebb28218a7b0ca2f";
 const DET_500M_SHA256: &str = "5e4447f50245bbd7966bd6c0fa52938c61474a04ec7def48753668a9d8b4ea3a";
@@ -33,7 +36,7 @@ fn expected_pack_sha256(pack_name: &str) -> anyhow::Result<&'static str> {
     match pack_name {
         "buffalo_sc" => Ok(BUFFALO_SC_SHA256),
         "buffalo_l" => Ok(BUFFALO_L_SHA256),
-        _ => anyhow::bail!("未知模型包 '{pack_name}'"),
+        _ => anyhow::bail!("unknown model pack '{pack_name}'"),
     }
 }
 
@@ -41,7 +44,7 @@ fn pack_for_model(model_name: &str) -> anyhow::Result<&'static str> {
     match model_name {
         "det_500m.onnx" | "w600k_mbf.onnx" => Ok("buffalo_sc"),
         "det_10g.onnx" | "w600k_r50.onnx" => Ok("buffalo_l"),
-        _ => anyhow::bail!("没有已知模型包提供 '{model_name}'"),
+        _ => anyhow::bail!("no known model pack provides '{model_name}'"),
     }
 }
 
@@ -93,94 +96,96 @@ fn validate_model_name(name: &str) -> anyhow::Result<()> {
         || name.chars().any(char::is_control)
         || !name.ends_with(".onnx")
     {
-        anyhow::bail!("模型名称必须是单个 .onnx 文件名");
+        anyhow::bail!("model name must be a single .onnx file name");
     }
     Ok(())
 }
 
-fn sha256_file(path: &Path) -> anyhow::Result<String> {
-    use sha2::{Digest, Sha256};
-
-    let mut file = fs::File::open(path)?;
-    let mut hasher = Sha256::new();
-    let mut buf = [0u8; 64 * 1024];
-    loop {
-        let n = file.read(&mut buf)?;
-        if n == 0 {
-            break;
-        }
-        hasher.update(&buf[..n]);
+fn cached_model(path: &Path, name: &str) -> anyhow::Result<Option<ModelFile>> {
+    match fs::symlink_metadata(path) {
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(error.into()),
+        Ok(_) => {}
     }
-    let digest = hasher.finalize();
-    Ok(digest.iter().fold(String::with_capacity(64), |mut acc, b| {
-        use std::fmt::Write;
-        let _ = write!(acc, "{:02x}", b);
-        acc
-    }))
+    let model = ModelFile::verify(path, None)?;
+    if let Some(expected) = expected_model_sha256(name)
+        && model.sha256() != expected
+    {
+        warn!(path = %path.display(), "Cached model checksum mismatch; downloading a replacement");
+        return Ok(None);
+    }
+    Ok(Some(model))
 }
 
-fn verify_sha256(path: &Path, expected: &str) -> anyhow::Result<()> {
-    let actual = sha256_file(path)?;
-    if actual != expected {
-        anyhow::bail!(
-            "{} 的校验和不匹配：预期为 {}，实际为 {}",
-            path.display(),
-            expected,
-            actual
-        );
+struct DownloadTemp(PathBuf);
+
+impl Drop for DownloadTemp {
+    fn drop(&mut self) {
+        let _ = fs::remove_file(&self.0);
     }
-    Ok(())
 }
 
-fn ensure_regular_model(path: &Path) -> anyhow::Result<()> {
-    let meta = fs::symlink_metadata(path)?;
-    if meta.file_type().is_symlink() || !meta.is_file() {
-        anyhow::bail!("模型路径不是普通文件：{}", path.display());
-    }
-    Ok(())
+fn download_file(url: &str, dest: &Path, expected_sha256: &str) -> anyhow::Result<ModelFile> {
+    info!(url, timeout = ?MODEL_DOWNLOAD_TIMEOUT, "Downloading model file");
+    let agent: ureq::Agent = ureq::Agent::config_builder()
+        .timeout_global(Some(MODEL_DOWNLOAD_TIMEOUT))
+        .build()
+        .into();
+    let resp = agent.get(url).call()?;
+    save_download(resp.into_body().into_reader(), dest, expected_sha256)
 }
 
-fn verify_known_model(path: &Path, model_name: &str) -> anyhow::Result<()> {
-    ensure_regular_model(path)?;
-    if let Some(expected) = expected_model_sha256(model_name) {
-        verify_sha256(path, expected)?;
-    }
-    Ok(())
+fn save_download(
+    reader: impl Read,
+    dest: &Path,
+    expected_sha256: &str,
+) -> anyhow::Result<ModelFile> {
+    save_model(reader, dest, Some(expected_sha256))
 }
 
-fn download_file(url: &str, dest: &Path, expected_sha256: &str) -> anyhow::Result<()> {
-    info!(url, "Downloading model file");
-    let resp = ureq::get(url).call()?;
-    let mut reader = resp.into_body().into_reader();
+fn save_model(
+    mut reader: impl Read,
+    dest: &Path,
+    expected: Option<&str>,
+) -> anyhow::Result<ModelFile> {
     let file_name = dest
         .file_name()
         .and_then(|n| n.to_str())
-        .ok_or_else(|| anyhow::anyhow!("模型文件路径无效"))?;
-    let tmp_path = dest.with_file_name(format!(".{file_name}.{}.tmp", std::process::id()));
+        .ok_or_else(|| anyhow::anyhow!("invalid model file path"))?;
+    let tmp_path = dest.with_file_name(format!(".{file_name}.{}.tmp", uuid::Uuid::new_v4()));
     let mut file = fs::OpenOptions::new()
         .write(true)
         .create_new(true)
         .mode(0o600)
         .open(&tmp_path)?;
+    // Only clean up files we created.
+    let temp = DownloadTemp(tmp_path);
     std::io::copy(&mut reader, &mut file)?;
     file.flush()?;
+    file.sync_all()?;
     drop(file);
-    if let Err(err) = verify_sha256(&tmp_path, expected_sha256) {
-        let _ = fs::remove_file(&tmp_path);
-        return Err(err);
-    }
-    fs::rename(&tmp_path, dest)?;
-    Ok(())
+    let model = ModelFile::verify(&temp.0, expected)?;
+    let model = model.rename(dest)?;
+    fs::File::open(
+        dest.parent()
+            .ok_or_else(|| anyhow::anyhow!("model has no parent directory"))?,
+    )?
+    .sync_all()?;
+    Ok(model)
 }
 
-fn extract_onnx_from_zip(zip_path: &Path, dest_dir: &Path) -> anyhow::Result<Vec<PathBuf>> {
+fn extract_onnx_from_zip(
+    zip_path: &Path,
+    dest_dir: &Path,
+    wanted: &[&str],
+) -> anyhow::Result<Vec<ModelFile>> {
     let file = fs::File::open(zip_path)?;
     let mut archive = zip::ZipArchive::new(file)?;
     let mut extracted = Vec::new();
 
     for idx in 0..archive.len() {
         let mut entry = archive.by_index(idx)?;
-        let name = entry.name().to_string();
+        let name = entry.name()?.into_owned();
         if name.ends_with(".onnx") {
             let basename = Path::new(&name)
                 .file_name()
@@ -189,20 +194,19 @@ fn extract_onnx_from_zip(zip_path: &Path, dest_dir: &Path) -> anyhow::Result<Vec
                 .into_owned();
             validate_model_name(&basename)?;
             let out_path = dest_dir.join(&basename);
-            if fs::symlink_metadata(&out_path).is_ok() {
-                ensure_regular_model(&out_path)?;
-                debug!(file = %basename, "Model already exists, skipping extraction");
-                extracted.push(out_path);
+            if !wanted.contains(&basename.as_str()) {
                 continue;
             }
-            let mut out_file = fs::OpenOptions::new()
-                .write(true)
-                .create_new(true)
-                .mode(0o600)
-                .open(&out_path)?;
-            std::io::copy(&mut entry, &mut out_file)?;
-            out_file.flush()?;
-            extracted.push(out_path);
+            if let Some(model) = cached_model(&out_path, &basename)? {
+                debug!(file = %basename, "Verified model already exists, skipping extraction");
+                extracted.push(model);
+                continue;
+            }
+            extracted.push(save_model(
+                &mut entry,
+                &out_path,
+                expected_model_sha256(&basename),
+            )?);
             debug!(file = %basename, "Extracted model");
         }
     }
@@ -214,7 +218,16 @@ pub fn ensure_models(
     models_dir: &str,
     detector_name: &str,
     recognizer_name: &str,
-) -> anyhow::Result<(PathBuf, PathBuf)> {
+) -> anyhow::Result<(ModelFile, ModelFile)> {
+    ensure_models_with(models_dir, detector_name, recognizer_name, download_file)
+}
+
+fn ensure_models_with(
+    models_dir: &str,
+    detector_name: &str,
+    recognizer_name: &str,
+    mut download: impl FnMut(&str, &Path, &str) -> anyhow::Result<ModelFile>,
+) -> anyhow::Result<(ModelFile, ModelFile)> {
     validate_model_name(detector_name)?;
     validate_model_name(recognizer_name)?;
 
@@ -224,65 +237,67 @@ pub fn ensure_models(
     let det_path = dir.join(detector_name);
     let rec_path = dir.join(recognizer_name);
 
-    if det_path.exists() && rec_path.exists() {
-        verify_known_model(&det_path, detector_name)?;
-        verify_known_model(&rec_path, recognizer_name)?;
-        return Ok((det_path, rec_path));
-    }
-
+    let mut detector = cached_model(&det_path, detector_name)?;
+    let mut recognizer = cached_model(&rec_path, recognizer_name)?;
     let needed_packs = required_packs([
-        (detector_name, det_path.exists()),
-        (recognizer_name, rec_path.exists()),
+        (detector_name, detector.is_some()),
+        (recognizer_name, recognizer.is_some()),
     ])?;
+    let wanted: Vec<&str> = [
+        (detector_name, detector.is_none()),
+        (recognizer_name, recognizer.is_none()),
+    ]
+    .into_iter()
+    .filter_map(|(name, needed)| needed.then_some(name))
+    .collect();
 
     for pack_name in needed_packs {
         let url = zip_url(pack_name);
         let zip_path = dir.join(format!("{pack_name}.zip"));
         let expected_sha256 = expected_pack_sha256(pack_name)?;
 
-        download_file(&url, &zip_path, expected_sha256)?;
-        extract_onnx_from_zip(&zip_path, dir)?;
-        fs::remove_file(&zip_path)?;
+        download(&url, &zip_path, expected_sha256)?;
+        let _archive = DownloadTemp(zip_path.clone());
+        for model in extract_onnx_from_zip(&zip_path, dir, &wanted)? {
+            if model.path() == det_path {
+                detector = Some(model.clone());
+            }
+            if model.path() == rec_path {
+                recognizer = Some(model);
+            }
+        }
     }
 
-    if !det_path.exists() {
-        anyhow::bail!("模型包中未找到检测模型 '{detector_name}'");
-    }
-    if !rec_path.exists() {
-        anyhow::bail!("模型包中未找到识别模型 '{recognizer_name}'");
-    }
-    verify_known_model(&det_path, detector_name)?;
-    verify_known_model(&rec_path, recognizer_name)?;
-
-    Ok((det_path, rec_path))
+    Ok((
+        detector.ok_or_else(|| {
+            anyhow::anyhow!("Detection model '{detector_name}' not found in pack")
+        })?,
+        recognizer.ok_or_else(|| {
+            anyhow::anyhow!("Recognition model '{recognizer_name}' not found in pack")
+        })?,
+    ))
 }
 
-pub fn ensure_liveness_model(models_dir: &str) -> anyhow::Result<PathBuf> {
+pub fn ensure_liveness_model(models_dir: &str) -> anyhow::Result<ModelFile> {
     let dir = Path::new(models_dir);
     ensure_private_dir(dir)?;
 
     let path = dir.join(LIVENESS_MODEL_NAME);
-    if path.exists() {
-        verify_known_model(&path, LIVENESS_MODEL_NAME)?;
-        return Ok(path);
+    if let Some(model) = cached_model(&path, LIVENESS_MODEL_NAME)? {
+        return Ok(model);
     }
-
-    download_file(LIVENESS_MODEL_URL, &path, LIVENESS_MODEL_SHA256)?;
-    Ok(path)
+    download_file(LIVENESS_MODEL_URL, &path, LIVENESS_MODEL_SHA256)
 }
 
-pub fn ensure_eye_state_model(models_dir: &str) -> anyhow::Result<PathBuf> {
+pub fn ensure_eye_state_model(models_dir: &str) -> anyhow::Result<ModelFile> {
     let dir = Path::new(models_dir);
     ensure_private_dir(dir)?;
 
     let path = dir.join(EYE_STATE_MODEL_NAME);
-    if path.exists() {
-        verify_known_model(&path, EYE_STATE_MODEL_NAME)?;
-        return Ok(path);
+    if let Some(model) = cached_model(&path, EYE_STATE_MODEL_NAME)? {
+        return Ok(model);
     }
-
-    download_file(EYE_STATE_MODEL_URL, &path, EYE_STATE_MODEL_SHA256)?;
-    Ok(path)
+    download_file(EYE_STATE_MODEL_URL, &path, EYE_STATE_MODEL_SHA256)
 }
 
 #[cfg(test)]
@@ -331,6 +346,195 @@ mod tests {
             zip.write_all(bytes).unwrap();
         }
         zip.finish().unwrap();
+    }
+
+    #[test]
+    fn timed_out_download_is_cleaned_up_and_can_be_retried_in_the_same_process() {
+        struct TimeoutAfterChunk(bool);
+        impl Read for TimeoutAfterChunk {
+            fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+                if self.0 {
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::TimedOut,
+                        "body stalled",
+                    ));
+                }
+                self.0 = true;
+                let n = buf.len().min(3);
+                buf[..n].copy_from_slice(&b"abc"[..n]);
+                Ok(n)
+            }
+        }
+
+        let temp = TempDir::new("download-timeout");
+        let dest = temp.path().join("model.onnx");
+        let expected = "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad";
+        let err = save_download(TimeoutAfterChunk(false), &dest, expected).unwrap_err();
+        assert_eq!(
+            err.downcast_ref::<std::io::Error>().unwrap().kind(),
+            std::io::ErrorKind::TimedOut,
+        );
+        assert_eq!(fs::read_dir(temp.path()).unwrap().count(), 0);
+
+        save_download(&b"abc"[..], &dest, expected).unwrap();
+        assert_eq!(fs::read(&dest).unwrap(), b"abc");
+        assert_eq!(fs::read_dir(temp.path()).unwrap().count(), 1);
+        assert_eq!(
+            fs::metadata(dest).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
+    }
+
+    #[test]
+    fn checksum_failure_cleans_up_without_replacing_an_existing_model() {
+        let temp = TempDir::new("download-checksum");
+        let dest = temp.path().join("model.onnx");
+        fs::write(&dest, b"existing model").unwrap();
+        assert!(save_download(&b"abc"[..], &dest, DET_500M_SHA256).is_err());
+        assert_eq!(fs::read(&dest).unwrap(), b"existing model");
+        assert_eq!(fs::read_dir(temp.path()).unwrap().count(), 1);
+    }
+
+    #[test]
+    fn failed_download_rename_also_cleans_up_the_temp_file() {
+        let temp = TempDir::new("download-rename");
+        let dest = temp.path().join("model.onnx");
+        fs::create_dir(&dest).unwrap();
+        let expected = "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad";
+        assert!(save_download(&b"abc"[..], &dest, expected).is_err());
+        assert!(dest.is_dir());
+        assert_eq!(fs::read_dir(temp.path()).unwrap().count(), 1);
+    }
+
+    #[test]
+    fn legacy_pid_temp_files_do_not_prevent_a_new_download() {
+        let temp = TempDir::new("download-legacy-temp");
+        let dest = temp.path().join("model.onnx");
+        let stale = temp
+            .path()
+            .join(format!(".model.onnx.{}.tmp", std::process::id()));
+        fs::write(&stale, b"partial").unwrap();
+        let expected = "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad";
+        save_download(&b"abc"[..], &dest, expected).unwrap();
+        assert_eq!(fs::read(&dest).unwrap(), b"abc");
+        assert_eq!(fs::read(&stale).unwrap(), b"partial");
+        assert_eq!(fs::read_dir(temp.path()).unwrap().count(), 2);
+    }
+
+    #[test]
+    fn corrupt_cached_models_request_a_new_pack_without_deleting_the_old_file() {
+        let temp = TempDir::new("corrupt-cache");
+        let detector = temp.path().join("det_500m.onnx");
+        fs::write(&detector, b"interrupted extraction").unwrap();
+        fs::write(temp.path().join("custom.onnx"), b"recognizer").unwrap();
+        let mut requested = false;
+        let result = ensure_models_with(
+            temp.path().to_str().unwrap(),
+            "det_500m.onnx",
+            "custom.onnx",
+            |url, _, hash| {
+                requested = true;
+                assert_eq!(url, zip_url("buffalo_sc"));
+                assert_eq!(hash, BUFFALO_SC_SHA256);
+                anyhow::bail!("offline test")
+            },
+        );
+        assert!(result.is_err());
+        assert!(requested);
+        assert_eq!(fs::read(detector).unwrap(), b"interrupted extraction");
+        assert_eq!(fs::read_dir(temp.path()).unwrap().count(), 2);
+    }
+
+    #[test]
+    fn healthy_cached_models_return_reusable_verified_digests_without_a_download() {
+        let temp = TempDir::new("healthy-cache");
+        fs::write(temp.path().join("detector.onnx"), b"abc").unwrap();
+        fs::write(temp.path().join("recognizer.onnx"), b"abc").unwrap();
+        let (detector, recognizer) = ensure_models_with(
+            temp.path().to_str().unwrap(),
+            "detector.onnx",
+            "recognizer.onnx",
+            |_, _, _| panic!("healthy cached models must not be downloaded"),
+        )
+        .unwrap();
+        fs::remove_file(detector.path()).unwrap();
+        fs::remove_file(recognizer.path()).unwrap();
+        let expected = "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad";
+        assert_eq!(detector.sha256(), expected);
+        assert_eq!(recognizer.sha256(), expected);
+    }
+
+    #[test]
+    fn a_verified_download_atomically_replaces_corrupt_bytes() {
+        let temp = TempDir::new("replace-corrupt");
+        let destination = temp.path().join("model.onnx");
+        fs::write(&destination, b"partial").unwrap();
+        let expected = "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad";
+        let model = save_download(&b"abc"[..], &destination, expected).unwrap();
+        assert_eq!(model.path(), destination);
+        assert_eq!(model.sha256(), expected);
+        assert_eq!(fs::read(destination).unwrap(), b"abc");
+        assert_eq!(fs::read_dir(temp.path()).unwrap().count(), 1);
+    }
+
+    #[test]
+    fn invalid_extracted_bytes_do_not_replace_a_corrupt_known_model() {
+        let temp = TempDir::new("bad-extraction-hash");
+        let destination = temp.path().join("models");
+        fs::create_dir(&destination).unwrap();
+        let detector = destination.join("det_500m.onnx");
+        fs::write(&detector, b"old partial").unwrap();
+        let archive = temp.path().join("models.zip");
+        write_zip(&archive, &[("det_500m.onnx", b"untrusted replacement")]);
+        assert!(extract_onnx_from_zip(&archive, &destination, &["det_500m.onnx"]).is_err());
+        assert_eq!(fs::read(detector).unwrap(), b"old partial");
+        assert_eq!(fs::read_dir(destination).unwrap().count(), 1);
+    }
+
+    #[test]
+    fn a_crc_failure_never_publishes_a_partially_extracted_model() {
+        let temp = TempDir::new("bad-zip-crc");
+        let destination = temp.path().join("models");
+        fs::create_dir(&destination).unwrap();
+        let archive = temp.path().join("models.zip");
+        let mut zip = zip::ZipWriter::new(fs::File::create(&archive).unwrap());
+        zip.start_file(
+            "custom.onnx",
+            zip::write::SimpleFileOptions::default()
+                .compression_method(zip::CompressionMethod::Stored),
+        )
+        .unwrap();
+        let body = b"gaze-test-body";
+        zip.write_all(body).unwrap();
+        zip.finish().unwrap();
+        let mut bytes = fs::read(&archive).unwrap();
+        let offset = bytes
+            .windows(body.len())
+            .position(|bytes| bytes == body)
+            .unwrap();
+        bytes[offset] ^= 1;
+        fs::write(&archive, bytes).unwrap();
+        assert!(extract_onnx_from_zip(&archive, &destination, &["custom.onnx"]).is_err());
+        assert_eq!(fs::read_dir(destination).unwrap().count(), 0);
+    }
+
+    #[test]
+    fn extraction_ignores_models_that_were_not_requested() {
+        let temp = TempDir::new("wanted-models");
+        let archive = temp.path().join("models.zip");
+        let destination = temp.path().join("models");
+        fs::create_dir(&destination).unwrap();
+        write_zip(
+            &archive,
+            &[("wanted.onnx", b"wanted"), ("unused.onnx", b"unused")],
+        );
+        assert_eq!(
+            extract_onnx_from_zip(&archive, &destination, &["wanted.onnx"])
+                .unwrap()
+                .len(),
+            1
+        );
+        assert!(!destination.join("unused.onnx").exists());
     }
 
     #[test]
@@ -451,9 +655,9 @@ mod tests {
         fs::write(&path, b"abc").unwrap();
         let expected = "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad";
 
-        assert_eq!(sha256_file(&path).unwrap(), expected);
-        verify_sha256(&path, expected).unwrap();
-        assert!(verify_sha256(&path, DET_500M_SHA256).is_err());
+        assert_eq!(ModelFile::verify(&path, None).unwrap().sha256(), expected);
+        ModelFile::verify(&path, Some(expected)).unwrap();
+        assert!(ModelFile::verify(&path, Some(DET_500M_SHA256)).is_err());
     }
 
     #[test]
@@ -466,9 +670,9 @@ mod tests {
         fs::create_dir(&dir).unwrap();
         std::os::unix::fs::symlink(&file, &symlink).unwrap();
 
-        ensure_regular_model(&file).unwrap();
-        assert!(ensure_regular_model(&dir).is_err());
-        assert!(ensure_regular_model(&symlink).is_err());
+        ModelFile::verify(&file, None).unwrap();
+        assert!(ModelFile::verify(&dir, None).is_err());
+        assert!(ModelFile::verify(&symlink, None).is_err());
     }
 
     #[test]
@@ -480,19 +684,19 @@ mod tests {
         write_zip(
             &zip_path,
             &[
-                ("nested/det_500m.onnx", b"detector"),
-                ("w600k_mbf.onnx", b"recognizer"),
+                ("nested/detector.onnx", b"detector"),
+                ("recognizer.onnx", b"recognizer"),
                 ("README.txt", b"ignore me"),
             ],
         );
 
-        let mut extracted = extract_onnx_from_zip(&zip_path, &dest).unwrap();
-        extracted.sort();
+        let extracted =
+            extract_onnx_from_zip(&zip_path, &dest, &["detector.onnx", "recognizer.onnx"]).unwrap();
 
         assert_eq!(extracted.len(), 2);
-        assert_eq!(fs::read(dest.join("det_500m.onnx")).unwrap(), b"detector");
+        assert_eq!(fs::read(dest.join("detector.onnx")).unwrap(), b"detector");
         assert_eq!(
-            fs::read(dest.join("w600k_mbf.onnx")).unwrap(),
+            fs::read(dest.join("recognizer.onnx")).unwrap(),
             b"recognizer"
         );
         assert!(!dest.join("README.txt").exists());
@@ -504,12 +708,12 @@ mod tests {
         let zip_path = temp.path().join("models.zip");
         let dest = temp.path().join("models");
         fs::create_dir(&dest).unwrap();
-        fs::write(dest.join("det_500m.onnx"), b"existing").unwrap();
-        write_zip(&zip_path, &[("det_500m.onnx", b"new")]);
+        fs::write(dest.join("custom.onnx"), b"existing").unwrap();
+        write_zip(&zip_path, &[("custom.onnx", b"new")]);
 
-        let extracted = extract_onnx_from_zip(&zip_path, &dest).unwrap();
+        let extracted = extract_onnx_from_zip(&zip_path, &dest, &["custom.onnx"]).unwrap();
 
-        assert_eq!(extracted, vec![dest.join("det_500m.onnx")]);
-        assert_eq!(fs::read(dest.join("det_500m.onnx")).unwrap(), b"existing");
+        assert_eq!(extracted[0].path(), dest.join("custom.onnx"));
+        assert_eq!(fs::read(dest.join("custom.onnx")).unwrap(), b"existing");
     }
 }

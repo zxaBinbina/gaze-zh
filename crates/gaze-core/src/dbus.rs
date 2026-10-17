@@ -8,24 +8,177 @@ use crate::config::{
 };
 use serde::{Deserialize, Serialize};
 use zbus::proxy;
-use zbus::zvariant::{OwnedValue, Type, Value};
+use zbus::{OwnedVariant, Type, Variant};
 
 use strum_macros::{AsRefStr, Display, EnumString, VariantNames};
 
 /// Defines the stable wire layout for Config properties. Keep this type unchanged
 /// when adding settings because daemon and client packages may be upgraded separately.
-#[derive(Clone, Debug, Value, OwnedValue, Type)]
+#[derive(Clone, Debug, Serialize, Deserialize, Variant, OwnedVariant, Type)]
 pub struct DbusConfig {
-    inference: InferenceConfig,
-    security: SecurityLevel,
+    inference: DbusInferenceConfig,
+    security: DbusSecurityLevel,
     cameras: DbusCameraConfig,
-    auth: AuthConfig,
-    enrollment: EnrollmentConfig,
-    liveness: LivenessConfig,
+    auth: DbusAuthConfig,
+    enrollment: DbusEnrollmentConfig,
+    liveness: DbusLivenessConfig,
     storage: DbusStorageConfig,
 }
 
-#[derive(Clone, Debug, Value, OwnedValue, Type)]
+#[derive(Clone, Debug, Serialize, Deserialize, Variant, OwnedVariant, Type)]
+struct DbusInferenceConfig {
+    execution_provider: String,
+    device: String,
+}
+
+impl From<InferenceConfig> for DbusInferenceConfig {
+    fn from(inference: InferenceConfig) -> Self {
+        Self {
+            execution_provider: inference.execution_provider,
+            device: inference.device,
+        }
+    }
+}
+
+impl From<DbusInferenceConfig> for InferenceConfig {
+    fn from(inference: DbusInferenceConfig) -> Self {
+        Self {
+            execution_provider: inference.execution_provider,
+            device: inference.device,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, Variant, OwnedVariant, Type)]
+struct DbusSecurityLevel {
+    level: String,
+    detector: String,
+    recognizer: String,
+    rgb_threshold: f64,
+    ir_threshold: f64,
+    hybrid_policy: String,
+}
+
+impl From<SecurityLevel> for DbusSecurityLevel {
+    fn from(security: SecurityLevel) -> Self {
+        Self {
+            level: security.level,
+            detector: security.detector,
+            recognizer: security.recognizer,
+            rgb_threshold: security.rgb_threshold,
+            ir_threshold: security.ir_threshold,
+            hybrid_policy: security.hybrid_policy,
+        }
+    }
+}
+
+impl From<DbusSecurityLevel> for SecurityLevel {
+    fn from(security: DbusSecurityLevel) -> Self {
+        Self {
+            level: security.level,
+            detector: security.detector,
+            recognizer: security.recognizer,
+            rgb_threshold: security.rgb_threshold,
+            ir_threshold: security.ir_threshold,
+            hybrid_policy: security.hybrid_policy,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, Variant, OwnedVariant, Type)]
+struct DbusAuthConfig {
+    abort_if_ssh: bool,
+    abort_if_lid_closed: bool,
+    abort_before_first_resume: bool,
+    require_confirmation_lock_screen: bool,
+    require_confirmation_elevation: bool,
+    resume_grace_ms: u64,
+    start_delay_ms: u64,
+    start_delay_scope: String,
+}
+
+impl From<AuthConfig> for DbusAuthConfig {
+    fn from(auth: AuthConfig) -> Self {
+        Self {
+            abort_if_ssh: auth.abort_if_ssh,
+            abort_if_lid_closed: auth.abort_if_lid_closed,
+            abort_before_first_resume: auth.abort_before_first_resume,
+            require_confirmation_lock_screen: auth.require_confirmation_lock_screen,
+            require_confirmation_elevation: auth.require_confirmation_elevation,
+            resume_grace_ms: auth.resume_grace_ms,
+            start_delay_ms: auth.start_delay_ms,
+            start_delay_scope: auth.start_delay_scope,
+        }
+    }
+}
+
+impl From<DbusAuthConfig> for AuthConfig {
+    fn from(auth: DbusAuthConfig) -> Self {
+        Self {
+            abort_if_ssh: auth.abort_if_ssh,
+            abort_if_lid_closed: auth.abort_if_lid_closed,
+            abort_before_first_resume: auth.abort_before_first_resume,
+            require_confirmation_lock_screen: auth.require_confirmation_lock_screen,
+            require_confirmation_elevation: auth.require_confirmation_elevation,
+            resume_grace_ms: auth.resume_grace_ms,
+            start_delay_ms: auth.start_delay_ms,
+            start_delay_scope: auth.start_delay_scope,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, Variant, OwnedVariant, Type)]
+struct DbusEnrollmentConfig {
+    max_templates: u32,
+    min_face_size_ratio: f64,
+}
+
+impl From<EnrollmentConfig> for DbusEnrollmentConfig {
+    fn from(enrollment: EnrollmentConfig) -> Self {
+        Self {
+            max_templates: enrollment.max_templates,
+            min_face_size_ratio: enrollment.min_face_size_ratio,
+        }
+    }
+}
+
+impl From<DbusEnrollmentConfig> for EnrollmentConfig {
+    fn from(enrollment: DbusEnrollmentConfig) -> Self {
+        Self {
+            max_templates: enrollment.max_templates,
+            min_face_size_ratio: enrollment.min_face_size_ratio,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, Variant, OwnedVariant, Type)]
+struct DbusLivenessConfig {
+    enabled: bool,
+    threshold: f64,
+    max_seconds: f64,
+}
+
+impl From<LivenessConfig> for DbusLivenessConfig {
+    fn from(liveness: LivenessConfig) -> Self {
+        Self {
+            enabled: liveness.enabled,
+            threshold: liveness.threshold,
+            max_seconds: liveness.max_seconds,
+        }
+    }
+}
+
+impl From<DbusLivenessConfig> for LivenessConfig {
+    fn from(liveness: DbusLivenessConfig) -> Self {
+        Self {
+            enabled: liveness.enabled,
+            threshold: liveness.threshold,
+            max_seconds: liveness.max_seconds,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, Variant, OwnedVariant, Type)]
 struct DbusCameraConfig {
     rgb: String,
     ir: String,
@@ -60,7 +213,7 @@ impl From<DbusCameraConfig> for CameraConfig {
     }
 }
 
-#[derive(Clone, Debug, Value, OwnedValue, Type)]
+#[derive(Clone, Debug, Serialize, Deserialize, Variant, OwnedVariant, Type)]
 struct DbusStorageConfig {
     encrypt_templates: bool,
 }
@@ -68,12 +221,12 @@ struct DbusStorageConfig {
 impl From<Config> for DbusConfig {
     fn from(config: Config) -> Self {
         Self {
-            inference: config.inference,
-            security: config.security,
+            inference: config.inference.into(),
+            security: config.security.into(),
             cameras: config.cameras.into(),
-            auth: config.auth,
-            enrollment: config.enrollment,
-            liveness: config.liveness,
+            auth: config.auth.into(),
+            enrollment: config.enrollment.into(),
+            liveness: config.liveness.into(),
             storage: DbusStorageConfig {
                 encrypt_templates: config.storage.encrypt_templates,
             },
@@ -84,12 +237,12 @@ impl From<Config> for DbusConfig {
 impl From<DbusConfig> for Config {
     fn from(config: DbusConfig) -> Self {
         Self {
-            inference: config.inference,
-            security: config.security,
+            inference: config.inference.into(),
+            security: config.security.into(),
             cameras: config.cameras.into(),
-            auth: config.auth,
-            enrollment: config.enrollment,
-            liveness: config.liveness,
+            auth: config.auth.into(),
+            enrollment: config.enrollment.into(),
+            liveness: config.liveness.into(),
             storage: crate::config::StorageConfig {
                 encrypt_templates: config.storage.encrypt_templates,
                 unlock_gnome_keyring: false,
@@ -114,7 +267,7 @@ impl From<DbusConfig> for Config {
     AsRefStr,
     VariantNames,
 )]
-#[zvariant(signature = "s")]
+#[zbus(signature = "s")]
 #[serde(rename_all = "kebab-case")]
 pub enum CaptureStatus {
     #[strum(serialize = "摄像头未使用...")]
@@ -175,7 +328,7 @@ impl CaptureStatus {
     AsRefStr,
     VariantNames,
 )]
-#[zvariant(signature = "s")]
+#[zbus(signature = "s")]
 #[serde(rename_all = "kebab-case")]
 pub enum EnrollPrompt {
     #[strum(serialize = "请正对摄像头")]
@@ -214,7 +367,7 @@ pub enum EnrollPrompt {
     AsRefStr,
     VariantNames,
 )]
-#[zvariant(signature = "s")]
+#[zbus(signature = "s")]
 #[serde(rename_all = "kebab-case")]
 pub enum VerifyResult {
     VerifyMatch,
@@ -233,7 +386,7 @@ pub const GAZE_MSG_FACE_TOO_DARK: &str = "GAZE_MSG_FACE_TOO_DARK";
 pub const GAZE_MSG_FACE_TIMED_OUT: &str = "GAZE_MSG_FACE_TIMED_OUT";
 pub const GAZE_MSG_FACE_UNAVAILABLE: &str = "GAZE_MSG_FACE_UNAVAILABLE";
 
-#[derive(Clone, Debug, Serialize, Deserialize, Value, OwnedValue, Type)]
+#[derive(Clone, Debug, Serialize, Deserialize, Variant, OwnedVariant, Type)]
 pub struct BenchmarkResult {
     pub component: String,
     pub execution_provider: String,
@@ -278,14 +431,131 @@ pub fn dbus_is_unknown_method(err: &zbus::Error) -> bool {
     err.to_string().contains("UnknownMethod")
 }
 
-/// Deadline for a client waiting for a verification result. The daemon's own
-/// deadline expires first, so reaching this one means it stopped answering rather
-/// than rejecting the face.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DaemonState {
+    Starting,
+    Failed,
+    Disabled,
+    Stopped,
+    NotInstalled,
+}
+
+impl DaemonState {
+    pub fn from_unit(
+        load_state: &str,
+        active_state: &str,
+        sub_state: &str,
+        file_state: &str,
+    ) -> Self {
+        if load_state == "not-found" {
+            return Self::NotInstalled;
+        }
+        match active_state {
+            "failed" => Self::Failed,
+            _ if sub_state == "auto-restart" => Self::Failed,
+            "active" | "activating" | "reloading" => Self::Starting,
+            _ if matches!(file_state, "disabled" | "masked" | "masked-runtime") => Self::Disabled,
+            _ => Self::Stopped,
+        }
+    }
+}
+
+impl DaemonState {
+    pub fn problem_and_fix(self) -> (&'static str, &'static str) {
+        match self {
+            Self::Starting => (
+                "gazed is starting but is not on the bus yet (its first start downloads face models)",
+                "Wait a minute and try again; `journalctl -u gazed -f` shows its progress.",
+            ),
+            Self::Failed => (
+                "gazed stopped with an error",
+                "Run `journalctl -u gazed -n 50` to see why, then `sudo systemctl restart gazed`.",
+            ),
+            Self::Disabled => (
+                "gazed is disabled",
+                "Run `sudo systemctl enable --now gazed`.",
+            ),
+            Self::Stopped => ("gazed is not running", "Run `sudo systemctl start gazed`."),
+            Self::NotInstalled => (
+                "the gazed service is not installed",
+                "Install the gaze package for your distribution.",
+            ),
+        }
+    }
+}
+
+pub async fn daemon_unavailable_hint(connection: &zbus::Connection) -> (String, String) {
+    if !crate::cpu::supports_inference() {
+        return (
+            crate::cpu::UNSUPPORTED_CPU_MESSAGE.to_string(),
+            crate::cpu::UNSUPPORTED_CPU_FIX.to_string(),
+        );
+    }
+    match gazed_unit_state_on(connection).await {
+        Ok(state) => {
+            let (problem, fix) = state.problem_and_fix();
+            (problem.to_string(), fix.to_string())
+        }
+        Err(_) => (
+            "gazed is not on the system bus".to_string(),
+            "Run `sudo systemctl start gazed`, then `gaze doctor`.".to_string(),
+        ),
+    }
+}
+
+pub async fn gazed_unit_state_on(connection: &zbus::Connection) -> anyhow::Result<DaemonState> {
+    let manager = zbus::Proxy::new(
+        connection,
+        "org.freedesktop.systemd1",
+        "/org/freedesktop/systemd1",
+        "org.freedesktop.systemd1.Manager",
+    )
+    .await?;
+    let path: zbus::OwnedObjectPath = manager.call("LoadUnit", &("gazed.service",)).await?;
+    let unit = zbus::Proxy::new(
+        connection,
+        "org.freedesktop.systemd1",
+        path,
+        "org.freedesktop.systemd1.Unit",
+    )
+    .await?;
+    let load_state: String = unit.get_property("LoadState").await?;
+    let active_state: String = unit.get_property("ActiveState").await?;
+    let sub_state: String = unit.get_property("SubState").await?;
+    let file_state: String = unit.get_property("UnitFileState").await?;
+    Ok(DaemonState::from_unit(
+        &load_state,
+        &active_state,
+        &sub_state,
+        &file_state,
+    ))
+}
+
+/// Verification client deadline; the daemon expires first.
+/// Reaching this deadline means it stopped answering, not that it rejected a face.
 pub const VERIFY_CLIENT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(20);
 
 pub async fn connect_gaze() -> zbus::Result<GazeProxy<'static>> {
-    let connection = zbus::Connection::system().await?;
-    GazeProxy::new(&connection).await
+    // PAM hosts must never interpret caller-controlled bus addresses, including unixexec.
+    let connection = zbus::connection::Builder::address("unix:path=/run/dbus/system_bus_socket")
+        .build()
+        .await?;
+    trusted_gaze_proxy_on(&connection).await
+}
+
+async fn trusted_gaze_proxy_on(connection: &zbus::Connection) -> zbus::Result<GazeProxy<'static>> {
+    let bus = zbus::fdo::DBusProxy::new(connection).await?;
+    let owner = bus.get_name_owner("com.gundulabs.Gaze".try_into()?).await?;
+    let uid = bus.get_connection_unix_user(owner.clone().into()).await?;
+    if uid != 0 {
+        return Err(zbus::fdo::Error::AccessDenied("gazed must be owned by uid 0".into()).into());
+    }
+    // Pin the checked owner so a subsequent name takeover cannot redirect PAM requests.
+    GazeProxy::builder(connection)
+        .destination(owner)
+        .cache_properties(zbus::proxy::CacheProperties::No)
+        .build()
+        .await
 }
 
 pub async fn try_benchmark_from_daemon(
@@ -319,15 +589,28 @@ pub fn benchmark_from_reply(
 }
 
 pub async fn try_load_config_from_daemon(proxy: &GazeProxy<'_>) -> anyhow::Result<Option<Config>> {
-    let raw: OwnedValue = proxy
-        .inner()
-        .get_property("Config")
+    let raw = raw_property(proxy, "Config")
         .await
         .map_err(|e| anyhow::anyhow!("无法读取配置属性：{e}"))?;
     config_from_property(raw)
 }
 
-pub fn config_from_property(raw: OwnedValue) -> anyhow::Result<Option<Config>> {
+async fn raw_property(proxy: &GazeProxy<'_>, name: &str) -> zbus::Result<OwnedVariant> {
+    let inner = proxy.inner();
+    let reply = inner
+        .connection()
+        .call_method(
+            Some(inner.destination()),
+            inner.path(),
+            Some("org.freedesktop.DBus.Properties"),
+            "Get",
+            &(inner.interface(), name),
+        )
+        .await?;
+    reply.body().deserialize::<OwnedVariant>()
+}
+
+pub fn config_from_property(raw: OwnedVariant) -> anyhow::Result<Option<Config>> {
     let expected = <DbusConfig as Type>::SIGNATURE;
     let actual = raw.value_signature();
     if actual != expected {
@@ -347,7 +630,7 @@ pub fn config_from_property(raw: OwnedValue) -> anyhow::Result<Option<Config>> {
 
 /// Decode a complete update while preserving the legacy Config property's wire format.
 pub fn config_update_from_property(
-    raw: OwnedValue,
+    raw: OwnedVariant,
     unlock_gnome_keyring: bool,
 ) -> anyhow::Result<Config> {
     let mut config = config_from_property(raw)?
@@ -447,7 +730,7 @@ pub async fn apply_config_with_keyring_to_daemon(
     apply_ir_frame_size_to_daemon(proxy, config).await?;
     let unlock_gnome_keyring = config.storage.unlock_gnome_keyring;
     let unlock_kwallet = config.storage.unlock_kwallet;
-    let config = OwnedValue::try_from(DbusConfig::from(config.clone()))?;
+    let config = OwnedVariant::try_from(DbusConfig::from(config.clone()))?;
     match proxy
         .set_config_with_wallets(config.try_clone()?, unlock_gnome_keyring, unlock_kwallet)
         .await
@@ -516,7 +799,7 @@ pub async fn active_session_lookup_on(
         "org.freedesktop.login1.Seat",
     )
     .await?;
-    let active_session: (String, zbus::zvariant::ObjectPath) =
+    let active_session: (String, zbus::OwnedObjectPath) =
         proxy.get_property("ActiveSession").await?;
     let path = active_session.1.to_string();
     // logind reports an empty id on the root path when the active VT holds no session.
@@ -531,7 +814,7 @@ pub async fn active_session_lookup_on(
         "org.freedesktop.login1.Session",
     )
     .await?;
-    let user: (u32, zbus::zvariant::ObjectPath) = session_proxy.get_property("User").await?;
+    let user: (u32, zbus::OwnedObjectPath) = session_proxy.get_property("User").await?;
     let class: String = session_proxy.get_property("Class").await?;
 
     Ok(Some(ActiveSession {
@@ -547,9 +830,8 @@ pub async fn active_session_on(connection: &zbus::Connection) -> anyhow::Result<
         .ok_or_else(|| anyhow::anyhow!("seat0 没有活动会话"))
 }
 
-/// Returns the uid of every session on seat0, including background sessions.
-/// logind clears `ActiveSession` when the foreground VT has no session, so an
-/// empty active-session value does not mean the seat is unoccupied.
+/// Returns every seat0 session's uid, including background sessions.
+/// An empty ActiveSession on the foreground VT does not mean the seat is unoccupied.
 pub async fn seat0_session_uids_on(connection: &zbus::Connection) -> anyhow::Result<Vec<u32>> {
     let proxy = zbus::Proxy::new(
         connection,
@@ -558,7 +840,7 @@ pub async fn seat0_session_uids_on(connection: &zbus::Connection) -> anyhow::Res
         "org.freedesktop.login1.Manager",
     )
     .await?;
-    let sessions: Vec<(String, u32, String, String, zbus::zvariant::OwnedObjectPath)> =
+    let sessions: Vec<(String, u32, String, String, zbus::OwnedObjectPath)> =
         proxy.call("ListSessions", &()).await?;
 
     let mut uids = Vec::new();
@@ -576,9 +858,8 @@ pub async fn seat0_session_uids_on(connection: &zbus::Connection) -> anyhow::Res
     Ok(uids)
 }
 
-/// Checks whether logind marks the session that owns `pid` as remote. An `Err`
-/// means logind is unreachable or the process belongs to no session; neither case
-/// can be treated as a local session.
+/// Checks whether logind marks the session owning `pid` as remote.
+/// An unreachable logind or missing session is an error, never evidence of locality.
 pub async fn session_is_remote_on(connection: &zbus::Connection, pid: u32) -> anyhow::Result<bool> {
     let proxy = zbus::Proxy::new(
         connection,
@@ -587,7 +868,7 @@ pub async fn session_is_remote_on(connection: &zbus::Connection, pid: u32) -> an
         "org.freedesktop.login1.Manager",
     )
     .await?;
-    let path: zbus::zvariant::OwnedObjectPath = proxy.call("GetSessionByPID", &(pid,)).await?;
+    let path: zbus::OwnedObjectPath = proxy.call("GetSessionByPID", &(pid,)).await?;
     let session_proxy = zbus::Proxy::new(
         connection,
         "org.freedesktop.login1",
@@ -607,7 +888,7 @@ pub async fn session_paths_on(connection: &zbus::Connection) -> anyhow::Result<V
         "org.freedesktop.login1.Manager",
     )
     .await?;
-    let sessions: Vec<(String, u32, String, String, zbus::zvariant::OwnedObjectPath)> =
+    let sessions: Vec<(String, u32, String, String, zbus::OwnedObjectPath)> =
         proxy.call("ListSessions", &()).await?;
 
     Ok(sessions
@@ -617,10 +898,7 @@ pub async fn session_paths_on(connection: &zbus::Connection) -> anyhow::Result<V
 }
 
 /// Treats an unreadable session as live, so a failed lookup keeps the seat looking occupied.
-async fn session_is_closing(
-    connection: &zbus::Connection,
-    path: &zbus::zvariant::OwnedObjectPath,
-) -> bool {
+async fn session_is_closing(connection: &zbus::Connection, path: &zbus::OwnedObjectPath) -> bool {
     let Ok(proxy) = zbus::Proxy::new(
         connection,
         "org.freedesktop.login1",
@@ -647,7 +925,6 @@ pub trait Gaze {
     async fn release(&self) -> zbus::Result<()>;
 
     async fn register_extension(&self, active: bool) -> zbus::Result<()>;
-    async fn is_extension_active(&self, uid: u32) -> zbus::Result<bool>;
 
     async fn verify_start(&self, face_name: &str) -> zbus::Result<()>;
     async fn verify_start_for(&self, face_name: &str, pam_service: &str) -> zbus::Result<()>;
@@ -665,7 +942,7 @@ pub trait Gaze {
     #[zbus(allow_interactive_auth)]
     async fn set_config_with_wallets(
         &self,
-        config: OwnedValue,
+        config: OwnedVariant,
         unlock_gnome_keyring: bool,
         unlock_kwallet: bool,
     ) -> zbus::Result<()>;
@@ -697,7 +974,7 @@ pub trait Gaze {
     #[zbus(allow_interactive_auth)]
     async fn set_config_with_keyring(
         &self,
-        config: OwnedValue,
+        config: OwnedVariant,
         unlock_gnome_keyring: bool,
     ) -> zbus::Result<()>;
 
@@ -748,6 +1025,133 @@ pub trait Gaze {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    struct TestBus {
+        process: std::process::Child,
+        address: String,
+        _directory: tempfile::TempDir,
+    }
+
+    impl TestBus {
+        fn new() -> Option<Self> {
+            use std::io::BufRead;
+            let directory = tempfile::tempdir().unwrap();
+            let address = format!("unix:path={}", directory.path().join("bus").display());
+            let process = std::process::Command::new("dbus-daemon")
+                .args([
+                    "--session",
+                    "--nofork",
+                    "--print-address=1",
+                    &format!("--address={address}"),
+                ])
+                .stdout(std::process::Stdio::piped())
+                .spawn();
+            let process = match process {
+                Ok(process) => process,
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                    eprintln!("SKIP: private-bus regression needs dbus-daemon");
+                    return None;
+                }
+                Err(error) => panic!("cannot start private bus: {error}"),
+            };
+            let mut bus = Self {
+                process,
+                address,
+                _directory: directory,
+            };
+            let mut published = String::new();
+            std::io::BufReader::new(bus.process.stdout.take().unwrap())
+                .read_line(&mut published)
+                .unwrap();
+            assert!(!published.trim().is_empty(), "private bus did not start");
+            Some(bus)
+        }
+    }
+
+    impl Drop for TestBus {
+        fn drop(&mut self) {
+            let _ = self.process.kill();
+            let _ = self.process.wait();
+        }
+    }
+
+    #[tokio::test]
+    async fn gaze_proxy_rejects_non_root_owners_and_pins_root_owners() {
+        let Some(bus) = TestBus::new() else { return };
+        let server = zbus::connection::Builder::address(bus.address.as_str())
+            .name("com.gundulabs.Gaze")
+            .build()
+            .await
+            .unwrap();
+        let client = zbus::connection::Builder::address(bus.address.as_str())
+            .build()
+            .await
+            .unwrap();
+        let result = trusted_gaze_proxy_on(&client).await;
+        if unsafe { libc::geteuid() } == 0 {
+            let proxy = result.unwrap();
+            assert_eq!(
+                proxy.inner().destination().as_str(),
+                server.unique_name().unwrap().as_str()
+            );
+            server.release_name("com.gundulabs.Gaze").await.unwrap();
+            client.request_name("com.gundulabs.Gaze").await.unwrap();
+            assert_eq!(
+                proxy.inner().destination().as_str(),
+                server.unique_name().unwrap().as_str()
+            );
+        } else {
+            assert!(result.unwrap_err().to_string().contains("uid 0"));
+        }
+    }
+
+    #[tokio::test]
+    async fn gaze_proxy_fails_closed_without_a_daemon_owner() {
+        let Some(bus) = TestBus::new() else { return };
+        let client = zbus::connection::Builder::address(bus.address.as_str())
+            .build()
+            .await
+            .unwrap();
+        assert!(trusted_gaze_proxy_on(&client).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn system_bus_address_ignores_caller_environment() {
+        if std::env::var_os("GAZE_TEST_SYSTEM_BUS_OVERRIDE").is_some() {
+            let _ = tokio::time::timeout(std::time::Duration::from_secs(2), connect_gaze()).await;
+            return;
+        }
+        let directory = tempfile::tempdir().unwrap();
+        let marker = directory.path().join("executed");
+        let socket = directory.path().join("untrusted-bus");
+        let listener = std::os::unix::net::UnixListener::bind(&socket).unwrap();
+        listener.set_nonblocking(true).unwrap();
+        for address in [
+            format!("unix:path={}", socket.display()),
+            format!("unixexec:path=/usr/bin/touch,argv1={}", marker.display()),
+        ] {
+            let result = std::process::Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "--exact",
+                    "dbus::tests::system_bus_address_ignores_caller_environment",
+                ])
+                .env("GAZE_TEST_SYSTEM_BUS_OVERRIDE", "1")
+                .env("DBUS_SYSTEM_BUS_ADDRESS", address)
+                .output()
+                .unwrap();
+            assert!(
+                result.status.success(),
+                "{}",
+                String::from_utf8_lossy(&result.stderr)
+            );
+            assert!(String::from_utf8_lossy(&result.stdout).contains("1 passed"));
+        }
+        assert!(
+            matches!(listener.accept(), Err(error) if error.kind() == std::io::ErrorKind::WouldBlock),
+            "connected to a caller-controlled bus"
+        );
+        assert!(!marker.exists(), "caller-controlled unixexec was executed");
+    }
 
     #[test]
     fn a_mis_framed_face_still_counts_as_a_detected_face() {
@@ -818,7 +1222,7 @@ mod tests {
         );
     }
 
-    #[derive(Clone, Debug, Serialize, Deserialize, Value, OwnedValue, Type)]
+    #[derive(Clone, Debug, Serialize, Deserialize, Variant, OwnedVariant, Type)]
     struct OldBenchmarkResult {
         component: String,
         mean_ms: f64,
@@ -829,14 +1233,12 @@ mod tests {
 
     fn benchmark_method_return<B>(body: &B) -> zbus::message::Message
     where
-        B: serde::Serialize + zvariant::DynamicType,
+        B: serde::Serialize + zbus::DynamicType,
     {
         zbus::message::Message::method_call("/com/gundulabs/Gaze", "Benchmark")
-            .expect("a valid path and member")
             .interface("com.gundulabs.Gaze")
-            .expect("a valid interface")
             .build(body)
-            .expect("the body serializes")
+            .expect("a valid message")
     }
 
     fn benchmark_result(requested_device: &str, fallback_reason: &str) -> BenchmarkResult {
@@ -890,7 +1292,7 @@ mod tests {
 
         assert_eq!(body.signature(), <Vec<BenchmarkResult> as Type>::SIGNATURE);
         assert!(
-            body.deserialize::<OwnedValue>().is_err(),
+            body.deserialize::<OwnedVariant>().is_err(),
             "a method reply body is the value itself, so reading it as a variant must fail"
         );
     }
@@ -926,33 +1328,33 @@ mod tests {
         assert_eq!(VerifyResult::VerifyNoMatch.as_ref(), "VerifyNoMatch");
     }
 
-    #[derive(Clone, Debug, Value, OwnedValue, Type)]
+    #[derive(Clone, Debug, Variant, OwnedVariant, Type)]
     struct OldStorage {
         encrypt_templates: bool,
     }
 
-    #[derive(Clone, Debug, Value, OwnedValue, Type)]
+    #[derive(Clone, Debug, Variant, OwnedVariant, Type)]
     struct OldConfig {
-        security: crate::config::SecurityLevel,
+        security: DbusSecurityLevel,
         cameras: DbusCameraConfig,
-        auth: crate::config::AuthConfig,
-        enrollment: crate::config::EnrollmentConfig,
-        liveness: crate::config::LivenessConfig,
+        auth: DbusAuthConfig,
+        enrollment: DbusEnrollmentConfig,
+        liveness: DbusLivenessConfig,
         storage: OldStorage,
     }
 
-    fn old_daemon_property() -> OwnedValue {
+    fn old_daemon_property() -> OwnedVariant {
         let old = OldConfig {
-            security: Default::default(),
+            security: SecurityLevel::default().into(),
             cameras: CameraConfig::default().into(),
-            auth: Default::default(),
-            enrollment: Default::default(),
-            liveness: Default::default(),
+            auth: AuthConfig::default().into(),
+            enrollment: EnrollmentConfig::default().into(),
+            liveness: LivenessConfig::default().into(),
             storage: OldStorage {
                 encrypt_templates: false,
             },
         };
-        OwnedValue::try_from(Value::from(old)).expect("old config converts to a value")
+        OwnedVariant::try_from(Variant::from(old)).expect("old config converts to a value")
     }
 
     #[test]
@@ -970,7 +1372,7 @@ mod tests {
             config.storage.unlock_gnome_keyring = false;
 
             let wire = DbusConfig::from(config);
-            let raw = OwnedValue::try_from(Value::from(wire)).unwrap();
+            let raw = OwnedVariant::try_from(Variant::from(wire)).unwrap();
             // A keyring-aware client sees the flag, so an inconsistent update is a real error.
             assert!(config_update_from_property(raw.try_clone().unwrap(), true).is_err());
             let updated = config_update_from_property(raw, false).unwrap();
@@ -987,7 +1389,7 @@ mod tests {
                 let mut config = Config::default();
                 config.liveness.enabled = liveness;
                 config.storage.encrypt_templates = encryption;
-                let raw = OwnedValue::try_from(DbusConfig::from(config)).unwrap();
+                let raw = OwnedVariant::try_from(DbusConfig::from(config)).unwrap();
                 let updated = config_update_from_property(raw, true);
                 assert_eq!(updated.is_ok(), liveness && encryption);
                 if let Ok(updated) = updated {
@@ -1001,7 +1403,7 @@ mod tests {
     fn the_ir_frame_size_stays_off_the_legacy_config_wire() {
         let mut config = Config::default();
         config.cameras.set_ir_frame_size(Some((340, 340)));
-        let raw = OwnedValue::try_from(DbusConfig::from(config)).unwrap();
+        let raw = OwnedVariant::try_from(DbusConfig::from(config)).unwrap();
         let decoded = config_from_property(raw)
             .expect("no error")
             .expect("current layout is readable");
@@ -1010,7 +1412,8 @@ mod tests {
 
     #[test]
     fn current_layout_decodes() {
-        let raw = OwnedValue::try_from(Value::from(DbusConfig::from(Config::default()))).unwrap();
+        let raw =
+            OwnedVariant::try_from(Variant::from(DbusConfig::from(Config::default()))).unwrap();
         let decoded = config_from_property(raw)
             .expect("no error")
             .expect("current layout is readable");
@@ -1109,5 +1512,22 @@ mod tests {
         let err = zbus::Error::Failure("camera unavailable".to_string());
         assert!(!dbus_is_not_activatable(&err));
         assert!(!dbus_is_unknown_method(&err));
+    }
+
+    #[test]
+    fn daemon_state_treats_a_restart_loop_as_failed() {
+        use DaemonState::*;
+        let state = DaemonState::from_unit;
+        assert_eq!(state("loaded", "activating", "start", "enabled"), Starting);
+        assert_eq!(state("loaded", "active", "running", "enabled"), Starting);
+        assert_eq!(
+            state("loaded", "activating", "auto-restart", "enabled"),
+            Failed
+        );
+        assert_eq!(state("loaded", "failed", "failed", "enabled"), Failed);
+        assert_eq!(state("loaded", "inactive", "dead", "disabled"), Disabled);
+        assert_eq!(state("masked", "inactive", "dead", "masked"), Disabled);
+        assert_eq!(state("loaded", "inactive", "dead", "enabled"), Stopped);
+        assert_eq!(state("not-found", "inactive", "dead", ""), NotInstalled);
     }
 }

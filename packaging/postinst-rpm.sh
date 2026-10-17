@@ -51,7 +51,15 @@ is_suse() {
 configure_pam_suse() {
 	# Only SUSE builds install this vendor definition.
 	command -v pam-config >/dev/null 2>&1 || return 0
+	[ -e /etc/gaze/pam.optout ] && return 0
 	[ -f /usr/lib/pam-config.d/gaze.conf ] || return 0
+
+	# pam-config always writes pam_unix as required, so the retry line could never rescue a
+	# rejected password, only announce "Face Verified." before sudo refused. pam-config reads
+	# its state back from this file, so dropping the line is what disables it.
+	if [ -f /etc/pam.d/common-auth-pc ] && grep -q 'pam_gaze\.so[[:space:]]\{1,\}retry' /etc/pam.d/common-auth-pc; then
+		sed -i '/pam_gaze\.so[[:space:]]\{1,\}retry/d' /etc/pam.d/common-auth-pc
+	fi
 
 	# Preserve an active mode on upgrades, otherwise enable sequential mode.
 	# Query status is always zero, so detect the auth: output.

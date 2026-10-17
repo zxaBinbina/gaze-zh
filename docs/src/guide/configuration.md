@@ -8,6 +8,12 @@ Gaze is configured with `/etc/gaze/config.toml`.
 The defaults work for many setups. Common adjustments include choosing a camera
 source or changing the security level.
 
+GUI and `gaze config` changes are applied live after validation and model preparation.
+A successful update cancels active capture and waits for its threads to stop before
+publishing the new settings and models. Failed preparation leaves the current run alone.
+Manual file edits, including `[duress]`, take effect after `sudo systemctl restart gazed`;
+the running daemon keeps its applied configuration if the file is edited or removed.
+
 ::: tip Editing config requires admin privileges
 The daemon requires authorization before saving changes. `gaze config` prompts
 for your password through `sudo`, while `gaze config --show` is read-only and
@@ -54,7 +60,7 @@ threshold = 0.8
 max_seconds = 2.0
 
 [storage]
-encrypt_templates = false
+encrypt_templates = true
 unlock_kwallet = false # optional TPM-backed KDE wallet unlock
 unlock_gnome_keyring = false
 
@@ -75,7 +81,14 @@ after upgrading.
 
 ## Select the inference device
 
-Gaze always loads its `.onnx` models through ONNX Runtime.
+Gaze always loads its `.onnx` models through ONNX Runtime. Cached models are
+checksum-verified; corrupt files trigger a fresh download, and replacements are
+published atomically after verification.
+
+RGB and IR use separate detector sessions. IR detector and recognizer sessions are
+loaded only when `cameras.ir` is configured. Each ONNX Runtime session uses at most
+two intra-op threads, sequential graph execution, and no thread-pool spinning;
+accelerator providers may manage additional threads of their own.
 
 The default uses the ONNX Runtime CPU execution provider:
 
@@ -133,6 +146,11 @@ Practical guidance:
 - `high`: use when false positives are unacceptable
 - `low`: use on weaker hardware when speed is critical
 
+Templates only match the recognizer that enrolled them. After switching between
+a MobileFaceNet level and a ResNet50 level, re-enroll your faces. Until you do,
+those faces show 0 templates and face login falls back to your password.
+Switching back to the original recognizer makes the old templates usable again.
+
 ### Custom level
 
 ```toml
@@ -162,10 +180,11 @@ To get the policy the table lists for a level, omit `hybrid_policy` entirely.
 The key is only read when `level = "custom"`, and a custom level with the key
 absent also resolves to `fallback_on_dark`.
 
-Both `fallback_on_dark` and `default` require RGB and IR to match when RGB was
-never attempted at all, for example when the RGB camera could not be opened.
-Only a frame that was captured and measured as too dark relaxes the requirement
-to IR alone.
+Both `fallback_on_dark` and `default` relax the requirement to IR alone when RGB
+was captured and measured as too dark, or when the RGB camera cannot be used,
+for example because a video call already holds it. In that case Gaze logs the
+camera error and keeps going with IR instead of falling back to your password.
+`and` still fails, since it always needs both spectra.
 
 ## Select a camera source
 
@@ -243,6 +262,22 @@ When you configure an IR camera alongside RGB, Gaze captures templates from both
 during enrollment, then combines their results during verification according to
 the configured `hybrid_policy`.
 
+### IR only
+
+To authenticate with the IR camera alone and never open the RGB camera, set
+`rgb` to an empty string. Commenting the key out is not enough, because a
+missing `rgb` means `"primary"`.
+
+```toml
+[cameras]
+rgb = ""
+ir = "/dev/video2"
+```
+
+In the GUI, pick **None (IR only)** as the RGB camera source. `gaze config`
+offers the same choice. Your profile needs IR templates, so enroll (or add
+captures) after switching. `hybrid_policy` has no effect with one camera.
+
 ### IR frame size override
 
 Some laptop IR cameras advertise several resolutions but only stream valid frames
@@ -260,7 +295,7 @@ ir_frame_height = 340
 - Set both keys or neither. Each must be between 1 and 4096. Leave them out to
   let Gaze negotiate the size, which is the default.
 - If the camera cannot open at the forced size, Gaze logs a warning and falls back
-  to negotiating the size, so a wrong value never leaves face auth without a camera.
+  to negotiating the size, so a wrong value never leaves face authentication without a camera.
 - The override applies only to the IR camera. On Dell and Realtek modules that
   Gaze forces into 640x480 YUY2 mode, it replaces that 640x480.
 - In the GUI, turn on **IR Frame Size Override** under Hardware.
@@ -339,9 +374,9 @@ start_delay_ms = 0
 start_delay_scope = "screen_lock"
 ```
 
-`abort_if_ssh` asks logind whether the D-Bus caller's session is remote, falling back to the caller process environment and ancestry where logind is unreachable. `abort_if_lid_closed` reads ACPI lid state when available and is ignored on systems without a lid sensor.
+`abort_if_ssh` asks logind whether the D-Bus caller's session is remote, falling back to the caller process environment and ancestry where logind is unreachable. `abort_if_lid_closed` reads ACPI lid state when available and is ignored on systems without a lid sensor. When logind is configured to suspend on lid close, a closed lid holds the attempt for up to 3 seconds instead of refusing it outright: if the suspend starts, face authentication resumes after wake rather than failing in the locker that came up on lid close. See [Suspend during an attempt](/guide/how-it-works#suspend-during-an-attempt).
 
-Aborting face authentication when you type a password is not a key in this file. It is a property of the PAM stack: [simultaneous mode](/guide/pam#what-gaze-installs) (`pam_gaze.so simultaneous`) stands Gaze down as soon as you submit a password, and [retry mode](/guide/pam#retry-after-a-rejected-password) (`pam_gaze.so retry`) gives face auth one more attempt if that password turns out to be wrong.
+Aborting face authentication when you type a password is not a key in this file. It is a property of the PAM stack: [simultaneous mode](/guide/pam#what-gaze-installs) (`pam_gaze.so simultaneous`) stands Gaze down as soon as you submit a password, and [retry mode](/guide/pam#retry-after-a-rejected-password) (`pam_gaze.so retry`) gives face authentication one more attempt if that password turns out to be wrong.
 
 `abort_before_first_resume` refuses face authentication until the machine has suspended and woken at least once, so the first authentication of a boot always falls through to the password. On GNOME that password is what unlocks the login keyring; authenticating with your face instead leaves the keyring locked and GNOME asks for the password again a moment later. With this enabled you type the password once at the GDM login and then unlock with your face for the rest of the session.
 
@@ -355,15 +390,15 @@ With the standard sequential `pam_gaze` mode (e.g. `sudo`, `gdm-face`):
 - In a text-based (TTY) environment such as `sudo` in a terminal, it asks for text confirmation after the face match ("Press Enter to confirm, Esc to cancel").
 - On the GNOME lock screen, GDM login screen, and unified Cinnamon lock screen (with the Gaze Extension active), it shows "Face Verified. Press Enter to confirm." below the password field (or presents a dedicated "Confirm Face Unlock" button); press Enter or click the button to confirm. If the extension is inactive, the login is denied, because the extension is the expected confirmation channel on GNOME and Gaze will not silently skip the confirmation you asked for.
 - Where there is no controlling terminal but the PAM conversation can still prompt (e.g. `hyprlock`), it asks "Face Verified. Type 'yes' to confirm." An empty answer never counts as consent there: hosts that answer unknown prompts with `""` would otherwise auto-confirm without the user doing anything.
-- On the KDE lock screen biometric slots (`kde-fingerprint`, `kde-smartcard`) and the `plasmalogin-fingerprint` greeter helper, there is no channel that could answer at all, so the face match unlocks on its own and `require_confirmation_lock_screen` is silently ignored there by design. Asking would not reach anybody: the greeter never delivers a response to a noninteractive slot, so the request would hang that slot for the rest of the lock. `gaze doctor` warns when the toggle is on and one of those slots is wired. If you want the confirmation step enforced on a surface that can show a dialog, use simultaneous mode (`pam_gaze.so simultaneous`).
-- A **login greeter** is the exception: it never bypasses. GDM always runs GNOME with the Gaze Extension, so confirmation is enforced there or the login is denied.
+- KDE's biometric slots (`kde-fingerprint`, `kde-smartcard`, `plasmalogin-fingerprint`) and the SDDM/Plasma Login Manager login forms cannot answer a confirmation prompt. When `require_confirmation_lock_screen` is enabled, Gaze returns `PAM_IGNORE` before scanning and leaves password authentication available instead of bypassing confirmation. `gaze doctor` warns about this fallback. Use a surface that can show a confirmation dialog, or explicitly disable the toggle if unconfirmed face unlock is intended.
+- GDM runs GNOME with the Gaze Extension, so confirmation is enforced there or the login is denied.
 
 A "text-based (TTY) environment" means Gaze can open the process's controlling terminal (`/dev/tty`), which is how `sudo` itself finds the terminal to prompt on. Redirected standard input does not change that, so `echo 1 | sudo tee /tmp/1` still confirms from the keyboard. When there is no controlling terminal at all (a management console such as Cockpit that drives PAM over a framed stdio protocol, or a service started without one), nobody can press a key, so Gaze neither prints a terminal banner nor waits for one; the face match is refused and the stack falls through to the password.
 
-Callers that set the PAM `PAM_SILENT` flag, `sudo` among them, receive no messages through their own conversation. Gaze still writes the camera prompt and the verdict to the controlling terminal when there is one, so a terminal user keeps the "Please look at the camera" / "Face Verified." feedback; graphical callers with no terminal stay silent.
+Callers that set the PAM `PAM_SILENT` flag, `sudo` among them, receive no messages through their own conversation. For the terminal services (`sudo`, `su`, `doas`, `login`) Gaze still writes the camera prompt and the verdict to the controlling terminal, so a terminal user keeps the "Please look at the camera" / "Face Verified." feedback. Other callers, including a lock screen that happens to have inherited a terminal, never get terminal output or a terminal confirmation; they confirm through their own dialog instead.
 
 With simultaneous mode (`pam_gaze.so simultaneous`):
-- The password prompt still comes up immediately so you are never blocked.
+- In terminal services (`sudo`, `su`, `doas`, `login`) and polkit dialogs, the password prompt comes up immediately so you are never blocked. Lock screens and greeters answer prompts in a way Gaze cannot withdraw, so there the scan runs first and the password is asked for afterwards, exactly as in sequential mode.
 - If face verification succeeds before you finish entering your password:
   - In a text-based (TTY) environment, it cancels the password prompt and asks for text confirmation ("Press Enter to confirm, Esc to cancel").
   - In a graphical Polkit environment:
@@ -418,7 +453,7 @@ Four things to keep in mind:
 - The scope is only honored by a daemon new enough to know about it. Package upgrades restart `gazed` if it was already running, but if you built or installed Gaze some other way and the old daemon is still live, the delay keeps applying to every prompt. Run `sudo systemctl restart gazed` if `screen_lock` appears to be ignored.
 - On resume from suspend, Gaze waits for whichever of `start_delay_ms` and `resume_grace_ms` is longer. The two do not stack.
 - `resume_grace_ms` ignores `start_delay_scope`. It exists so the display can repaint after suspend, which has nothing to do with which prompt is asking, so it still applies to the first authentication after a resume whatever that prompt is.
-- With a sequential PAM stack (`hyprlock-gaze`, the default), `pam_gaze.so` runs before the password module, so the delay also postpones the point at which a typed password is accepted. You can type during the delay, but your first Enter may be consumed while PAM is still inside Gaze, requiring a second press. This is the same behavior as the existing wait while a face scan is in progress. The simultaneous stack (`hyprlock-gaze-simultaneous`) prompts for the password in parallel and avoids it.
+- With a sequential PAM stack (`hyprlock-gaze`, the default), `pam_gaze.so` runs before the password module, so the delay also postpones the point at which a typed password is accepted. You can type during the delay, but your first Enter may be consumed while PAM is still inside Gaze, requiring a second press. This is the same behavior as the existing wait while a face scan is in progress. The simultaneous stack (`hyprlock-gaze-simultaneous`) does not avoid it: on a lock screen simultaneous mode also scans before it asks for the password.
 
 After updating the configuration, restart the daemon to apply the changes:
 
@@ -438,9 +473,10 @@ Models are auto-downloaded on first run if missing.
 
 ## Encrypt face templates with the TPM
 
-By default, enrolled face embeddings are stored as plaintext files under
-`/var/lib/gaze/users` (readable only by root). On a machine with a TPM 2.0 chip
-you can additionally encrypt them at rest:
+Template encryption defaults to **on** for new installations and configurations
+that omit this setting. It requires a usable TPM 2.0 chip. Existing configurations
+that explicitly set `encrypt_templates = false` remain opted out; their embeddings
+are plaintext under `/var/lib/gaze/users`, readable only by root. To enable encryption:
 
 ```toml
 [storage]
@@ -449,32 +485,87 @@ encrypt_templates = true
 
 When enabled, `gazed` seals a random AES-256 key to the TPM and stores every
 embedding AES-256-GCM encrypted under it. The sealed key lives in
-`/var/lib/gaze/tpm` and can only be unsealed by **this** TPM, so a stolen disk
-(or a backup restored on another machine) yields nothing usable.
+`/var/lib/gaze/tpm/dek.blob` and can only be unsealed by **this** TPM, so a stolen
+disk (or a backup restored on another machine) cannot be decrypted without access
+to that TPM. The `GZE2` format also authenticates the account name and embedding
+filename, including its RGB/IR suffix: moving ciphertext to another account or
+changing its spectrum makes authentication fail. Face labels can still be renamed
+without re-encryption. This does not protect against privileged code on the running
+machine, account-name reuse, or replay of an older valid template for the same account.
 
 Behavior to be aware of:
 
 - **Fail-closed.** If `encrypt_templates = true` but no usable TPM is found, the
   daemon refuses to start rather than silently writing unprotected biometrics.
   Check `journalctl -u gazed` and either fix the TPM (e.g. enable it in firmware)
-  or set the flag back to `false`.
+  or explicitly set the flag to `false` to accept plaintext storage. Disabling
+  template encryption also disables keyring/wallet unlock, which requires encryption.
 - **Machine binding only.** The key is sealed to the TPM's storage hierarchy
   with no PCR policy, so firmware, kernel, and Secure Boot updates do **not**
   lock you out. It protects against the disk leaving the machine, not against
-  boot-chain tampering on the machine itself.
-- **Automatic migration.** Edit the flag in `/etc/gaze/config.toml` and restart
-  the daemon. Turning it on encrypts any existing plaintext templates in place;
-  turning it off decrypts them back to plaintext, which also needs the TPM that
-  sealed them.
+  boot-chain tampering on the machine itself. Daemon startup, credential enrollment,
+  and `gaze doctor` warn if state storage appears unencrypted or its encryption
+  cannot be verified. Detection is best effort: visible dm-crypt backing paths are
+  recognized; inaccessible sysfs, network, overlay, or unsupported storage layouts
+  produce an unknown-status warning. Full-disk encryption must cover the state
+  storage, not just your home directory. Root can still recover secrets after unlock.
+- **Explicit migration.** Enabling encryption through `gaze config` or the GUI
+  explicitly migrates the existing plaintext store. If you enable it by hand-editing
+  the file, or upgrade an older plaintext or mixed-format store, run the maintenance
+  procedure below. Startup never silently encrypts planted plaintext or rebinds
+  legacy ciphertext. Turning encryption off decrypts current-format templates,
+  which also needs the TPM that sealed them. Migration stages a complete replacement
+  store and atomically exchanges directories, so it needs enough free space for a
+  second copy and a filesystem supporting atomic directory exchange. Unsupported
+  filesystems fail without publishing a partial conversion. A failed live config
+  save restores the old store.
+- **Legacy encrypted templates.** Older `GZE1` ciphertext has no account binding
+  and is never accepted for matching or automatically rebound during normal startup.
+  Follow the explicit maintenance procedure below, or remove the old templates and
+  re-enroll.
 - **TPM reset.** If the TPM is cleared, the sealed key (and therefore the
-  encrypted templates) becomes unrecoverable. Delete `/var/lib/gaze/tpm` and
-  re-enroll. The daemon will not start with sealed data it can no longer unseal.
+  encrypted templates) becomes unrecoverable. Archive or remove the unreadable
+  template store and stale `/var/lib/gaze/tpm`, then re-enroll. The daemon will not
+  start with a sealed key it can no longer unseal.
 
 Apply changes with:
 
 ```bash
 sudo systemctl restart gazed
 ```
+
+### Upgrade legacy encrypted templates
+
+Use this procedure for older encrypted, plaintext, or mixed-format templates when
+enabling encryption by editing the config or upgrading an omitted storage setting.
+Only migrate a store whose existing account-directory ownership you trust. Legacy
+encryption cannot prove that a template has not already been moved between users;
+if in doubt, re-enroll instead. Keep a protected backup of both `/var/lib/gaze/users`
+and `/var/lib/gaze/tpm` before migrating, and retain a working password login.
+
+```bash
+sudo systemctl stop gazed
+sudo gazed --migrate-legacy-templates
+sudo systemctl start gazed
+```
+
+The maintenance command does not load camera/inference models. A process lock
+prevents it from running concurrently with the daemon. It validates all encrypted
+records and binds plaintext inputs before publishing one complete owner-bound store; failed staging leaves
+the original store intact. After a successful upgrade, the command is not needed
+again. Normal startup still rejects any plaintext or legacy ciphertext introduced later.
+
+The old `dek.pub` / `dek.priv` key pair is upgraded automatically to a single
+owner-only `dek.blob` after successful unsealing. An incomplete legacy pair is an
+error, not permission to create a replacement key: restore the missing blob from
+backup. A malformed bundle never falls back to the old files.
+
+Enrollment likewise publishes a fully synced batch before evicting old templates.
+Interrupted staging and deletion directories are excluded from matching and cleaned
+on startup. Names beginning with `.gaze-` are reserved for internal storage;
+pre-existing labels with that prefix must be renamed or removed before migration,
+not silently discarded. If storage rollback itself fails, matching and mutations fail closed
+until restart; both complete store copies are retained for recovery.
 
 ## Unlock GNOME Keyring after a GDM or greetd face login
 
@@ -564,14 +655,14 @@ How it works:
 - A matched frame where either eye is closed never unlocks. That alone means a blink cannot let a coerced unlock through.
 - If an eye stays closed for `hold_ms`, Gaze rejects the attempt and locks face authentication for that user. While locked, face unlock reports itself as unavailable and falls straight through to the password prompt without touching the camera.
 - The lock is stored in `/var/lib/gaze/duress`, so a reboot or daemon restart does not clear it.
-- It clears after a successful login that did not use your face, such as your password, on any service where `pam_gaze.so` is in the auth stack (including the `gdm-password`, KDE, and sudo stacks Gaze installs into). Network logins such as SSH or IMAP do not clear it. You can also clear it with `gaze duress --clear`, which requires fresh administrator authentication.
+- It clears after a successful login that did not use your face, such as your password, on a service that runs as root with `pam_gaze.so` in its auth stack: the login greeters (`gdm-password`, SDDM, LightDM, greetd), `login`, `sudo`, `su` and polkit. Lock screens that run as you (hyprlock, swaylock, the KDE lock screen) cannot clear it, because the daemon cannot tell that a password was used there; unlock with your password and then run `sudo -v`, or log in again. Network logins such as SSH or IMAP do not clear it. You can also clear it with `gaze duress --clear`, which requires fresh administrator authentication.
 
 Settings:
 
 - `closed_threshold` is the classifier's closed-eye probability (0.5 to 0.99) needed to count an eye as shut. Lower it if a deliberate wink is missed; raise it if squinting or laughing trips it.
 - `hold_ms` is how long (0 to 5000 ms) the eye must stay shut. A normal blink takes 100 to 400 ms.
 
-The duress table lives only in `/etc/gaze/config.toml`. The GUI and `gaze config` leave it untouched, and the daemon reads it at the start of every face auth, so no restart is needed.
+The duress table lives only in `/etc/gaze/config.toml`. The GUI and `gaze config` leave it untouched. Restart with `sudo systemctl restart gazed` after editing it.
 
 Limits to be aware of:
 

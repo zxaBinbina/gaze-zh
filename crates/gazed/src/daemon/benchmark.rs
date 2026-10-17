@@ -44,42 +44,38 @@ pub(super) fn benchmark_component(
 }
 
 pub(super) fn run_inference_benchmark(
-    detector: Arc<std::sync::Mutex<FaceDetector>>,
-    recognizer_rgb: Arc<Mutex<FaceRecognizer>>,
-    recognizer_ir: Arc<Mutex<FaceRecognizer>>,
+    sessions: ModelSessions,
     liveness: Arc<Mutex<Option<LivenessDetector>>>,
 ) -> fdo::Result<Vec<gaze_core::dbus::BenchmarkResult>> {
     let mut results = Vec::new();
-
-    {
-        let mut detector = detector.lock().unwrap_or_else(|e| e.into_inner());
-        let runtime = detector.inference_runtime().clone();
-        let result = benchmark_component("人脸检测器", &runtime, || {
-            Ok(detector.benchmark_infer()?)
-        })
-        .map_err(|e| fdo::Error::Failed(format!("检测器性能测试失败：{e}")))?;
-        results.push(result);
-    }
-
     let synthetic_face = image::RgbImage::from_pixel(112, 112, image::Rgb([128, 128, 128]));
 
+    for (spectrum, models) in std::iter::once(("RGB", sessions.rgb))
+        .chain(sessions.ir.into_iter().map(|models| ("IR", models)))
     {
-        let mut recognizer = recognizer_rgb.blocking_lock();
+        {
+            let mut detector = models.detector.lock().unwrap_or_else(|e| e.into_inner());
+            let runtime = detector.inference_runtime().clone();
+            let label = if spectrum == "RGB" {
+                "Face detector"
+            } else {
+                "Face detector (IR)"
+            };
+            let result = benchmark_component(label, &runtime, || Ok(detector.benchmark_infer()?))
+                .map_err(|e| {
+                fdo::Error::Failed(format!("{spectrum} detector benchmark failed: {e}"))
+            })?;
+            results.push(result);
+        }
+        let mut recognizer = models.recognizer.blocking_lock();
         let runtime = recognizer.inference_runtime().clone();
-        let result = benchmark_component("人脸识别器（RGB）", &runtime, || {
-            recognizer.get_embedding(&synthetic_face).map(|_| ())
-        })
-        .map_err(|e| fdo::Error::Failed(format!("RGB 识别器性能测试失败：{e}")))?;
-        results.push(result);
-    }
-
-    {
-        let mut recognizer = recognizer_ir.blocking_lock();
-        let runtime = recognizer.inference_runtime().clone();
-        let result = benchmark_component("人脸识别器（红外）", &runtime, || {
-            recognizer.get_embedding(&synthetic_face).map(|_| ())
-        })
-        .map_err(|e| fdo::Error::Failed(format!("红外识别器性能测试失败：{e}")))?;
+        let result =
+            benchmark_component(&format!("Face recognizer ({spectrum})"), &runtime, || {
+                recognizer.get_embedding(&synthetic_face).map(|_| ())
+            })
+            .map_err(|e| {
+                fdo::Error::Failed(format!("{spectrum} recognizer benchmark failed: {e}"))
+            })?;
         results.push(result);
     }
 
@@ -87,10 +83,10 @@ pub(super) fn run_inference_benchmark(
         let mut liveness_guard = liveness.blocking_lock();
         if let Some(detector) = liveness_guard.as_mut() {
             let runtime = detector.inference_runtime().clone();
-            let result = benchmark_component("活体检测（MiniFASNet）", &runtime, || {
+            let result = benchmark_component("Liveness (MiniFASNet)", &runtime, || {
                 detector.live_score(&synthetic_face).map(|_| ())
             })
-            .map_err(|e| fdo::Error::Failed(format!("活体检测性能测试失败：{e}")))?;
+            .map_err(|e| fdo::Error::Failed(format!("liveness benchmark failed: {e}")))?;
             results.push(result);
         }
     }

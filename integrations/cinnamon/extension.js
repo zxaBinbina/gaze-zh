@@ -22,10 +22,6 @@ const GAZE_DBUS_INTERFACE = `
     <method name="RegisterExtension">
       <arg name="active" type="b" direction="in"/>
     </method>
-    <method name="IsExtensionActive">
-      <arg name="uid" type="u" direction="in"/>
-      <arg name="active" type="b" direction="out"/>
-    </method>
     <method name="HasEnrolledFaces">
       <arg name="username" type="s" direction="in"/>
       <arg name="result" type="b" direction="out"/>
@@ -729,6 +725,12 @@ class GazeCinnamonExtension {
               hintText = request.replace(/: *$/, "").trim();
             }
           }
+
+          if (this._confirmMode) {
+            this._confirmMode = false;
+            this._infoMessageLabel?.hide();
+          }
+          this._passwordBox?.show();
 
           if (this._passwordEntry) {
             this._passwordEntry.hint_text = hintText;
