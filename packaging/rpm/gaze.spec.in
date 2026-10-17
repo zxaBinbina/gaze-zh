@@ -16,7 +16,9 @@
 # Built with -Cdebuginfo=0, so there is nothing to split out.
 %global debug_package %{nil}
 
-Name:           gaze
+Name:           gaze-zh
+Conflicts:       gaze
+Obsoletes:       gaze
 Version:        ${VERSION}
 Release:        ${PACKAGE_RELEASE}%{?dist}
 Summary:        Daemon, CLI, and PAM integration for Gaze

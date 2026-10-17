@@ -139,7 +139,9 @@ def main():
 %global __os_install_post %{nil}
 %global __provides_exclude_from ^/usr/lib(64)?/(gaze|gaze-krdp-fix)/.*$
 %global __requires_exclude ^libonnxruntime\\.so.*$
-Name: gaze
+Name: gaze-zh
+Conflicts: gaze
+Obsoletes: gaze
 Version: ''' + version + '\nRelease: ' + args.release + '''%{?dist}
 Summary: Chinese Gaze with GUI, KDE integration and KRDP fixes
 License: GPL-3.0-or-later AND GPL-2.0-or-later AND BSD-2-Clause AND BSD-3-Clause AND LGPL-2.0-or-later AND (LGPL-2.1-only OR LGPL-3.0-only OR LicenseRef-KDE-Accepted-LGPL)
@@ -181,7 +183,7 @@ cp -a "%{_topdir}/payload/." %{buildroot}/
     run('rpmbuild', '-bb', '--define', f'_topdir {work}', '--define', f'_rpmdir {packages}',
         '--define', f'_tmppath {work}/tmp', spec_path)
     release = args.release + output('rpm', '--eval', '%{?dist}')
-    rpm = packages / 'x86_64' / f'gaze-{version}-{release}.x86_64.rpm'
+    rpm = packages / 'x86_64' / f'gaze-zh-{version}-{release}.x86_64.rpm'
     run('rpm', '-K', rpm)
     # All requirements must be available on this build host or provided by the RPM itself.
     provides = set(output('rpm', '-qp', '--provides', rpm).splitlines())

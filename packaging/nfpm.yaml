@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: 2026 Gundu Labs
 # SPDX-License-Identifier: GPL-3.0-or-later
 
-name: "gaze"
+name: "gaze-zh"
 arch: "${ARCH}"
 platform: "linux"
 version: "${VERSION}"
@@ -13,6 +13,13 @@ description: "Daemon, CLI, and PAM integration for Gaze"
 vendor: "Gundu Labs"
 homepage: "https://gaze.gundulabs.com"
 license: "GPL-3.0-or-later"
+
+# The fork installs the same runtime paths as upstream Gaze. Make package
+# managers replace the upstream package instead of attempting a file collision.
+replaces:
+  - gaze
+conflicts:
+  - gaze
 
 contents:
   - src: "target/release/onnxruntime-LICENSE"

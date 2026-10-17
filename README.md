@@ -30,25 +30,25 @@ Gaze 把面部识别认证带到 Linux：设备端本地面部识别、PAM 集�
 - **中文提示**：PAM 认证过程的提示信息全面中文化，终端与锁屏上的交互更亲切。
 - **KRDP 免打扰**：KDE 远程桌面（KRDP）连接建立时跳过本机人脸扫描，远程会话不再误触发本机认证弹窗。
 - **KRDP 6.7.5 画面冻结修复**：补齐帧暂停/恢复确认、累计确认与帧编号回绕处理，修复 Windows App 连接约 4 秒后画面冻结的问题。
-- **合并 RPM**：守护进程、CLI、GUI、KDE 集成、两个 PAM 模块与 KRDP 修复合并为单个 RPM，面向 Fedora 44 x86_64 单包安装。
+- **中文版软件包（gaze-zh）**：合并守护进程、CLI、GUI、KDE 集成、两个 PAM 模块与 KRDP 修复；通过 GitHub Releases 持续发布 rpm / deb / Arch 等格式的多发行版安装包。
 
 详见 [docs/krdp-fix.md](docs/krdp-fix.md)。
 
 ## 安装
 
-**中文版用户（Fedora 44 x86_64）**：一键安装——脚本自动从 Releases 下载最新合并 RPM 并安装（其他发行版会自动转用官方安装器）：
+**推荐一键安装**：脚本优先在 Releases 中查找与你系统、架构匹配的中文版软件包（包名 `gaze-zh`，含中文提示与 KRDP 修复）并自动安装；暂无适配的安装包时，自动转用官方安装器：
 
 ```bash
 curl -fsSL https://zxabinbina.cc.cd/projects/gaze/install.sh | sh
 ```
 
-也可以从 [Releases 页面](https://github.com/zxaBinbina/gaze-zh/releases)手动下载合并 RPM 后安装：
+也可以从 [Releases 页面](https://github.com/zxaBinbina/gaze-zh/releases)手动下载安装包后安装，例如 Fedora 系：
 
 ```bash
-sudo dnf install ./gaze-*.rpm
+sudo dnf install ./gaze-zh-*.rpm
 ```
 
-合并包包含守护进程、CLI、GUI、KDE 集成、两个 PAM 模块以及 KRDP 修复（中文提示、KRDP 免打扰与画面冻结修复）；组件清单、构建与回退方式见 [docs/krdp-fix.md](docs/krdp-fix.md)。
+中文版软件包包含守护进程、CLI、GUI、KDE 集成、两个 PAM 模块以及 KRDP 修复（中文提示、KRDP 免打扰与画面冻结修复）；组件清单、构建与回退方式见 [docs/krdp-fix.md](docs/krdp-fix.md)。
 
 **其他发行版**（Ubuntu、Debian、Arch、openSUSE 等）可使用官方一行命令安装器，它会配置 Gaze 守护进程、CLI 与图形界面：
 
@@ -84,7 +84,7 @@ suite="$(. /etc/os-release && echo "${VERSION_CODENAME:-$UBUNTU_CODENAME}")"
 echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/gundulabs-archive-keyring.gpg] https://packages.gundulabs.com/deb $suite main" \
   | sudo tee /etc/apt/sources.list.d/gundulabs.list >/dev/null
 sudo apt update
-sudo apt install gaze gaze-gui
+sudo apt install gaze-zh gaze-gui
 ```
 
 **Fedora 及兼容 DNF 的系统**
@@ -101,7 +101,7 @@ repo_gpgcheck=1
 gpgkey=https://packages.gundulabs.com/keys/gundulabs-repo.asc
 EOF
 sudo dnf makecache
-sudo dnf install gaze gaze-gui
+sudo dnf install gaze-zh gaze-gui
 ```
 
 **Fedora OSTree（Silverblue / Bazzite / Kinoite）**
@@ -116,7 +116,7 @@ gpgcheck=1
 repo_gpgcheck=1
 gpgkey=https://packages.gundulabs.com/keys/gundulabs-repo.asc
 EOF
-sudo rpm-ostree install gaze gaze-gui
+sudo rpm-ostree install gaze-zh gaze-gui
 ```
 
 **通过 Copr 安装 Fedora 版**（与上面的仓库二选一，不要同时启用）
@@ -124,7 +124,7 @@ sudo rpm-ostree install gaze gaze-gui
 ```bash
 sudo dnf install dnf-plugins-core
 sudo dnf copr enable gundulabs/gaze
-sudo dnf install gaze gaze-gui
+sudo dnf install gaze-zh gaze-gui
 ```
 
 **openSUSE Tumbleweed（x86_64）**
@@ -142,7 +142,7 @@ gpgcheck=1
 gpgkey=https://packages.gundulabs.com/keys/gundulabs-repo.asc
 EOF
 sudo zypper refresh
-sudo zypper install gaze gaze-gui
+sudo zypper install gaze-zh gaze-gui
 ```
 
 **Arch / Manjaro / CachyOS**
@@ -314,6 +314,14 @@ just build-rust
 # 打包
 just package <deb | rpm | archlinux>
 ```
+
+要在本地一次构建所有发行版安装包，运行：
+
+```bash
+scripts/build-all-packages.sh --clean
+```
+
+脚本会把 `.deb`、`.rpm` 和 `.pkg.tar.zst` 写入 `dist/packages/`。也可以用 `--format deb`、`--format rpm` 或 `--format archlinux` 只构建一种格式；默认版本取自根目录 `Cargo.toml`，可用 `--version` 覆盖。脚本需要当前主机已经安装对应的编译依赖；跨发行版构建建议使用 GitHub Actions 的 `Packages and Release` 工作流。
 
 更多内容见[开发指南](https://zxabinbina.cc.cd/projects/gaze/guide/development)。
 

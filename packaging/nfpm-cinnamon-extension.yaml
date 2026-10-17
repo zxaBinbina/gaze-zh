@@ -43,7 +43,7 @@ depends:
 overrides:
   deb:
     recommends:
-      - gaze
+      - gaze-zh
   rpm:
     recommends:
-      - gaze
+      - gaze-zh

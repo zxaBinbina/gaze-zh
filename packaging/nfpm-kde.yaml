@@ -44,17 +44,17 @@ overrides:
 ${KCM_DEPENDS}
 ${DEB_LIB_DEPENDS}
     recommends:
-      - gaze
+      - gaze-zh
 ${KCM_RECOMMENDS}
   rpm:
     depends:
 ${KCM_DEPENDS}
 ${RPM_LIB_DEPENDS}
     recommends:
-      - gaze
+      - gaze-zh
   archlinux:
     depends:
 ${KCM_DEPENDS}
     recommends:
-      - gaze
+      - gaze-zh
 ${KCM_RECOMMENDS}

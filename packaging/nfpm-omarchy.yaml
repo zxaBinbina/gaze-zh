@@ -65,13 +65,13 @@ scripts:
 overrides:
   deb:
     depends:
-      - gaze
+      - gaze-zh
       - jq
   rpm:
     depends:
-      - gaze
+      - gaze-zh
       - jq
   archlinux:
     depends:
-      - gaze
+      - gaze-zh
       - jq

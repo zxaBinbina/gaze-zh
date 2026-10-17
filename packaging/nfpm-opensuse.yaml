@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 
 # Keep openSUSE pam-config contents separate from Fedora authselect files.
-name: "gaze"
+name: "gaze-zh"
 arch: "${ARCH}"
 platform: "linux"
 version: "${VERSION}"
@@ -14,6 +14,11 @@ description: "Daemon, CLI, and PAM integration for Gaze"
 vendor: "Gundu Labs"
 homepage: "https://gaze.gundulabs.com"
 license: "GPL-3.0-or-later"
+
+replaces:
+  - gaze
+conflicts:
+  - gaze
 
 contents:
   - src: "target/release/onnxruntime-LICENSE"

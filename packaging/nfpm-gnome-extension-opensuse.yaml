@@ -61,5 +61,5 @@ depends:
   - gnome-shell
 
 recommends:
-  - gaze
+  - gaze-zh
   - policycoreutils

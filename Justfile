@@ -224,7 +224,7 @@ _nfpm config format:
             }
             scaffold=$(mktemp -d)
             mkdir -p "$scaffold/debian"
-            printf 'Source: gaze\n\nPackage: gaze\nArchitecture: any\nDescription: dpkg-shlibdeps scaffolding\n' \
+            printf 'Source: gaze-zh\n\nPackage: gaze-zh\nArchitecture: any\nDescription: dpkg-shlibdeps scaffolding\n' \
                 > "$scaffold/debian/control"
             absolute=()
             for binary in "${binaries[@]}"; do absolute+=("$PWD/$binary"); done
@@ -501,7 +501,7 @@ _verify-package format:
         ;;
     esac
 
-    load gaze
+    load gaze-zh
     want_files /usr/bin/gazed /usr/bin/gaze \
         /etc/dbus-1/system.d/com.gundulabs.Gaze.conf \
         /usr/share/polkit-1/actions/com.gundulabs.gaze.policy \
@@ -724,8 +724,8 @@ _srpm-sources:
     sources="{{ srpm_topdir }}/SOURCES"
     mkdir -p "$sources"
 
-    git archive --format=tar.gz --prefix="gaze-{{ version }}/" \
-        -o "$sources/gaze-{{ version }}.tar.gz" HEAD
+    git archive --format=tar.gz --prefix="gaze-zh-{{ version }}/" \
+        -o "$sources/gaze-zh-{{ version }}.tar.gz" HEAD
 
     cargo vendor --locked --versioned-dirs > "$sources/cargo-vendor-config.toml"
     tar --zstd -cf "$sources/vendor.tar.zst" vendor

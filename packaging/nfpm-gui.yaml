@@ -49,7 +49,7 @@ overrides:
       - gstreamer1.0-pipewire
 ${DEB_LIB_DEPENDS}
     recommends:
-      - gaze
+      - gaze-zh
   rpm:
     depends:
       - "${RPM_GSTREAMER_BASE}"
@@ -57,7 +57,7 @@ ${DEB_LIB_DEPENDS}
       - "${RPM_GSTREAMER_PIPEWIRE}"
 ${RPM_LIB_DEPENDS}
     recommends:
-      - gaze
+      - gaze-zh
   archlinux:
     depends:
       - "opencv>=${OPENCV_MIN}"

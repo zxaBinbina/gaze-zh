@@ -38,4 +38,4 @@ scripts:
   postremove: "packaging/postrm-hyprlock.sh"
 
 recommends:
-  - gaze
+  - gaze-zh
