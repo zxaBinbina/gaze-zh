@@ -4,22 +4,22 @@
 blank_issues_enabled: false
 
 contact_links:
-  - name: Troubleshooting checklist
+  - name: 故障排除清单
     url: https://gaze.gundulabs.com/guide/troubleshooting
-    about: Daemon won't start, camera not detected, lock screen not triggering, PAM problems. Work through this first, since most reports are already answered here.
+    about: 守护进程无法启动、摄像头未检测到、锁屏未触发、PAM 问题。请先按此排查，因为大多数报告在这里已有答案。
 
-  - name: Installation guide
+  - name: 安装指南
     url: https://gaze.gundulabs.com/guide/installation
-    about: Per-distro install paths, repository setup, and post-install verification.
+    about: 各发行版的安装路径、仓库设置和安装后验证。
 
-  - name: Desktop integration guides
+  - name: 桌面集成指南
     url: https://gaze.gundulabs.com/guide/pam
-    about: PAM, GNOME, KDE Plasma, hyprlock, LightDM, and TTY console login setup.
+    about: PAM、GNOME、KDE Plasma、hyprlock、LightDM 和 TTY 控制台登录设置。
 
-  - name: Configuration reference
+  - name: 配置参考
     url: https://gaze.gundulabs.com/guide/configuration
-    about: Every key in /etc/gaze/config.toml, including camera sources, thresholds, and confirmation behavior.
+    about: /etc/gaze/config.toml 中的每个键，包括摄像头源、阈值和确认行为。
 
-  - name: Security issues
+  - name: 安全问题
     url: https://github.com/GunduLabs/gaze/security/advisories/new
-    about: Do not open a public issue for a vulnerability in authentication, PAM, or template storage. Report it privately here.
+    about: 不要为身份验证、PAM 或模板存储中的漏洞开公开 issue。请在此私下报告。

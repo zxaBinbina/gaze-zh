@@ -2,61 +2,57 @@
 <!-- SPDX-License-Identifier: GPL-3.0-or-later -->
 
 <!--
-Thanks for contributing to Gaze.
+感谢你为 Gaze 做贡献。
 
-Delete the sections that do not apply. Keep the "Verification" and "AI disclosure"
-sections, they are required on every pull request.
+删除不适用的章节。保留“验证”和“AI 披露”章节，它们在每个拉取请求中都是必需的。
 
-Gaze is authentication software. A bug here does not corrupt a document, it locks
-someone out of their machine or lets the wrong person in. That is why this template
-asks for more than most.
+Gaze 是身份验证软件。这里的 bug 不会损坏文档，它会把某人锁在自己的机器之外，或者让错误的人进入。这就是为什么这个模板比大多数模板要求更多。
 -->
 
-## Summary
+## 摘要
 
-<!-- What changed, and why. Lead with the behavior difference a user would notice. -->
+<!-- 改了什么，以及为什么。先说明用户会注意到的行为差异。 -->
 
-## Root cause
+## 根本原因
 
 <!--
-For bug fixes: what was actually wrong, not just what you changed. If the fix is
-one line, this section is the valuable half of the pull request.
-Delete for features and refactors.
+对于 bug 修复：实际错在哪里，而不只是你改了什么。如果修复只有一行，这一节就是拉取请求中有价值的那一半。
+功能和重构请删除本节。
 -->
 
-## Related issues
+## 相关 issue
 
-<!-- Closes #123 / Refs #456. Say "none" if this came from nowhere but your own machine. -->
+<!-- Closes #123 / Refs #456。如果这是你自己机器上冒出来的，写“none”。 -->
 
-## Type of change
+## 变更类型
 
-- [ ] Bug fix
-- [ ] New feature
-- [ ] Refactor with no behavior change
-- [ ] Performance
-- [ ] Documentation
-- [ ] Packaging, install, or uninstall
-- [ ] CI or build tooling
-- [ ] Breaking change
+- [ ] Bug 修复
+- [ ] 新功能
+- [ ] 无行为变更的重构
+- [ ] 性能
+- [ ] 文档
+- [ ] 打包、安装或卸载
+- [ ] CI 或构建工具
+- [ ] 破坏性变更
 
-## Areas touched
+## 涉及区域
 
-- [ ] `gazed` daemon or DBus interface
+- [ ] `gazed` 守护进程或 DBus 接口
 - [ ] `gaze` CLI
 - [ ] `gaze-gui`
-- [ ] PAM module (`pam-gaze`)
-- [ ] GNOME extension or GDM
-- [ ] KDE Plasma integration
-- [ ] hyprlock, LightDM, or TTY console
-- [ ] Camera, IR, or liveness
-- [ ] Recognition models or thresholds
-- [ ] Config parsing or defaults
-- [ ] Packaging, systemd units, or polkit policy
-- [ ] Docs
+- [ ] PAM 模块（`pam-gaze`）
+- [ ] GNOME 扩展或 GDM
+- [ ] KDE Plasma 集成
+- [ ] hyprlock、LightDM 或 TTY 控制台
+- [ ] 摄像头、红外或活体检测
+- [ ] 识别模型或阈值
+- [ ] 配置解析或默认值
+- [ ] 打包、systemd 单元或 polkit 策略
+- [ ] 文档
 
-## Verification
+## 验证
 
-**Required checks.** Paste the result, do not just tick the box.
+**必需检查。** 粘贴结果，不要只勾选复选框。
 
 ```
 just fmt-check
@@ -65,11 +61,11 @@ just test
 just audit
 ```
 
-<!-- If you changed the Justfile, also `just --fmt --check`. -->
-<!-- If you changed packaging, scripts, units, DBus policy, PAM, or the GNOME extension, also `just package <deb|rpm|archlinux>`. -->
+<!-- 如果你改了 Justfile，还要运行 `just --fmt --check`。 -->
+<!-- 如果你改了打包、脚本、单元、DBus 策略、PAM 或 GNOME 扩展，还要运行 `just package <deb|rpm|archlinux>`。 -->
 
 <details>
-<summary>Output</summary>
+<summary>输出</summary>
 
 ```text
 
@@ -77,95 +73,77 @@ just audit
 
 </details>
 
-**Tests.**
+**测试。**
 
-- [ ] Added or updated tests for the changed behavior
-- [ ] Existing tests cover this
-- [ ] Not testable in CI without hardware or system services, manual steps are below
+- [ ] 为变更的行为添加或更新了测试
+- [ ] 现有测试已覆盖此变更
+- [ ] 在没有硬件或系统服务的情况下无法在 CI 中测试，手动步骤见下方
 
-**Manual verification.** Required if this touches hardware, DBus, PAM, a greeter,
-a lock screen, or packaging. Give the exact steps someone else can follow, plus what
-you ran it on.
+**手动验证。** 如果此变更涉及硬件、DBus、PAM、greeter、锁屏或打包，则必须填写。给出其他人可以照着执行的精确步骤，以及你在什么环境上运行的。
 
 <!--
-Tested on: <distro + version>, <desktop + version>, <Wayland/X11>, <display manager>, <camera model>
+测试环境：<发行版 + 版本>，<桌面环境 + 版本>，<Wayland/X11>，<显示管理器>，<摄像头型号>
 
 1.
 2.
 3.
 
-Result:
+结果：
 -->
 
-## PAM safety
+## PAM 安全
 
 <!--
-Delete this section if you did not touch PAM.
+如果你没有改动 PAM，请删除本节。
 
-- [ ] I had a second root shell or TTY open while testing
-- [ ] I tested against a non-critical PAM service before `sudo`, `system-auth`, or my graphical login
-- [ ] Password fallback still works when face auth fails, and when `gazed` is stopped entirely
-- [ ] Exact reproduction steps are in the manual verification section above
+- [ ] 测试时我打开了第二个 root shell 或 TTY
+- [ ] 我在非关键 PAM 服务上测试过，然后再测试 `sudo`、`system-auth` 或我的图形登录
+- [ ] 当人脸认证失败时，以及当 `gazed` 完全停止时，密码回退仍然有效
+- [ ] 精确的复现步骤已写在上述手动验证章节中
 
-Unsafe FFI touched: yes / no. If yes, say what invariant keeps it sound.
+是否触及不安全的 FFI：是 / 否。如果是，说明是什么不变量保证其健全性。
 -->
 
-## Docs
+## 文档
 
-- [ ] Docs updated, because this changes user-visible behavior, install steps, config, CLI output, or packaging
-- [ ] No docs change needed
+- [ ] 文档已更新，因为此变更改变了用户可见行为、安装步骤、配置、CLI 输出或打包
+- [ ] 无需文档变更
 
-## Licensing
+## 许可
 
-- [ ] New files carry the SPDX header used throughout the tree
-- [ ] No code was copied from a project whose license is incompatible with GPL-3.0-or-later
-- [ ] Any new dependency is license-compatible and I checked it myself, since `just audit` does not
-- [ ] I agree that my contribution is licensed under `GPL-3.0-or-later`
+- [ ] 新文件带有整个代码树中使用的 SPDX 头
+- [ ] 没有从许可证与 GPL-3.0-or-later 不兼容的项目复制代码
+- [ ] 任何新依赖都与许可证兼容，并且我自己检查过，因为 `just audit` 不会检查这一点
+- [ ] 我同意我的贡献在 `GPL-3.0-or-later` 下许可
 
-## AI disclosure
+## AI 披露
 
-We accept AI-assisted contributions and review them on the same terms as any other.
-Using AI is not disqualifying. Not telling us is, because it changes what a reviewer
-has to check: a human who misreads a PAM lifetime makes a mistake we can spot from
-the surrounding reasoning, while a model that fabricates one produces a diff that
-reads correct all the way down.
+我们接受 AI 辅助的贡献，并按照与其他贡献相同的标准审查它们。使用 AI 并不会导致不合格。不告诉我们会导致不合格，因为这改变了审查者必须检查的内容：一个误读 PAM 生命周期的真人会犯下我们能从周围推理中发现的错误，而一个编造 PAM 生命周期的模型会产生一个从头到尾读起来都正确的 diff。
 
-**Select exactly one.**
+**请只选择一项。**
 
-- [ ] **None.** I wrote this by hand.
-- [ ] **Assisted.** AI helped with parts of it: completion, boilerplate, docs prose,
-      test scaffolding, or naming. I directed the design and read every line.
-- [ ] **Generated.** AI produced most of the diff from my prompting. I reviewed all
-      of it and I understand it.
-- [ ] **Agentic.** An AI agent produced this largely on its own, with limited
-      supervision from me.
+- [ ] **无。** 我手写了这个。
+- [ ] **辅助。** AI 帮助了其中部分内容：补全、样板代码、文档行文、测试脚手架或命名。我主导了设计并阅读了每一行。
+- [ ] **生成。** AI 根据我的提示生成了大部分 diff。我审查了全部内容并且我理解它。
+- [ ] **代理式。** 一个 AI 代理在我有限的监督下基本自主完成了这个贡献。
 
-**Tools used:** <!-- e.g. Claude Code, GitHub Copilot, Cursor, Codex, aider. Write "none" if none. -->
+**使用的工具：** <!-- 例如 Claude Code、GitHub Copilot、Cursor、Codex、aider。如果没有，写“none”。 -->
 
-**Where it helped, and where you had to correct it:**
+**它在哪些地方有帮助，以及你在哪些地方不得不纠正它：**
 
 <!--
-One or two sentences. This is the most useful part of this section, so please do not
-skip it if you ticked anything other than "None". Knowing that the model got the
-happy path right but invented the error handling tells a reviewer exactly where to
-look first.
+一两句话。这是本节最有用的部分，所以如果你勾选了除“无”以外的任何选项，请不要跳过。知道模型把正常路径做对了但编造了错误处理，能准确告诉审查者应该先看哪里。
 -->
 
-**Confirm, whichever option you picked:**
+**无论你选择哪个选项，请确认：**
 
-- [ ] Every check result and manual test above was produced by actually running it on
-      a real machine. None of it is predicted, assumed, inferred from reading the code,
-      or reported to me by an AI tool.
-- [ ] I have read every line of this diff and can explain why each change is here.
-- [ ] I did not paste proprietary, confidential, or license-incompatible code into an
-      AI tool to produce this, and the output does not reproduce such code.
-- [ ] I will respond to review feedback myself rather than forwarding it to a tool
-      unread.
+- [ ] 上述每个检查结果和手动测试都是通过在真实机器上实际运行产生的。没有一项是预测、假设、从阅读代码推断出来的，或由 AI 工具报告给我的。
+- [ ] 我已阅读此 diff 的每一行，并能解释每个变更为什么在这里。
+- [ ] 我没有将专有、机密或许可证不兼容的代码粘贴到 AI 工具中来产生此贡献，输出也没有复现此类代码。
+- [ ] 我会自己回应审查反馈，而不是不阅读就转发给工具。
 
-## Follow-ups and known limitations
+## 后续工作和已知限制
 
 <!--
-What you deliberately did not do, what you are unsure about, and what should be
-reviewed hardest. Saying "I could not test the GDM path, I have no GNOME machine"
-is far more useful than silence, and it is not a mark against the pull request.
+你故意没有做什么、你不确定什么，以及最应该重点审查什么。说“我无法测试 GDM 路径，我没有 GNOME 机器”比沉默有用得多，而且这不会对拉取请求不利。
 -->

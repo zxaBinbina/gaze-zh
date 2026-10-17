@@ -1,62 +1,60 @@
 # SPDX-FileCopyrightText: 2026 Gundu Labs
 # SPDX-License-Identifier: GPL-3.0-or-later
 
-name: Documentation
-description: Something in the docs is wrong, missing, outdated, or unclear.
+name: 文档
+description: 文档中有错误、缺失、过时或不清楚的内容。
 labels:
   - documentation
 body:
   - type: markdown
     attributes:
       value: |
-        Docs bugs are real bugs. A command that does not work as written, a distro
-        difference we never mention, or a warning that is missing from a step that
-        can lock you out all belong here.
+        文档 bug 是真正的 bug。命令按所写方式无法运行、我们从未提及的发行版差异，
+        或者某个可能把你锁在外面的步骤缺少警告，都属于这里。
 
-        Small fixes are welcome as a pull request directly. The source lives under
-        `docs/src/guide/`.
+        小修复欢迎直接提拉取请求。源码位于 `docs/src/guide/` 下。
 
   - type: input
     id: page
     attributes:
-      label: Which page?
-      description: The URL, or the path under `docs/src/`.
-      placeholder: https://gaze.gundulabs.com/guide/kde or docs/src/guide/kde.md
+      label: 哪个页面？
+      description: URL，或 `docs/src/` 下的路径。
+      placeholder: https://gaze.gundulabs.com/guide/kde 或 docs/src/guide/kde.md
     validations:
       required: true
 
   - type: dropdown
     id: kind
     attributes:
-      label: What kind of problem?
+      label: 哪类问题？
       options:
-        - A documented command or config value does not work
-        - Instructions are correct on some distributions but not mine
-        - Something is missing entirely
-        - Content is outdated relative to the current release
-        - Wording is confusing or ambiguous
-        - A broken link, bad formatting, or a typo
-        - A warning is missing from a step that can lock you out
+        - 文档中的命令或配置值无法工作
+        - 说明在某些发行版上正确，但在我的发行版上不正确
+        - 完全缺少某些内容
+        - 内容相对于当前版本已过时
+        - 措辞令人困惑或有歧义
+        - 链接损坏、格式错误或拼写错误
+        - 某个可能把你锁在外面的步骤缺少警告
     validations:
       required: true
 
   - type: textarea
     id: problem
     attributes:
-      label: What is wrong
-      description: Quote the passage and say what actually happens instead.
+      label: 哪里不对
+      description: 引用那段文字，并说明实际发生了什么。
     validations:
       required: true
 
   - type: textarea
     id: suggestion
     attributes:
-      label: What should it say
-      description: Your suggested replacement wording, if you have one. A rough draft is fine, we will edit it.
+      label: 应该怎么写
+      description: 如果你有建议的替换措辞，请写在这里。草稿即可，我们会编辑。
 
   - type: input
     id: environment
     attributes:
-      label: Your environment
-      description: Only if the problem is distro or desktop specific.
+      label: 你的环境
+      description: 仅当问题与发行版或桌面环境相关时填写。
       placeholder: Fedora 44, KDE Plasma with plasma-login-manager

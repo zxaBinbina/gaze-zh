@@ -1,105 +1,103 @@
 # SPDX-FileCopyrightText: 2026 Gundu Labs
 # SPDX-License-Identifier: GPL-3.0-or-later
 
-name: Feature request
-description: Propose a new capability, a config key, a desktop integration, or support for a new distribution.
+name: 功能请求
+description: 提议新功能、配置键、桌面集成或对新发行版的支持。
 labels:
   - enhancement
 body:
   - type: markdown
     attributes:
       value: |
-        Gaze is authentication software, so every feature is weighed against what it
-        does to the security boundary and to the number of ways a login can fail.
-        The proposals that get built are the ones that describe a concrete problem
-        rather than a solution, because that usually leaves room for a better answer
-        than the one either of us started with.
+        Gaze 是身份验证软件，所以每个功能都要权衡它对安全边界的影响，以及它
+        会增加多少种登录失败的方式。被实现的是那些描述具体问题而非解决方案的
+        提案，因为这通常能留出空间，得到比我们双方最初设想更好的答案。
 
-        Please open this before writing code for anything that changes authentication
-        flow, adds a config key, or changes packaging policy.
+        对于任何改变身份验证流程、添加配置键或改变打包策略的内容，请先开这个
+        再写代码。
 
   - type: checkboxes
     id: preflight
     attributes:
-      label: Preflight
+      label: 预检
       options:
-        - label: I searched [existing issues](https://github.com/GunduLabs/gaze/issues?q=is%3Aissue) and this has not already been proposed.
+        - label: 我搜索了[现有 issue](https://github.com/GunduLabs/gaze/issues?q=is%3Aissue)，这个尚未被提议过。
           required: true
-        - label: I checked the [configuration reference](https://gaze.gundulabs.com/guide/configuration) and this is not already possible.
+        - label: 我查看了[配置参考](https://gaze.gundulabs.com/guide/configuration)，这目前无法实现。
           required: true
 
   - type: textarea
     id: problem
     attributes:
-      label: What problem are you trying to solve?
-      description: Describe the situation you are actually in, not the feature you want. What do you do today, and what makes it bad?
+      label: 你想解决什么问题？
+      description: 描述你实际所处的情况，而不是你想要的功能。你今天怎么做，什么让它不好？
       placeholder: |
-        My laptop exposes RGB and IR behind a single V4L2 node with identical labels, so
-        I cannot tell in the GUI which source I am picking, and I have to guess and retry.
+        我的笔记本在单个 V4L2 节点后暴露 RGB 和 IR，标签完全相同，所以
+        我在 GUI 中无法分辨自己选的是哪个源，只能猜测并重试。
     validations:
       required: true
 
   - type: textarea
     id: proposal
     attributes:
-      label: What would you like Gaze to do?
-      description: Your proposed behavior. Include the CLI flags, config keys, or UI you imagine, if you have specifics in mind.
+      label: 你希望 Gaze 做什么？
+      description: 你提议的行为。如果你有具体想法，请包括你设想的 CLI 标志、配置键或 UI。
     validations:
       required: true
 
   - type: checkboxes
     id: area
     attributes:
-      label: Which part of Gaze does this touch?
+      label: 这涉及 Gaze 的哪部分？
       options:
-        - label: "`gazed` daemon or DBus interface"
+        - label: "`gazed` 守护进程或 DBus 接口"
         - label: "`gaze` CLI"
         - label: "`gaze-gui`"
-        - label: PAM modules
-        - label: GNOME extension or GDM
-        - label: KDE Plasma integration
-        - label: hyprlock, LightDM, or TTY console
-        - label: Camera, IR, or liveness handling
-        - label: Recognition models or thresholds
-        - label: Configuration
-        - label: Packaging or a new distribution
-        - label: Documentation
+        - label: PAM 模块
+        - label: GNOME 扩展或 GDM
+        - label: KDE Plasma 集成
+        - label: hyprlock、LightDM 或 TTY 控制台
+        - label: 摄像头、IR 或活体检测处理
+        - label: 识别模型或阈值
+        - label: 配置
+        - label: 打包或新发行版
+        - label: 文档
 
   - type: textarea
     id: alternatives
     attributes:
-      label: What have you tried instead?
-      description: Workarounds, other config keys, other tools. If a workaround exists and is merely inconvenient, say so, because that changes the priority rather than killing the idea.
+      label: 你尝试过什么替代方案？
+      description: 变通方法、其他配置键、其他工具。如果存在变通方法只是不方便，请说明，因为这会改变优先级而不是否决这个想法。
 
   - type: textarea
     id: security
     attributes:
-      label: Security implications
+      label: 安全影响
       description: |
-        Required if this touches authentication, PAM, template storage, or the confirmation flow. Skip it otherwise.
+        如果涉及身份验证、PAM、模板存储或确认流程，则必填。否则跳过。
 
-        Consider: does it create a way to authenticate with weaker evidence than today? Does it widen what an unprivileged caller can do over DBus? Does it make a failed match more likely to be treated as a success? Does it affect the fallback to password authentication?
+        考虑：它是否创造了用比今天更弱的证据进行身份验证的方式？它是否扩大了非特权调用者通过 DBus 能做的事情？它是否使匹配失败更可能被当作成功？它是否影响密码身份验证回退？
 
   - type: dropdown
     id: contribute
     attributes:
-      label: Would you be willing to implement this?
-      description: Not required, and saying no does not hurt the proposal. It only tells us whether to scope out a design with you or add it to the queue.
+      label: 你愿意实现这个吗？
+      description: 非必填，拒绝不会损害提案。它只是告诉我们该和你一起设计还是加入队列。
       options:
-        - "Yes, I would like to open a pull request"
-        - "Yes, but I would need guidance on where to start"
-        - "No, I am proposing it for someone else to build"
+        - "是，我愿意开一个拉取请求"
+        - "是，但我需要关于从何入手的指导"
+        - "否，我提议让别人来构建"
     validations:
       required: true
 
   - type: textarea
     id: hardware
     attributes:
-      label: Hardware and environment
-      description: Fill this in for camera, IR, or desktop integration proposals. Distribution, desktop environment, camera model, and the vendor and model IDs from `udevadm info -q property -n /dev/video0 | grep -E 'ID_VENDOR_ID|ID_MODEL_ID'`.
+      label: 硬件和环境
+      description: 摄像头、IR 或桌面集成提案请填写。发行版、桌面环境、摄像头型号，以及来自 `udevadm info -q property -n /dev/video0 | grep -E 'ID_VENDOR_ID|ID_MODEL_ID'` 的厂商和型号 ID。
 
   - type: textarea
     id: extra
     attributes:
-      label: Anything else
-      description: Links to how other projects solve this, upstream bug reports, screenshots, or prior discussion.
+      label: 其他任何内容
+      description: 其他项目如何解决此问题的链接、上游 bug 报告、截图或之前的讨论。

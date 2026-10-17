@@ -1,59 +1,58 @@
 # SPDX-FileCopyrightText: 2026 Gundu Labs
 # SPDX-License-Identifier: GPL-3.0-or-later
 
-name: Bug report
-description: Face auth, the camera, the daemon, the GUI, or a desktop integration is not behaving correctly.
+name: Bug 报告
+description: 人脸认证、摄像头、守护进程、GUI 或桌面集成行为不正确。
 labels:
   - bug
 body:
   - type: markdown
     attributes:
       value: |
-        Thanks for taking the time to report this.
+        感谢你抽出时间报告这个问题。
 
-        Nearly every question we end up asking is on this form. Filling it in now
-        saves a round trip and gets you a real answer instead of a request for logs.
+        我们最终要问的几乎每个问题都在这张表单上。现在填写可以省去一轮来回，
+        并让你得到真正的答复，而不是一句“请提供日志”。
 
-        **Before you paste anything:** logs can contain usernames, hostnames, camera
-        serial numbers, and network details. Redact what you do not want public.
-        Gaze never logs face templates or embeddings, so those are not a concern.
+        **粘贴任何内容之前：** 日志可能包含用户名、主机名、摄像头序列号和网络
+        详情。请隐去你不想公开的内容。Gaze 从不记录人脸模板或嵌入向量，所以
+        这些不必担心。
 
-        If this is a security vulnerability in authentication, PAM, or template
-        storage, close this and [report it privately](https://github.com/GunduLabs/gaze/security/advisories/new) instead.
+        如果这是身份验证、PAM 或模板存储方面的安全漏洞，请关闭此表单并
+        [私下报告](https://github.com/GunduLabs/gaze/security/advisories/new)。
 
   - type: checkboxes
     id: preflight
     attributes:
-      label: Preflight
+      label: 预检
       options:
-        - label: I searched [existing issues](https://github.com/GunduLabs/gaze/issues?q=is%3Aissue) and this is not a duplicate.
+        - label: 我搜索了[现有 issue](https://github.com/GunduLabs/gaze/issues?q=is%3Aissue)，这不是重复问题。
           required: true
-        - label: I worked through the [troubleshooting guide](https://gaze.gundulabs.com/guide/troubleshooting) and my problem is not covered there.
+        - label: 我按[故障排除指南](https://gaze.gundulabs.com/guide/troubleshooting)排查过，我的问题不在其中。
           required: true
-        - label: I am on the latest release, or I have said below which version I am on and why I cannot upgrade.
+        - label: 我使用的是最新版本，或者已在下方说明我使用的是哪个版本以及为什么无法升级。
           required: true
 
   - type: textarea
     id: what-happened
     attributes:
-      label: What happened
-      description: What did you observe, and what did you expect instead?
+      label: 发生了什么
+      description: 你观察到了什么，你期望的是什么？
       placeholder: |
-        Enrollment stops after 3 captures instead of taking 10, and the IR badge stays red.
-        I expected all 10 captures to complete with IR going green, which is what happened
-        on my previous install.
+        录入在 3 次采集后就停止了，而不是采集 10 次，并且 IR 标识保持红色。
+        我期望 10 次采集全部完成且 IR 变绿，这是我之前安装时的行为。
     validations:
       required: true
 
   - type: textarea
     id: reproduce
     attributes:
-      label: Steps to reproduce
-      description: The exact commands or UI actions, in order. Include the command output if there was any.
+      label: 复现步骤
+      description: 按顺序列出精确的命令或 UI 操作。如果有命令输出，请一并附上。
       placeholder: |
         1. `gaze add-face default`
-        2. Look at the camera and follow the prompts
-        3. Capture counter stops at 3 and the dialog closes
+        2. 看向摄像头并跟随提示
+        3. 采集计数停在 3，对话框关闭
       value: |
         1.
         2.
@@ -64,42 +63,42 @@ body:
   - type: dropdown
     id: consistency
     attributes:
-      label: How often does it happen?
+      label: 发生频率？
       options:
-        - Every time
-        - Most of the time
-        - Intermittently, no pattern I can see
-        - Once, and I have not reproduced it since
-        - Only after a reboot, suspend, or resume
+        - 每次
+        - 大多数时候
+        - 间歇性发生，我看不出规律
+        - 只发生过一次，之后未能复现
+        - 仅在重启、挂起或恢复后发生
     validations:
       required: true
 
   - type: checkboxes
     id: surface
     attributes:
-      label: Which surfaces are affected?
-      description: Check every one you have actually tried. Which ones *work* is as diagnostic as which ones fail, because the same face match can succeed on the CLI and fail at a greeter, and that narrows things down fast.
+      label: 哪些界面受影响？
+      description: 勾选你实际尝试过的每一个。哪些*能用*和哪些失败一样有诊断价值，因为同一次人脸匹配可能在 CLI 上成功却在 greeter 上失败，这能快速缩小范围。
       options:
-        - label: "`gaze auth` on the command line"
-        - label: "`gaze add-face` / `gaze refine-face` enrollment"
-        - label: "`gaze-gui` (the desktop app)"
-        - label: "`sudo` or another terminal elevation"
-        - label: polkit / graphical password prompts
-        - label: GNOME lock screen
-        - label: GDM login screen
-        - label: KDE Plasma lock screen
-        - label: KDE login greeter (SDDM or plasma-login-manager)
+        - label: "命令行上的 `gaze auth`"
+        - label: "`gaze add-face` / `gaze refine-face` 录入"
+        - label: "`gaze-gui`（桌面应用）"
+        - label: "`sudo` 或其他终端提权"
+        - label: polkit / 图形密码提示
+        - label: GNOME 锁屏
+        - label: GDM 登录界面
+        - label: KDE Plasma 锁屏
+        - label: KDE 登录 greeter（SDDM 或 plasma-login-manager）
         - label: hyprlock
         - label: LightDM
-        - label: TTY / console login
-        - label: "`gazed` daemon startup, crash, or core dump"
-        - label: Install, upgrade, or uninstall (consider the Installation & packaging template instead)
+        - label: TTY / 控制台登录
+        - label: "`gazed` 守护进程启动、崩溃或 core dump"
+        - label: 安装、升级或卸载（请考虑改用“安装与打包”模板）
 
   - type: input
     id: version
     attributes:
-      label: Gaze version
-      description: Output of `gaze --version`.
+      label: Gaze 版本
+      description: "`gaze --version` 的输出。"
       placeholder: gaze 0.2.10
     validations:
       required: true
@@ -107,27 +106,27 @@ body:
   - type: dropdown
     id: install-method
     attributes:
-      label: How did you install Gaze?
-      description: If you have switched methods, pick the one currently in use and say so in the notes at the bottom. Mixing repositories is a real cause of breakage.
+      label: 你是如何安装 Gaze 的？
+      description: 如果你切换过安装方式，请选择当前使用的方式，并在底部备注中说明。混用软件仓库是导致故障的真实原因。
       options:
-        - One-line installer (install.sh)
-        - Gundu Labs apt repository (Debian / Ubuntu)
-        - Gundu Labs dnf repository (Fedora and compatible)
-        - rpm-ostree (Silverblue / Bazzite / Kinoite)
-        - Fedora Copr (@gundulabs/gaze)
-        - AUR (gaze-bin, gaze-gui-bin, gaze-kde-bin, gaze-omarchy-bin, gaze-gnome-extension-bin)
-        - Nix / NixOS module
-        - Flatpak (GUI only)
-        - Built from source
-        - Other (describe below)
+        - 一行安装脚本（install.sh）
+        - Gundu Labs apt 仓库（Debian / Ubuntu）
+        - Gundu Labs dnf 仓库（Fedora 及兼容发行版）
+        - rpm-ostree（Silverblue / Bazzite / Kinoite）
+        - Fedora Copr（@gundulabs/gaze）
+        - AUR（gaze-bin, gaze-gui-bin, gaze-kde-bin, gaze-omarchy-bin, gaze-gnome-extension-bin）
+        - Nix / NixOS 模块
+        - Flatpak（仅 GUI）
+        - 从源码构建
+        - 其他（在下方说明）
     validations:
       required: true
 
   - type: input
     id: distro
     attributes:
-      label: Distribution and version
-      description: From `cat /etc/os-release`. The `PRETTY_NAME` line is enough.
+      label: 发行版和版本
+      description: 来自 `cat /etc/os-release`。`PRETTY_NAME` 那一行就够了。
       placeholder: Fedora Linux 44 (Workstation Edition)
     validations:
       required: true
@@ -135,8 +134,8 @@ body:
   - type: input
     id: desktop
     attributes:
-      label: Desktop environment, version, and session type
-      description: Include Wayland or X11. GNOME and KDE version numbers matter a lot here, since several bugs are specific to one Shell or Plasma release.
+      label: 桌面环境、版本和会话类型
+      description: 包括 Wayland 或 X11。GNOME 和 KDE 的版本号在这里非常重要，因为有些 bug 只出现在某个特定的 Shell 或 Plasma 版本上。
       placeholder: GNOME 50.3, Wayland
     validations:
       required: true
@@ -144,33 +143,33 @@ body:
   - type: input
     id: display-manager
     attributes:
-      label: Display manager
-      description: Required if a login or lock screen is involved, otherwise leave blank.
-      placeholder: GDM 50.1 / SDDM 6.4 / plasma-login-manager 6.7.4 / LightDM 1.32 / none (TTY)
+      label: 显示管理器
+      description: 如果涉及登录或锁屏则必填，否则留空。
+      placeholder: GDM 50.1 / SDDM 6.4 / plasma-login-manager 6.7.4 / LightDM 1.32 / 无（TTY）
 
   - type: textarea
     id: doctor
     attributes:
-      label: "`gaze doctor --report` file"
+      label: "`gaze doctor --report` 文件"
       description: |
-        Reproduce the problem first, so the daemon log includes it. Then run this as your normal desktop user from inside a graphical session, not over SSH and not with `sudo`, because it inspects that user's PipeWire session and desktop integration:
+        先复现问题，以便守护进程日志中包含它。然后以你的普通桌面用户身份在图形会话中运行此命令，不要通过 SSH，也不要使用 `sudo`，因为它会检查该用户的 PipeWire 会话和桌面集成：
 
         ```bash
         gaze doctor --report
         ```
 
-        It writes a `gaze-report-<time>.txt` file with the doctor results, versions, OS and desktop details, installed packages, the PAM lines that mention Gaze, the daemon status and log, and your config. Your user and host names are already replaced. Read it, then drag the file into this box.
+        它会生成一个 `gaze-report-<时间>.txt` 文件，包含 doctor 结果、版本、操作系统和桌面详情、已安装的软件包、提及 Gaze 的 PAM 行、守护进程状态和日志以及你的配置。你的用户名和主机名已被替换。阅读后，将文件拖入此框。
 
-        On a Gaze release without `--report`, paste the full `gaze doctor` output, `journalctl -u gazed -b --no-pager | tail -300`, and `gaze config --show` instead.
+        如果 Gaze 版本不支持 `--report`，请粘贴完整的 `gaze doctor` 输出、`journalctl -u gazed -b --no-pager | tail -300` 和 `gaze config --show`。
     validations:
       required: true
 
   - type: textarea
     id: camera
     attributes:
-      label: Camera details
+      label: 摄像头详情
       description: |
-        Fill this in for anything camera, IR, enrollment, or recognition related. Substitute your own node numbers.
+        凡是与摄像头、IR、录入或识别相关的问题都请填写。替换为你自己的节点号。
 
         ```bash
         v4l2-ctl --list-devices
@@ -178,22 +177,22 @@ body:
         udevadm info -q property -n /dev/video0 | grep -E 'ID_VENDOR_ID|ID_MODEL_ID|ID_V4L_PRODUCT'
         ```
 
-        The vendor and model IDs are what tell us whether your camera needs a dedicated IR-emitter profile. Redact serial numbers.
+        厂商和型号 ID 能告诉我们你的摄像头是否需要专用的 IR 发射器配置。请隐去序列号。
       render: text
 
   - type: textarea
     id: auth-verbose
     attributes:
-      label: "`gaze auth --verbose` output"
-      description: For recognition, scoring, liveness, or IR-vs-RGB problems. Shows the per-face, per-spectrum scores and the pass/fail for each.
+      label: "`gaze auth --verbose` 输出"
+      description: 用于识别、评分、活体检测或 IR-vs-RGB 问题。显示每张人脸、每个光谱的分数以及每项的通过/失败结果。
       render: text
 
   - type: textarea
     id: kde
     attributes:
-      label: KDE Plasma details
+      label: KDE Plasma 详情
       description: |
-        KDE only. Paste the output of `gaze-kde-pam status` and the contents of your login and lock stacks:
+        仅限 KDE。粘贴 `gaze-kde-pam status` 的输出以及你的登录和锁屏栈内容：
 
         ```bash
         gaze-kde-pam status
@@ -202,15 +201,15 @@ body:
         ls /usr/lib/pam.d/plasmalogin /usr/lib/pam.d/sddm 2>/dev/null
         ```
 
-        On Fedora the vendor stack lives under `/usr/lib/pam.d` and only appears in `/etc/pam.d` once something has customized it, so please include both paths.
+        在 Fedora 上，厂商栈位于 `/usr/lib/pam.d` 下，只有在被自定义后才会出现在 `/etc/pam.d` 中，所以请同时包含两个路径。
       render: text
 
   - type: textarea
     id: omarchy
     attributes:
-      label: Omarchy details
+      label: Omarchy 详情
       description: |
-        Omarchy only. Paste the output of:
+        仅限 Omarchy。粘贴以下命令的输出：
 
         ```bash
         gaze-omarchy doctor
@@ -222,50 +221,50 @@ body:
   - type: dropdown
     id: pam-module
     attributes:
-      label: Which PAM mode is in your stack?
-      description: "`pam_gaze.so` (sequential, default) waits for the camera before falling through to the password prompt. `pam_gaze.so simultaneous` races both at once. They fail differently, so we need to know which one you are on."
+      label: 你的 PAM 栈中使用的是哪种模式？
+      description: "`pam_gaze.so`（顺序模式，默认）等待摄像头后再落到密码提示。`pam_gaze.so simultaneous`（同时模式）同时竞争两者。它们的失败方式不同，所以我们需要知道你在用哪一种。"
       options:
-        - "pam_gaze.so (sequential, the default)"
-        - "pam_gaze.so simultaneous (simultaneous)"
-        - Both, on different services
-        - Not sure
-        - Not applicable, this is not a PAM problem
+        - "pam_gaze.so（顺序模式，默认）"
+        - "pam_gaze.so simultaneous（同时模式）"
+        - 两者都有，在不同服务上
+        - 不确定
+        - 不适用，这不是 PAM 问题
 
   - type: dropdown
     id: regression
     attributes:
-      label: Did this ever work?
+      label: 它曾经正常工作过吗？
       options:
-        - Never worked, this is a fresh install
-        - Worked before, broke after a Gaze update
-        - Worked before, broke after a system or kernel update
-        - Worked before, broke after I changed the config
-        - Not sure
+        - 从未正常工作过，这是全新安装
+        - 以前能用，Gaze 更新后坏了
+        - 以前能用，系统或内核更新后坏了
+        - 以前能用，我改配置后坏了
+        - 不确定
     validations:
       required: true
 
   - type: input
     id: last-good
     attributes:
-      label: Last known good version
-      description: If this is a regression, which Gaze version was the last one that worked?
+      label: 最后已知正常版本
+      description: 如果这是回归问题，最后一个能正常工作的 Gaze 版本是哪个？
       placeholder: 0.2.9
 
   - type: dropdown
     id: reinstall
     attributes:
-      label: Have you run `gaze uninstall` at any point?
-      description: "`gaze uninstall` deliberately removes `/etc/gaze/config.toml`, including your camera and IR settings. Reinstalling afterwards gives you a default config, which looks exactly like a bug that lost your settings."
+      label: 你是否在某个时候运行过 `gaze uninstall`？
+      description: "`gaze uninstall` 会故意删除 `/etc/gaze/config.toml`，包括你的摄像头和 IR 设置。之后重新安装会给你一份默认配置，看起来完全像一个丢失了你设置的 bug。"
       options:
-        - "No"
-        - "Yes, and I reinstalled afterwards"
-        - "Yes, and I restored or recreated my config afterwards"
-        - Not sure
+        - "否"
+        - "是，之后我重新安装了"
+        - "是，之后我恢复或重建了配置"
+        - 不确定
     validations:
       required: true
 
   - type: textarea
     id: extra
     attributes:
-      label: Anything else
-      description: Screenshots, screen recordings, hardware model, things you already tried, workarounds you found, related issues. Drag files in to attach them.
+      label: 其他任何内容
+      description: 截图、屏幕录制、硬件型号、你已经尝试过的事情、找到的变通方法、相关 issue。拖入文件即可附加。

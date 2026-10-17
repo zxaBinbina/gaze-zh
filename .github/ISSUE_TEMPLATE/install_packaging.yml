@@ -1,72 +1,70 @@
 # SPDX-FileCopyrightText: 2026 Gundu Labs
 # SPDX-License-Identifier: GPL-3.0-or-later
 
-name: Installation & packaging
-description: Install, upgrade, uninstall, repository, or dependency problem on a specific distribution.
+name: 安装与打包
+description: 在特定发行版上的安装、升级、卸载、仓库或依赖问题。
 labels:
   - bug
 body:
   - type: markdown
     attributes:
       value: |
-        Use this for anything that goes wrong before Gaze is running: the installer,
-        a package manager, a repository or GPG key, a missing shared library, a
-        conflicting package, or an upgrade that broke a working setup.
+        用于 Gaze 运行之前出的任何问题：安装器、包管理器、仓库或 GPG 密钥、
+        缺失的共享库、冲突的软件包，或者破坏了正常设置的升级。
 
-        If Gaze installs fine but does not authenticate, use the Bug report template instead.
+        如果 Gaze 安装正常但无法进行身份验证，请改用 Bug 报告模板。
 
-        Paste command output verbatim rather than describing it. Package manager
-        errors are usually solved by the exact wording.
+        请逐字粘贴命令输出，而不是描述它。包管理器错误通常靠精确的措辞就能解决。
 
   - type: checkboxes
     id: preflight
     attributes:
-      label: Preflight
+      label: 预检
       options:
-        - label: I searched [existing issues](https://github.com/GunduLabs/gaze/issues?q=is%3Aissue) and this is not a duplicate.
+        - label: 我搜索了[现有 issue](https://github.com/GunduLabs/gaze/issues?q=is%3Aissue)，这不是重复问题。
           required: true
-        - label: I followed the [installation guide](https://gaze.gundulabs.com/guide/installation) for my distribution.
+        - label: 我按照针对我的发行版的[安装指南](https://gaze.gundulabs.com/guide/installation)操作了。
           required: true
-        - label: I checked the [troubleshooting guide](https://gaze.gundulabs.com/guide/troubleshooting) sections on repositories, shared libraries, and AUR helpers.
+        - label: 我查看了[故障排除指南](https://gaze.gundulabs.com/guide/troubleshooting)中关于仓库、共享库和 AUR helper 的章节。
           required: true
 
   - type: dropdown
     id: operation
     attributes:
-      label: What were you doing?
+      label: 你在做什么？
       options:
-        - Fresh install
-        - Upgrade of an existing install
-        - Uninstall
-        - Switching install methods (for example AUR to the official repository)
-        - Adding a desktop integration package (gaze-kde, gaze-omarchy, GNOME extension)
-        - Building from source
+        - 全新安装
+        - 升级现有安装
+        - 卸载
+        - 切换安装方式（例如从 AUR 切换到官方仓库）
+        - 添加桌面集成包（gaze-kde、gaze-omarchy、GNOME 扩展）
+        - 从源码构建
     validations:
       required: true
 
   - type: dropdown
     id: install-method
     attributes:
-      label: Which install method?
+      label: 哪种安装方式？
       options:
-        - One-line installer (install.sh)
-        - Gundu Labs apt repository (Debian / Ubuntu)
-        - Gundu Labs dnf repository (Fedora and compatible)
-        - rpm-ostree (Silverblue / Bazzite / Kinoite)
-        - Fedora Copr (@gundulabs/gaze)
-        - AUR (gaze-bin, gaze-gui-bin, gaze-kde-bin, gaze-omarchy-bin, gaze-gnome-extension-bin)
-        - Nix / NixOS module
-        - Flatpak (GUI only)
-        - Built from source
-        - Other (describe below)
+        - 一行安装脚本（install.sh）
+        - Gundu Labs apt 仓库（Debian / Ubuntu）
+        - Gundu Labs dnf 仓库（Fedora 及兼容发行版）
+        - rpm-ostree（Silverblue / Bazzite / Kinoite）
+        - Fedora Copr（@gundulabs/gaze）
+        - AUR（gaze-bin, gaze-gui-bin, gaze-kde-bin, gaze-omarchy-bin, gaze-gnome-extension-bin）
+        - Nix / NixOS 模块
+        - Flatpak（仅 GUI）
+        - 从源码构建
+        - 其他（在下方说明）
     validations:
       required: true
 
   - type: input
     id: distro
     attributes:
-      label: Distribution, version, and architecture
-      description: From `cat /etc/os-release` plus `uname -m`. Include the release codename on Debian and Ubuntu, since each apt suite carries only the builds for that release.
+      label: 发行版、版本和架构
+      description: 来自 `cat /etc/os-release` 加上 `uname -m`。在 Debian 和 Ubuntu 上请包括发行版代号，因为每个 apt suite 只包含该发行版的构建。
       placeholder: Ubuntu 26.04 (resolute), x86_64
     validations:
       required: true
@@ -74,8 +72,8 @@ body:
   - type: input
     id: desktop
     attributes:
-      label: Desktop environment
-      description: The installer picks different packages per desktop, so this changes what it tries to install.
+      label: 桌面环境
+      description: 安装器会为不同桌面选择不同的软件包，所以这会影响它尝试安装的内容。
       placeholder: KDE Plasma 6.4, Wayland
     validations:
       required: true
@@ -83,8 +81,8 @@ body:
   - type: textarea
     id: command
     attributes:
-      label: Command and full output
-      description: The exact command you ran and everything it printed, including the error. Do not trim it to just the last line.
+      label: 命令和完整输出
+      description: 你运行的精确命令及其打印的所有内容，包括错误。不要只保留最后一行。
       render: shell
     validations:
       required: true
@@ -92,8 +90,8 @@ body:
   - type: input
     id: version
     attributes:
-      label: Gaze version
-      description: Output of `gaze --version` if anything installed at all, or the version you were trying to install. Write "nothing installed" if the install never got that far.
+      label: Gaze 版本
+      description: 如果安装了任何东西，`gaze --version` 的输出，或者你尝试安装的版本。如果安装根本没进行到那一步，写“未安装任何东西”。
       placeholder: 0.2.10
     validations:
       required: true
@@ -101,9 +99,9 @@ body:
   - type: textarea
     id: packages
     attributes:
-      label: Installed Gaze packages
+      label: 已安装的 Gaze 软件包
       description: |
-        Whichever applies to your system:
+        根据你的系统选择适用的命令：
 
         ```bash
         apt list --installed 2>/dev/null | grep -i gaze
@@ -112,30 +110,30 @@ body:
         flatpak list | grep -i gaze
         ```
 
-        On Arch this also catches the unrelated AUR package also named `gaze`, which silently replaces the official ones. If `pacman -Qi gaze` shows a file watcher rather than facial authentication, that is your problem.
+        在 Arch 上，这还会捕获一个同名的无关 AUR 包 `gaze`，它会静默替换官方包。如果 `pacman -Qi gaze` 显示的是文件监视器而不是人脸身份验证，那就是你的问题。
       render: shell
 
   - type: textarea
     id: repos
     attributes:
-      label: Repository configuration
+      label: 仓库配置
       description: |
-        For repository, GPG key, or signature problems:
+        用于仓库、GPG 密钥或签名问题：
 
         ```bash
         cat /etc/apt/sources.list.d/gundulabs.list
         cat /etc/yum.repos.d/gundulabs.repo
         ```
 
-        Include whether you have both the Gundu Labs dnf repository and Copr enabled, since enabling both causes conflicts.
+        请说明你是否同时启用了 Gundu Labs dnf 仓库和 Copr，因为同时启用会导致冲突。
       render: shell
 
   - type: textarea
     id: journal
     attributes:
-      label: Daemon log
+      label: 守护进程日志
       description: |
-        If the packages installed but `gazed` will not start:
+        如果软件包已安装但 `gazed` 无法启动：
 
         ```bash
         systemctl status gazed
@@ -146,5 +144,5 @@ body:
   - type: textarea
     id: extra
     attributes:
-      label: Anything else
-      description: Previous install methods you have used on this machine, manual changes to PAM or systemd files, custom repositories, or an unusual filesystem layout such as an immutable or atomic distribution.
+      label: 其他任何内容
+      description: 你在这台机器上使用过的先前安装方式、对 PAM 或 systemd 文件的手动修改、自定义仓库，或不寻常的文件系统布局（如不可变或原子发行版）。
