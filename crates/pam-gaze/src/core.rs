@@ -1179,6 +1179,11 @@ pub fn caller_is_remote(rhost: Option<&str>) -> bool {
     }
 }
 
+/// KRDP uses the generic login PAM service without setting PAM_RHOST.
+pub fn is_krdp_network_login(service: Option<&str>, executable: Option<&std::path::Path>) -> bool {
+    service == Some("login") && executable == Some(std::path::Path::new("/usr/bin/krdpserver"))
+}
+
 const NETWORK_PAM_SERVICES: [&str; 20] = [
     "sshd",
     "dovecot",
