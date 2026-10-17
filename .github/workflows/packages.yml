@@ -1,0 +1,171 @@
+# SPDX-FileCopyrightText: 2026 Gundu Labs
+# SPDX-License-Identifier: GPL-3.0-or-later
+
+name: Packages and Release
+
+on:
+  push:
+    branches:
+      - main
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: Git ref to build (branch, tag, or commit SHA)
+        required: true
+        default: main
+        type: string
+      release_tag:
+        description: Optional release tag, for example v0.3.10. Leave empty to keep the build as an artifact only.
+        required: false
+        type: string
+      publish:
+        description: Create or update a GitHub Release with the packages
+        required: true
+        default: false
+        type: boolean
+
+concurrency:
+  group: packages-${{ inputs.ref || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  JUST_VERSION: 1.59.0
+  NFPM_VERSION: v2.48.0
+
+jobs:
+  package:
+    name: ${{ matrix.name }}
+    runs-on: ubuntu-latest
+    container: ${{ matrix.container }}
+    env:
+      BUILD_REF: ${{ inputs.ref || github.ref }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - id: deb-ubuntu-noble
+            name: Debian packages (Ubuntu 24.04 noble)
+            container: ubuntu:24.04
+            format: deb
+            distro: ubuntu
+            deb_suite: noble
+          - id: rpm-fedora
+            name: Fedora packages (RPM)
+            container: fedora:45
+            format: rpm
+            distro: fedora
+            deb_suite: ""
+          - id: rpm-opensuse
+            name: openSUSE Tumbleweed packages (RPM)
+            container: opensuse/tumbleweed:latest
+            format: rpm
+            distro: opensuse
+            deb_suite: ""
+          - id: arch
+            name: Arch Linux packages
+            container: archlinux:latest
+            format: archlinux
+            distro: archlinux
+            deb_suite: ""
+
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.ref || github.ref }}
+          persist-credentials: false
+          fetch-depth: 0
+
+      - name: Set up packaging host
+        uses: ./.github/actions/setup-package-host
+        with:
+          format: ${{ matrix.format }}
+          distro: ${{ matrix.distro }}
+          deb-suite: ${{ matrix.deb_suite }}
+          just-version: ${{ env.JUST_VERSION }}
+          nfpm-version: ${{ env.NFPM_VERSION }}
+          rust: "true"
+
+      - name: Build distribution packages
+        env:
+          CARGO_BUILD_JOBS: 2
+          RUSTFLAGS: -Cdebuginfo=0
+          GAZE_KCM: ${{ matrix.format == 'deb' && matrix.deb_suite == 'noble' && 'legacy' || 'plasma6' }}
+        run: |
+          set -euo pipefail
+          case "$BUILD_REF" in
+            refs/tags/v*) version="${BUILD_REF#refs/tags/v}" ;;
+            v*) version="${BUILD_REF#v}" ;;
+            *) version="$(sed -n 's/^version = "\([0-9][^"]*\)"/\1/p' Cargo.toml | head -n1)" ;;
+          esac
+          if [ -z "$version" ]; then
+            echo "Could not determine a package version" >&2
+            exit 1
+          fi
+          VERSION="$version" PACKAGE_RELEASE=1 just package "${{ matrix.format }}"
+          find dist/packages -maxdepth 1 -type f \( -name '*.deb' -o -name '*.rpm' -o -name '*.pkg.tar.*' \) -print -exec sha256sum {} \;
+
+      - name: Upload distribution packages
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: gaze-${{ matrix.id }}-packages
+          path: |
+            dist/packages/*.deb
+            dist/packages/*.rpm
+            dist/packages/*.pkg.tar.*
+          if-no-files-found: error
+          retention-days: 14
+
+  release:
+    name: Publish GitHub Release
+    needs: package
+    if: >-
+      ${{
+        (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')) ||
+        (github.event_name == 'workflow_dispatch' && inputs.publish)
+      }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Resolve release tag
+        id: tag
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          PUSH_TAG: ${{ github.ref_name }}
+          INPUT_TAG: ${{ inputs.release_tag }}
+        run: |
+          set -euo pipefail
+          if [ "$EVENT_NAME" = push ]; then
+            tag="$PUSH_TAG"
+          else
+            tag="$INPUT_TAG"
+          fi
+          [[ "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z.-]+)?$ ]] || {
+            echo "Release tag must look like v0.3.10 (got: $tag)" >&2
+            exit 1
+          }
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+
+      - name: Download distribution packages
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: gaze-*-packages
+          path: dist/packages
+
+      - name: Create or update GitHub Release
+        uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3
+        with:
+          tag_name: ${{ steps.tag.outputs.tag }}
+          target_commitish: ${{ inputs.ref || github.sha }}
+          generate_release_notes: true
+          files: |
+            dist/packages/**/*.deb
+            dist/packages/**/*.rpm
+            dist/packages/**/*.pkg.tar.*

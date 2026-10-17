@@ -21,6 +21,7 @@ docs/.vitepress/cache
 docs/.vitepress/.temp
 
 dist/
+.vscode
 
 index.scip
 docs/archive/
