@@ -9,7 +9,6 @@
 
 **面向 Linux 的面部识别认证**
 
-[![CI](https://github.com/zxaBinbina/gaze-zh/actions/workflows/ci.yml/badge.svg)](https://github.com/zxaBinbina/gaze-zh/actions/workflows/ci.yml)
 [![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](LICENSE)
 
 [中文文档站](https://zxabinbina.cc.cd/projects/gaze) · [安装](https://zxabinbina.cc.cd/projects/gaze/guide/installation) · [开发](https://zxabinbina.cc.cd/projects/gaze/guide/development)
