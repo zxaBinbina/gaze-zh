@@ -93,6 +93,7 @@ jobs:
           rust: "true"
 
       - name: Build distribution packages
+        shell: bash
         env:
           CARGO_BUILD_JOBS: 2
           RUSTFLAGS: -Cdebuginfo=0
