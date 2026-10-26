@@ -9,7 +9,6 @@
 
 **Facial authentication for Linux**
 
-[![CI](https://github.com/zxaBinbina/gaze-zh/actions/workflows/ci.yml/badge.svg)](https://github.com/zxaBinbina/gaze-zh/actions/workflows/ci.yml)
 [![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](LICENSE)
 
 [中文文档站](https://zxabinbina.cc.cd/projects/gaze) · [Install](https://gaze.gundulabs.com/guide/installation) · [Development](https://gaze.gundulabs.com/guide/development)
