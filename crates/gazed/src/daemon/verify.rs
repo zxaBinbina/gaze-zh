@@ -120,6 +120,10 @@ pub(super) fn ir_continues_without_rgb(policy: &str, run_ir: bool) -> bool {
     run_ir && policy != "and"
 }
 
+pub(super) fn rgb_continues_without_ir(policy: &str, run_rgb: bool) -> bool {
+    run_rgb && policy != "and"
+}
+
 pub(super) fn auth_streams(
     rgb_device: &str,
     ir_device: &str,
@@ -216,11 +220,39 @@ pub(super) fn crop_liveness_face(data: &FaceData) -> anyhow::Result<image::RgbIm
     crate::liveness::crop_face(&*content, bbox)
 }
 
+pub(super) fn crop_ir_liveness_face(data: &FaceData) -> anyhow::Result<image::RgbImage> {
+    let mat_rgb = data
+        .liveness_frame
+        .as_ref()
+        .ok_or_else(|| anyhow::anyhow!("IR liveness frame was not retained"))?;
+    let rgb = mat_to_rgb(mat_rgb)?;
+    let (frame_w, frame_h) = data.frame_size;
+    let frame_w = frame_w.min(rgb.width()).max(1);
+    let frame_h = frame_h.min(rgb.height()).max(1);
+    let pad_x = (rgb.width() - frame_w) / 2;
+    let pad_y = (rgb.height() - frame_h) / 2;
+    let content = image::imageops::crop_imm(&rgb, pad_x, pad_y, frame_w, frame_h);
+    let bbox = [
+        data.bbox[0] - pad_x as f32,
+        data.bbox[1] - pad_y as f32,
+        data.bbox[2] - pad_x as f32,
+        data.bbox[3] - pad_y as f32,
+    ];
+    crate::liveness::crop_ir_face(&*content, bbox)
+}
+
 pub fn load_eye_state(
     inference: &gaze_core::config::InferenceConfig,
 ) -> anyhow::Result<EyeStateClassifier> {
     let path = crate::models::ensure_eye_state_model(gaze_core::config::MODELS_DIR)?;
     EyeStateClassifier::new_with_inference(&path, inference)
+}
+
+pub fn load_ir_liveness(
+    inference: &gaze_core::config::InferenceConfig,
+) -> anyhow::Result<IrLivenessDetector> {
+    let path = crate::models::ensure_ir_liveness_model(gaze_core::config::MODELS_DIR)?;
+    IrLivenessDetector::new_with_inference(&path, inference)
 }
 
 pub(super) fn eyes_closed_in_frame(
@@ -376,9 +408,12 @@ impl AuthDaemon {
         )?;
         let hybrid_policy = config.security.hybrid_policy().to_string();
         let duress_cfg = config.duress.clone();
+        // D-Bus handlers run on zbus's runtime, so model retries must use the stored Tokio handle.
         if duress_cfg.enabled && self.eye_state.lock().await.is_none() {
             let inference = config.inference.clone();
-            let loading = tokio::task::spawn_blocking(move || load_eye_state(&inference));
+            let loading = self
+                .rt_handle
+                .spawn_blocking(move || load_eye_state(&inference));
             let loaded = tokio::select! {
                 biased;
                 _ = &mut rx => return Err(fdo::Error::Failed("capture cancelled".into())),
@@ -392,6 +427,26 @@ impl AuthDaemon {
                 Err(e) => warn!("Loading the eye-state model panicked: {e}"),
             }
         }
+        if liveness_cfg.ir_model_enabled()
+            && ir_models.is_some()
+            && self.ir_liveness.lock().await.is_none()
+        {
+            let inference = config.inference.clone();
+            let loading = self
+                .rt_handle
+                .spawn_blocking(move || load_ir_liveness(&inference));
+            let loaded = tokio::select! {
+                biased;
+                _ = &mut rx => return Err(fdo::Error::Failed("capture cancelled".into())),
+                loaded = loading => loaded,
+            };
+            match loaded {
+                Ok(Ok(detector)) => *self.ir_liveness.lock().await = Some(detector),
+                Ok(Err(e)) => warn!("The IR anti-spoof model is enabled but failed to load: {e}"),
+                Err(e) => warn!("Loading the IR anti-spoof model panicked: {e}"),
+            }
+        }
+        let ir_liveness_arc = self.ir_liveness.clone();
         let eye_state_arc = self.eye_state.clone();
         let duress_lockout = self.duress_lockout.clone();
         let duress_locked = duress_lockout.is_locked(&username);
@@ -545,6 +600,23 @@ impl AuthDaemon {
                     continue;
                 }
                 let mut run_rgb = run_rgb;
+                let mut run_ir = run_ir;
+                if run_ir && rgb_continues_without_ir(&hybrid_policy, run_rgb) {
+                    let source = ir_device.clone();
+                    let disconnected = tokio::task::spawn_blocking(move || {
+                        gaze_vision::camera::camera_disconnected(&source, false)
+                    })
+                    .await
+                    .unwrap_or(false);
+                    if disconnected {
+                        warn!("VerifyStart: IR camera {ir_device:?} is not connected; continuing with RGB only");
+                        let _ = Self::verify_diagnostic(&ctxt, "IR camera is not connected; continuing with the RGB camera").await;
+                        run_ir = false;
+                    }
+                }
+
+                let orientation_watch = OrientationWatch::start(config.cameras.auto_rotate).await;
+                let orientation = orientation_watch.as_ref().map(OrientationWatch::handle);
 
                 info!(
                     liveness_enabled = liveness_cfg.enabled,
@@ -577,6 +649,7 @@ impl AuthDaemon {
                     let rgb_device_clone = rgb_device.clone();
                     let rgb_phase_done_clone = rgb_phase_done.clone();
                     let hybrid_policy_clone = hybrid_policy.clone();
+                    let orientation_clone = orientation.clone();
                     let eye_state_arc = eye_state_arc.clone();
                     let duress_enabled = duress_cfg.enabled;
                     let duress_threshold = duress_cfg.effective_closed_threshold();
@@ -608,13 +681,12 @@ impl AuthDaemon {
                         tracing::debug!("RGB camera opened successfully at: {}", rgb_device_clone);
                         let _ = tx.blocking_send(VerifyMsg::PhaseStarted(Spectrum::Rgb));
 
-                        let mut checker = FaceChecker::new(detector_arc, &config_clone, Spectrum::Rgb, false);
-                        let dark_hands_over_to_ir = should_yield_rgb_to_ir(
-                            &hybrid_policy_clone,
-                            run_ir,
-                            CaptureStatus::TooDark,
-                        );
+                        let mut checker = FaceChecker::new(detector_arc, &config_clone, Spectrum::Rgb, false)
+                            .with_orientation(orientation_clone);
                         let mut warmup = RgbWarmupGate::new(config_clone.cameras.dark_luma_threshold);
+                        // A bright background can settle the whole-frame gate while the face
+                        // is still underexposed. Give face exposure its own bounded warmup.
+                        let mut face_warmup = RgbWarmupGate::new(config_clone.cameras.dark_luma_threshold);
                         let mut logged_dark_stream = false;
                         let mut logged_rgb_luma_statuses = Vec::new();
                         let mut live_scores: Vec<f32> = Vec::new();
@@ -634,33 +706,32 @@ impl AuthDaemon {
                                 break;
                             }
 
-                            if !dark_hands_over_to_ir {
-                                match warmup.classify_with_luma(&frame) {
-                                    (RgbFrameKind::Lit, _) => {}
-                                    (RgbFrameKind::WarmupDark, _) => continue,
-                                    (RgbFrameKind::SettledDark, luma) => {
-                                        if !logged_dark_stream {
-                                            let message = format!(
-                                                "RGB stream remains dark after warmup: mean_luma={luma}"
-                                            );
-                                            info!("{message}");
-                                            let _ = tx.blocking_send(VerifyMsg::Diagnostic(message));
-                                            logged_dark_stream = true;
-                                        }
+                            match warmup.classify_with_luma(&frame) {
+                                (RgbFrameKind::Lit, _) => {}
+                                (RgbFrameKind::WarmupDark, _) => continue,
+                                (RgbFrameKind::SettledDark, luma) => {
+                                    if !logged_dark_stream {
+                                        let message = format!(
+                                            "RGB stream remains dark after warmup: mean_luma={luma}"
+                                        );
+                                        info!("{message}");
+                                        let _ = tx.blocking_send(VerifyMsg::Diagnostic(message));
+                                        logged_dark_stream = true;
                                     }
-                                    (RgbFrameKind::SteadyDark, luma) => {
-                                        if !logged_dark_stream {
-                                            let message = format!(
-                                                "RGB stream never brightened: mean_luma={luma}"
-                                            );
-                                            info!("{message}");
-                                            let _ = tx.blocking_send(VerifyMsg::Diagnostic(message));
-                                            logged_dark_stream = true;
-                                        }
+                                }
+                                (RgbFrameKind::SteadyDark, luma) => {
+                                    if !logged_dark_stream {
+                                        let message = format!(
+                                            "RGB stream never brightened: mean_luma={luma}"
+                                        );
+                                        info!("{message}");
+                                        let _ = tx.blocking_send(VerifyMsg::Diagnostic(message));
+                                        logged_dark_stream = true;
                                     }
                                 }
                             }
 
+                            let frame = checker.orient(frame);
                             let (status, embed_opt) = {
                                 let mut recognizer = recognizer_rgb_arc.blocking_lock();
                                 match process_frame_sync(&mut checker, &mut recognizer, &frame, liveness_enabled || duress_enabled) {
@@ -673,7 +744,22 @@ impl AuthDaemon {
                                     }
                                 }
                             };
+                            if checker.take_rotation_changed() {
+                                landmark_seq.clear();
+                            }
                             tracing::debug!("Processed RGB frame: status={:?}, embedding_extracted={}", status, embed_opt.is_some());
+
+                            if let Some(luma) = checker.rgb_face_luma() {
+                                let frame_kind = face_warmup.classify_mean_luma(luma.mean);
+                                tracing::debug!(
+                                    mean_luma = luma.mean,
+                                    ?frame_kind,
+                                    "RGB face exposure"
+                                );
+                                if frame_kind == RgbFrameKind::WarmupDark {
+                                    continue;
+                                }
+                            }
 
                             if let Some(luma) = checker.rgb_face_luma()
                                 && !logged_rgb_luma_statuses.contains(&status)
@@ -803,17 +889,28 @@ impl AuthDaemon {
                     let db_arc = db_arc.clone();
                     let username_clone = username.clone();
                     let liveness_enabled = liveness_cfg.enabled;
+                    let ir_model = liveness_cfg.ir_model_enabled();
+                    let ir_liveness_threshold = liveness_cfg.effective_ir_threshold();
+                    let ir_liveness_arc = ir_liveness_arc.clone();
                     let ir_device_clone = ir_device.clone();
                     let ir_node_clone = ir_node.clone();
                     let emitter_enabled = emitter_enabled;
                     let serial_capture = serial_capture;
                     let rgb_phase_done_clone = rgb_phase_done.clone();
+                    let orientation_clone = orientation.clone();
                     let eye_state_arc = eye_state_arc.clone();
                     let duress_enabled = duress_cfg.enabled;
                     let duress_threshold = duress_cfg.effective_closed_threshold();
                     let duress_hold = duress_cfg.effective_hold();
 
                     ir_thread = Some(std::thread::spawn(move || {
+                        if ir_model && ir_liveness_arc.blocking_lock().is_none() {
+                            let _ = tx.blocking_send(VerifyMsg::Error(
+                                "The IR anti-spoof model is enabled but unavailable".to_string(),
+                            ));
+                            return;
+                        }
+
                         // Wait for RGB to release its camera before opening IR and firing the emitter,
                         // so single-function devices keep one live stream. Bail if verify passed.
                         if ir_waits_for_rgb(run_rgb, serial_capture) {
@@ -846,11 +943,13 @@ impl AuthDaemon {
 
                         let _ = tx.blocking_send(VerifyMsg::PhaseStarted(Spectrum::Ir));
 
-                        let mut checker = FaceChecker::new(detector_arc, &config_clone, Spectrum::Ir, false);
+                        let mut checker = FaceChecker::new(detector_arc, &config_clone, Spectrum::Ir, false)
+                            .with_orientation(orientation_clone);
                         let mut dark_gate = IrDarkFrameGate::new(config_clone.cameras.dark_luma_threshold);
                         let mut logged_lit_luma = false;
                         let mut logged_dark_luma = false;
                         let mut landmark_seq: Vec<[(f32, f32); 5]> = Vec::new();
+                        let mut ir_live_scores: Vec<f32> = Vec::new();
                         let mut duress = DuressTracker::new(duress_hold);
 
                         while let Some(frame) = cam.next_interruptible(&stop_clone) {
@@ -860,6 +959,12 @@ impl AuthDaemon {
                             emitter.stream_started();
 
                             let (frame_kind, luma) = dark_gate.classify_with_luma(&frame);
+                            tracing::debug!(
+                                mean_luma = luma,
+                                threshold = config_clone.cameras.dark_luma_threshold,
+                                ?frame_kind,
+                                "IR frame exposure"
+                            );
                             match frame_kind {
                                 IrFrameKind::Lit => {
                                     if !logged_lit_luma {
@@ -887,9 +992,10 @@ impl AuthDaemon {
                                 }
                             }
 
+                            let frame = checker.orient(frame);
                             let (status, embed_opt) = {
                                 let mut recognizer = recognizer_ir_arc.blocking_lock();
-                                match process_frame_sync(&mut checker, &mut recognizer, &frame, duress_enabled) {
+                                match process_frame_sync(&mut checker, &mut recognizer, &frame, ir_model || duress_enabled) {
                                     Ok(res) => res,
                                     Err(error) => {
                                         let message = format!("IR inference failed: {error:#}");
@@ -899,6 +1005,9 @@ impl AuthDaemon {
                                     }
                                 }
                             };
+                            if checker.take_rotation_changed() {
+                                landmark_seq.clear();
+                            }
                             tracing::debug!("Processed IR frame: status={:?}, embedding_extracted={}", status, embed_opt.is_some());
 
                             let latest_embed = embed_opt.as_ref().map(|d| d.embedding.clone());
@@ -943,13 +1052,47 @@ impl AuthDaemon {
                                             landmark_seq.push(eyes);
                                         }
                                         let motion = crate::liveness::eye_motion_is_live(&landmark_seq, None);
-                                        liveness_passed = crate::liveness::motion_confirms_live(
-                                            &motion,
-                                            crate::liveness::MIN_MOTION_PAIRS,
-                                        );
+                                        if ir_model {
+                                            let liveness_face = match crop_ir_liveness_face(&data) {
+                                                Ok(face) => face,
+                                                Err(e) => {
+                                                    error!("IR liveness crop failed: {e}");
+                                                    continue;
+                                                }
+                                            };
+                                            let mut live_guard = ir_liveness_arc.blocking_lock();
+                                            let Some(detector) = live_guard.as_mut() else {
+                                                let _ = tx.blocking_send(VerifyMsg::Error(
+                                                    "The IR anti-spoof model is enabled but unavailable".to_string(),
+                                                ));
+                                                return;
+                                            };
+                                            let live_score = match detector.live_score(&liveness_face) {
+                                                Ok(score) => score,
+                                                Err(e) => {
+                                                    let _ = tx.blocking_send(VerifyMsg::Error(format!(
+                                                        "IR liveness inference failed: {e}"
+                                                    )));
+                                                    return;
+                                                }
+                                            };
+                                            drop(live_guard);
+                                            ir_live_scores.push(live_score);
+                                            liveness_passed = crate::liveness::ir_liveness_passes(
+                                                &ir_live_scores,
+                                                ir_liveness_threshold as f32,
+                                                &motion,
+                                            );
+                                        } else {
+                                            liveness_passed = crate::liveness::motion_confirms_live(
+                                                &motion,
+                                                crate::liveness::MIN_MOTION_PAIRS,
+                                            );
+                                        }
 
                                         tracing::debug!(
-                                            "Liveness checked (IR): motion={:?}, overall={}",
+                                            "Liveness checked (IR): scores={:?}, motion={:?}, overall={}",
+                                            ir_live_scores,
                                             motion,
                                             liveness_passed
                                         );
@@ -1538,6 +1681,24 @@ mod tests {
     }
 
     #[test]
+    fn a_disconnected_ir_camera_hands_auth_to_rgb_unless_both_are_required() {
+        for policy in ["or", "fallback_on_dark", "default"] {
+            assert!(rgb_continues_without_ir(policy, true), "{policy}");
+            assert!(hybrid_auth_passed(
+                policy,
+                true,
+                false,
+                true,
+                CaptureStatus::Ready,
+                true,
+                false
+            ));
+        }
+        assert!(!rgb_continues_without_ir("and", true));
+        assert!(!rgb_continues_without_ir("fallback_on_dark", false));
+    }
+
+    #[test]
     fn and_policy_refuses_to_degrade_to_one_spectrum() {
         let (run_rgb, run_ir) = auth_streams("primary", "/dev/video2", true, false);
         assert!(and_policy_unsatisfiable(
@@ -1657,7 +1818,7 @@ mod tests {
     }
 
     #[test]
-    fn hybrid_fallback_yields_dark_rgb_to_ir_immediately() {
+    fn hybrid_fallback_yields_settled_dark_rgb_to_ir() {
         for policy in ["fallback_on_dark", "default", ""] {
             assert!(should_yield_rgb_to_ir(policy, true, CaptureStatus::TooDark));
         }

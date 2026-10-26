@@ -174,6 +174,7 @@ impl From<DbusLivenessConfig> for LivenessConfig {
             enabled: liveness.enabled,
             threshold: liveness.threshold,
             max_seconds: liveness.max_seconds,
+            ..LivenessConfig::default()
         }
     }
 }
@@ -209,6 +210,7 @@ impl From<DbusCameraConfig> for CameraConfig {
             emitter_enabled: cameras.emitter_enabled,
             dark_luma_threshold: cameras.dark_luma_threshold,
             parallel_capture: cameras.parallel_capture,
+            auto_rotate: true,
         }
     }
 }
@@ -921,6 +923,8 @@ async fn session_is_closing(connection: &zbus::Connection, path: &zbus::OwnedObj
     default_path = "/com/gundulabs/Gaze"
 )]
 pub trait Gaze {
+    async fn authorize_enrollment(&self) -> zbus::Result<()>;
+    async fn authorize_settings(&self) -> zbus::Result<()>;
     async fn claim(&self, username: &str) -> zbus::Result<()>;
     async fn release(&self) -> zbus::Result<()>;
 
@@ -1408,6 +1412,17 @@ mod tests {
             .expect("no error")
             .expect("current layout is readable");
         assert_eq!(decoded.cameras.ir_frame_size(), None);
+    }
+
+    #[test]
+    fn auto_rotate_stays_off_the_legacy_config_wire() {
+        let mut config = Config::default();
+        config.cameras.auto_rotate = false;
+        let raw = OwnedVariant::try_from(DbusConfig::from(config)).unwrap();
+        let decoded = config_from_property(raw)
+            .expect("no error")
+            .expect("current layout is readable");
+        assert!(decoded.cameras.auto_rotate);
     }
 
     #[test]

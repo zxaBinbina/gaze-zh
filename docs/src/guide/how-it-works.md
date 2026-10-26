@@ -7,7 +7,7 @@ This page explains how Gaze's facial authentication pipeline works. You do not n
 
 ## Security & Liveness
 
-Gaze performs liveness checks locally and supports infrared (IR) cameras to help resist spoofing.
+Gaze provides facial authentication with local liveness anti-spoofing and support for infrared (IR) cameras.
 
 Using an IR camera alongside RGB liveness checks helps Gaze resist presentation
 attacks such as printed photos, screen replays, and videos. In high-security
@@ -35,7 +35,7 @@ At a high level, authentication works as follows:
 3. Gaze aligns the face to a standard input shape.
 4. The recognition model converts the face into an embedding vector.
 5. Gaze compares the embedding with your enrolled profiles. If both RGB and IR cameras are active, it combines their results according to the configured hybrid policy. Depending on that policy, either or both cameras must match, or Gaze can fall back to IR when the scene is dark.
-6. If liveness checks are enabled, MiniFASNet-V2 checks the face crop for spoofing. On the IR camera path, Gaze instead checks for eye movement across frames.
+6. If liveness checks are enabled, MiniFASNet-V2 checks the face crop for spoofing. On the IR camera path, Gaze instead checks for eye movement across frames, plus the FLIR IR anti-spoof model when `liveness.ir_model` is on.
 
 Authentication succeeds when the best similarity and liveness scores both meet their configured thresholds.
 

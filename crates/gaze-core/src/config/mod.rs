@@ -5,7 +5,12 @@ use anyhow::Context;
 use serde::{Deserialize, Serialize};
 use std::io::Write;
 use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
-use std::path::Path;
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
+
+mod security;
+
+pub use security::{CustomSecurityForm, SecurityField, SecurityLevel, SecurityValidationError};
 
 pub const CONFIG_PATH: &str = "/etc/gaze/config.toml";
 pub const USERS_DIR: &str = "/var/lib/gaze/users";
@@ -35,6 +40,7 @@ pub const INFERENCE_EXECUTION_PROVIDER_LABELS: [&str; 4] =
 pub const INFERENCE_DEVICE_OPTIONS: [&str; 3] = ["cpu", "gpu", "npu"];
 pub const INFERENCE_DEVICE_LABELS: [&str; 3] = ["CPU", "GPU", "NPU"];
 pub const DEFAULT_ENROLLMENT_MIN_FACE_SIZE_RATIO: f64 = 0.25;
+static CONFIG_TMP_COUNTER: AtomicU64 = AtomicU64::new(0);
 pub const MIN_ENROLLMENT_FACE_SIZE_RATIO: f64 = 0.10;
 pub const MAX_ENROLLMENT_FACE_SIZE_RATIO: f64 = 0.75;
 pub const DEFAULT_SECURITY_THRESHOLD: f64 = 0.4;
@@ -46,6 +52,7 @@ pub const MIN_LIVENESS_MAX_SECONDS: f64 = 0.2;
 pub const MAX_LIVENESS_MAX_SECONDS: f64 = 30.0;
 pub const DEFAULT_LIVENESS_MAX_SECONDS: f64 = 2.0;
 pub const MIN_LIVENESS_FRAMES: u32 = 6;
+pub const DEFAULT_IR_LIVENESS_THRESHOLD: f64 = 0.5;
 pub const DEFAULT_CAMERA_FPS: f64 = 30.0;
 pub const DEFAULT_DURESS_CLOSED_THRESHOLD: f64 = 0.9;
 pub const MIN_DURESS_CLOSED_THRESHOLD: f64 = 0.5;
@@ -54,52 +61,6 @@ pub const DEFAULT_DURESS_HOLD_MS: u64 = 600;
 pub const MAX_DURESS_HOLD_MS: u64 = 5000;
 pub const MAX_IR_FRAME_DIMENSION: u32 = 4096;
 const DEFAULT_CONFIG_MODE: u32 = 0o644;
-
-fn default_level() -> String {
-    "medium".to_string()
-}
-
-/// Which part of `[security]` a validation error came from, so a caller can
-/// offer the fix that matches instead of one message for the whole table.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum SecurityField {
-    Level,
-    ModelQuality,
-    Threshold,
-    HybridPolicy,
-}
-
-#[derive(Clone, Debug, PartialEq)]
-pub struct SecurityValidationError {
-    pub field: SecurityField,
-    pub message: String,
-}
-
-const fn str_eq(a: &str, b: &str) -> bool {
-    let (a, b) = (a.as_bytes(), b.as_bytes());
-    if a.len() != b.len() {
-        return false;
-    }
-    let mut i = 0;
-    while i < a.len() {
-        if a[i] != b[i] {
-            return false;
-        }
-        i += 1;
-    }
-    true
-}
-
-const fn const_index_of(options: &[&str], value: &str) -> u32 {
-    let mut i = 0;
-    while i < options.len() {
-        if str_eq(options[i], value) {
-            return i as u32;
-        }
-        i += 1;
-    }
-    panic!("option is not present in its own option list")
-}
 
 pub fn index_of(options: &[&str], value: &str, fallback: u32) -> u32 {
     options
@@ -111,351 +72,6 @@ pub fn index_of(options: &[&str], value: &str, fallback: u32) -> u32 {
 
 pub fn value_at(options: &[&'static str], index: usize, fallback: &'static str) -> &'static str {
     options.get(index).copied().unwrap_or(fallback)
-}
-
-/// The values the custom security rows should show for a given level: either the
-/// stored custom values, or the values the selected preset actually resolves to.
-#[derive(Clone, Debug, PartialEq)]
-pub struct CustomSecurityForm {
-    pub detector: String,
-    pub recognizer: String,
-    pub rgb_threshold: f64,
-    pub ir_threshold: f64,
-    pub hybrid_policy: String,
-}
-
-// Presets carry an f32 threshold; round so a prompt shows 0.4, not 0.4000000059604645.
-fn round_threshold(threshold: f32) -> f64 {
-    (threshold as f64 * 100.0).round() / 100.0
-}
-
-#[derive(Serialize, Clone, Debug)]
-pub struct SecurityLevel {
-    pub level: String,
-    pub detector: String,
-    pub recognizer: String,
-    pub rgb_threshold: f64,
-    pub ir_threshold: f64,
-    pub hybrid_policy: String,
-}
-
-#[derive(Deserialize)]
-struct SecurityLevelFile {
-    #[serde(default = "default_level")]
-    level: String,
-    #[serde(default)]
-    detector: String,
-    #[serde(default)]
-    recognizer: String,
-    #[serde(default)]
-    threshold: Option<f64>,
-    #[serde(default)]
-    rgb_threshold: Option<f64>,
-    #[serde(default)]
-    ir_threshold: Option<f64>,
-    #[serde(default)]
-    hybrid_policy: String,
-}
-
-impl<'de> Deserialize<'de> for SecurityLevel {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
-        let file = SecurityLevelFile::deserialize(deserializer)?;
-        let fallback_threshold = file.threshold.unwrap_or(0.0);
-
-        Ok(Self {
-            level: file.level,
-            detector: file.detector,
-            recognizer: file.recognizer,
-            rgb_threshold: file.rgb_threshold.unwrap_or(fallback_threshold),
-            ir_threshold: file.ir_threshold.unwrap_or(fallback_threshold),
-            hybrid_policy: file.hybrid_policy,
-        })
-    }
-}
-
-impl Default for SecurityLevel {
-    fn default() -> Self {
-        Self::preset(&default_level())
-    }
-}
-
-impl SecurityLevel {
-    pub const CUSTOM_LEVEL_INDEX: u32 = const_index_of(&SECURITY_LEVEL_OPTIONS, "custom");
-
-    fn preset(level: &str) -> Self {
-        Self {
-            level: level.to_string(),
-            detector: String::new(),
-            recognizer: String::new(),
-            rgb_threshold: 0.0,
-            ir_threshold: 0.0,
-            hybrid_policy: String::new(),
-        }
-    }
-
-    pub fn low() -> Self {
-        Self::preset("low")
-    }
-
-    pub fn medium() -> Self {
-        Self::preset("medium")
-    }
-
-    pub fn high() -> Self {
-        Self::preset("high")
-    }
-
-    pub fn maximum() -> Self {
-        Self::preset("maximum")
-    }
-
-    pub fn custom(
-        detector: String,
-        recognizer: String,
-        threshold: f64,
-        hybrid_policy: String,
-    ) -> Self {
-        Self::custom_with_thresholds(detector, recognizer, threshold, threshold, hybrid_policy)
-    }
-
-    pub fn custom_with_thresholds(
-        detector: String,
-        recognizer: String,
-        rgb_threshold: f64,
-        ir_threshold: f64,
-        hybrid_policy: String,
-    ) -> Self {
-        Self {
-            level: "custom".to_string(),
-            detector,
-            recognizer,
-            rgb_threshold,
-            ir_threshold,
-            hybrid_policy,
-        }
-    }
-
-    pub fn preset_from_index(index: usize) -> Option<Self> {
-        match index {
-            0 => Some(Self::low()),
-            1 => Some(Self::medium()),
-            2 => Some(Self::high()),
-            3 => Some(Self::maximum()),
-            _ => None,
-        }
-    }
-
-    pub fn level_index(&self) -> u32 {
-        index_of(&SECURITY_LEVEL_OPTIONS, &self.level, 1)
-    }
-
-    pub fn model_quality_index(value: &str) -> u32 {
-        index_of(&MODEL_QUALITY_OPTIONS, value, 0)
-    }
-
-    pub fn model_quality_from_index(index: usize) -> &'static str {
-        value_at(&MODEL_QUALITY_OPTIONS, index, "standard")
-    }
-
-    pub fn hybrid_policy_index_for_value(value: &str) -> u32 {
-        index_of(&HYBRID_POLICY_OPTIONS, value, 0)
-    }
-
-    pub fn hybrid_policy_from_index(index: usize) -> String {
-        value_at(&HYBRID_POLICY_OPTIONS, index, "default").to_string()
-    }
-
-    /// Seeds the custom rows so switching a preset to "custom" starts from what
-    /// the preset resolved to, instead of resetting to an unrelated default.
-    pub fn custom_form(&self) -> CustomSecurityForm {
-        if self.level == "custom" {
-            CustomSecurityForm {
-                detector: self.detector.clone(),
-                recognizer: self.recognizer.clone(),
-                rgb_threshold: self.rgb_threshold,
-                ir_threshold: self.ir_threshold,
-                hybrid_policy: self.hybrid_policy.clone(),
-            }
-        } else {
-            CustomSecurityForm {
-                detector: self.effective_detector_quality().to_string(),
-                recognizer: self.effective_recognizer_quality().to_string(),
-                rgb_threshold: round_threshold(self.rgb_threshold()),
-                ir_threshold: round_threshold(self.ir_threshold()),
-                hybrid_policy: self.hybrid_policy().to_string(),
-            }
-        }
-    }
-
-    // Accessors are total: an unknown level falls back to the medium models rather
-    // than panicking the daemon. Bad input is rejected up front by `validate()`.
-    pub fn detector(&self) -> &str {
-        match self.level.as_str() {
-            "low" | "medium" => "det_500m.onnx",
-            "high" | "maximum" => "det_10g.onnx",
-            "custom" => match self.detector.as_str() {
-                "accurate" => "det_10g.onnx",
-                _ => "det_500m.onnx",
-            },
-            other => {
-                tracing::warn!("Invalid security level {other:?}; using medium detector");
-                "det_500m.onnx"
-            }
-        }
-    }
-
-    pub fn recognizer(&self) -> &str {
-        match self.level.as_str() {
-            "low" | "medium" => "w600k_mbf.onnx",
-            "high" | "maximum" => "w600k_r50.onnx",
-            "custom" => match self.recognizer.as_str() {
-                "accurate" => "w600k_r50.onnx",
-                _ => "w600k_mbf.onnx",
-            },
-            other => {
-                tracing::warn!("Invalid security level {other:?}; using medium recognizer");
-                "w600k_mbf.onnx"
-            }
-        }
-    }
-
-    // The quality tier a level actually resolves to. Derived from the model accessors so a
-    // UI pre-filling the custom rows from a preset can never drift from what the daemon loads.
-    pub fn effective_detector_quality(&self) -> &'static str {
-        match self.detector() {
-            "det_10g.onnx" => "accurate",
-            _ => "standard",
-        }
-    }
-
-    pub fn effective_recognizer_quality(&self) -> &'static str {
-        match self.recognizer() {
-            "w600k_r50.onnx" => "accurate",
-            _ => "standard",
-        }
-    }
-
-    /// Returns every problem with the current values. `validate` reports only the
-    /// first one, so diagnostics that need a complete list should use this method.
-    pub fn validation_errors(&self) -> Vec<SecurityValidationError> {
-        let mut errors = Vec::new();
-        if !SECURITY_LEVEL_OPTIONS.contains(&self.level.as_str()) {
-            errors.push(SecurityValidationError {
-                field: SecurityField::Level,
-                message: format!(
-                    "invalid security level {:?}: expected one of {:?}",
-                    self.level, SECURITY_LEVEL_OPTIONS
-                ),
-            });
-            return errors;
-        }
-        if self.level != "custom" {
-            return errors;
-        }
-
-        for (name, quality) in [
-            ("detector", self.detector.as_str()),
-            ("recognizer", self.recognizer.as_str()),
-        ] {
-            if !MODEL_QUALITY_OPTIONS.contains(&quality) {
-                errors.push(SecurityValidationError {
-                    field: SecurityField::ModelQuality,
-                    message: format!(
-                        "invalid {name} level {quality:?}: expected \"standard\" or \"accurate\""
-                    ),
-                });
-            }
-        }
-        for (name, threshold) in [
-            ("rgb_threshold", self.rgb_threshold),
-            ("ir_threshold", self.ir_threshold),
-        ] {
-            if !Self::threshold_in_range(threshold) {
-                errors.push(SecurityValidationError {
-                    field: SecurityField::Threshold,
-                    message: format!(
-                        "security.{name} must be between {MIN_SECURITY_THRESHOLD} and {MAX_SECURITY_THRESHOLD}, got {threshold}"
-                    ),
-                });
-            }
-        }
-        if !self.hybrid_policy.is_empty()
-            && !HYBRID_POLICY_OPTIONS.contains(&self.hybrid_policy.as_str())
-        {
-            errors.push(SecurityValidationError {
-                field: SecurityField::HybridPolicy,
-                message: format!(
-                    "invalid security.hybrid_policy {:?}: expected one of {:?}",
-                    self.hybrid_policy, HYBRID_POLICY_OPTIONS
-                ),
-            });
-        }
-        errors
-    }
-
-    pub fn validate(&self) -> anyhow::Result<()> {
-        match self.validation_errors().into_iter().next() {
-            Some(err) => Err(anyhow::anyhow!(err.message)),
-            None => Ok(()),
-        }
-    }
-
-    fn threshold_in_range(threshold: f64) -> bool {
-        threshold.is_finite()
-            && (MIN_SECURITY_THRESHOLD..=MAX_SECURITY_THRESHOLD).contains(&threshold)
-    }
-
-    /// Back-compat alias resolving to the **RGB** threshold. Prefer [`Self::rgb_threshold`] or
-    /// [`Self::ir_threshold`], since an IR path calling this silently matches the RGB value.
-    pub fn threshold(&self) -> f32 {
-        self.rgb_threshold()
-    }
-
-    pub fn rgb_threshold(&self) -> f32 {
-        self.threshold_for("rgb", self.rgb_threshold)
-    }
-
-    pub fn ir_threshold(&self) -> f32 {
-        self.threshold_for("ir", self.ir_threshold)
-    }
-
-    fn threshold_for(&self, spectrum: &str, custom_threshold: f64) -> f32 {
-        match self.level.as_str() {
-            "low" => 0.3,
-            "medium" => 0.4,
-            "high" => 0.5,
-            "maximum" => 0.6,
-            "custom" if Self::threshold_in_range(custom_threshold) => custom_threshold as f32,
-            "custom" => {
-                tracing::warn!(
-                    spectrum,
-                    threshold = custom_threshold,
-                    "security threshold is out of range; using the medium default"
-                );
-                DEFAULT_SECURITY_THRESHOLD as f32
-            }
-            _ => 0.4,
-        }
-    }
-
-    pub fn hybrid_policy(&self) -> &str {
-        match self.level.as_str() {
-            "low" => "or",
-            "medium" | "high" => "fallback_on_dark",
-            "maximum" => "and",
-            "custom" => {
-                if self.hybrid_policy.is_empty() {
-                    "fallback_on_dark"
-                } else {
-                    &self.hybrid_policy
-                }
-            }
-            _ => "fallback_on_dark",
-        }
-    }
 }
 
 #[derive(Deserialize, Serialize, Clone, Debug, Default)]
@@ -677,6 +293,10 @@ pub struct LivenessConfig {
     pub threshold: f64,
     #[serde(default = "default_max_seconds")]
     pub max_seconds: f64,
+    #[serde(default)]
+    pub ir_model: bool,
+    #[serde(default = "default_ir_liveness_threshold")]
+    pub ir_threshold: f64,
 }
 
 fn default_liveness_enabled() -> bool {
@@ -688,6 +308,9 @@ fn default_liveness_threshold() -> f64 {
 fn default_max_seconds() -> f64 {
     DEFAULT_LIVENESS_MAX_SECONDS
 }
+fn default_ir_liveness_threshold() -> f64 {
+    DEFAULT_IR_LIVENESS_THRESHOLD
+}
 
 impl Default for LivenessConfig {
     fn default() -> Self {
@@ -695,6 +318,8 @@ impl Default for LivenessConfig {
             enabled: default_liveness_enabled(),
             threshold: default_liveness_threshold(),
             max_seconds: default_max_seconds(),
+            ir_model: false,
+            ir_threshold: default_ir_liveness_threshold(),
         }
     }
 }
@@ -717,6 +342,14 @@ impl LivenessConfig {
                 self.max_seconds
             );
         }
+        if !Self::threshold_in_range(self.ir_threshold) {
+            anyhow::bail!(
+                "liveness.ir_threshold must be between {} and {}, got {}",
+                MIN_LIVENESS_THRESHOLD,
+                MAX_LIVENESS_THRESHOLD,
+                self.ir_threshold
+            );
+        }
         Ok(())
     }
 
@@ -736,6 +369,18 @@ impl LivenessConfig {
         } else {
             default_liveness_threshold()
         }
+    }
+
+    pub fn effective_ir_threshold(&self) -> f64 {
+        if Self::threshold_in_range(self.ir_threshold) {
+            self.ir_threshold
+        } else {
+            default_ir_liveness_threshold()
+        }
+    }
+
+    pub fn ir_model_enabled(&self) -> bool {
+        self.enabled && self.ir_model
     }
 
     pub fn effective_max_seconds(&self) -> f64 {
@@ -773,6 +418,8 @@ pub struct CameraConfig {
     pub dark_luma_threshold: u8,
     #[serde(default = "default_parallel_capture")]
     pub parallel_capture: String,
+    #[serde(default = "default_true")]
+    pub auto_rotate: bool,
 }
 
 fn default_rgb_device() -> String {
@@ -1103,6 +750,7 @@ impl Default for CameraConfig {
             parallel_capture: default_parallel_capture(),
             ir_frame_width: None,
             ir_frame_height: None,
+            auto_rotate: true,
         }
     }
 }
@@ -1111,6 +759,9 @@ const OPTIONAL_CONFIG_KEYS: [(&str, &str); 2] = [
     ("cameras", "ir_frame_width"),
     ("cameras", "ir_frame_height"),
 ];
+
+const FILE_ONLY_CONFIG_KEYS: [&str; 2] = ["liveness.ir_model", "liveness.ir_threshold"];
+const FILE_ONLY_CONFIG_SECTIONS: [&str; 1] = ["duress"];
 
 const LEGACY_CONFIG_KEYS: [&str; 3] = [
     "security.threshold",
@@ -1169,9 +820,83 @@ pub fn unknown_config_keys(contents: &str) -> Vec<String> {
     unknown
 }
 
+struct TempFileCleanup {
+    path: PathBuf,
+    armed: bool,
+}
+
+impl TempFileCleanup {
+    fn new(path: PathBuf) -> Self {
+        Self { path, armed: true }
+    }
+
+    fn disarm(&mut self) {
+        self.armed = false;
+    }
+}
+
+impl Drop for TempFileCleanup {
+    fn drop(&mut self) {
+        if self.armed {
+            let _ = std::fs::remove_file(&self.path);
+        }
+    }
+}
+
+fn create_temp_config_file(
+    parent: &Path,
+    file_name: &str,
+) -> std::io::Result<(PathBuf, std::fs::File, TempFileCleanup)> {
+    for _ in 0..1024 {
+        let counter = CONFIG_TMP_COUNTER.fetch_add(1, Ordering::Relaxed);
+        let tmp = parent.join(format!(
+            ".{file_name}.{}.{}.tmp",
+            std::process::id(),
+            counter
+        ));
+        match std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .open(&tmp)
+        {
+            Ok(file) => {
+                let cleanup = TempFileCleanup::new(tmp.clone());
+                return Ok((tmp, file, cleanup));
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(e) => return Err(e),
+        }
+    }
+    Err(std::io::Error::new(
+        std::io::ErrorKind::AlreadyExists,
+        "could not create a unique temporary config file",
+    ))
+}
+
+/// Replacement succeeded, but its directory could not be synchronized.
+/// Callers must not assume that the old configuration is still on disk.
+#[derive(Debug)]
+pub struct ConfigCommitUncertain(pub std::io::Error);
+
+impl std::fmt::Display for ConfigCommitUncertain {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "config replaced but directory sync failed: {}", self.0)
+    }
+}
+
+impl std::error::Error for ConfigCommitUncertain {}
+
 fn replace_file_atomically(path: &Path, contents: &str) -> std::io::Result<()> {
     let parent = path
         .parent()
+        .map(|parent| {
+            if parent.as_os_str().is_empty() {
+                Path::new(".")
+            } else {
+                parent
+            }
+        })
         .ok_or_else(|| std::io::Error::other("config path must have a parent directory"))?;
     let file_name = path
         .file_name()
@@ -1181,25 +906,15 @@ fn replace_file_atomically(path: &Path, contents: &str) -> std::io::Result<()> {
         .map(|meta| meta.permissions().mode() & 0o777)
         .unwrap_or(DEFAULT_CONFIG_MODE);
 
-    let tmp = parent.join(format!(".{file_name}.{}.tmp", std::process::id()));
-    let mut file = std::fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .mode(0o600)
-        .open(&tmp)?;
-    if let Err(e) = file
-        .write_all(contents.as_bytes())
-        .and_then(|_| file.flush())
-    {
-        let _ = std::fs::remove_file(&tmp);
-        return Err(e);
-    }
+    let (tmp, mut file, mut cleanup) = create_temp_config_file(parent, file_name)?;
+    file.write_all(contents.as_bytes())
+        .and_then(|_| file.flush())?;
+    file.set_permissions(std::fs::Permissions::from_mode(mode))?;
+    file.sync_all()?;
     drop(file);
-    if let Err(e) = std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(mode)) {
-        let _ = std::fs::remove_file(&tmp);
-        return Err(e);
-    }
-    std::fs::rename(&tmp, path)
+    std::fs::rename(&tmp, path)?;
+    cleanup.disarm();
+    std::fs::File::open(parent)?.sync_all()
 }
 
 impl Config {
@@ -1235,6 +950,9 @@ impl Config {
         let (section, leaf) = key
             .rsplit_once('.')
             .ok_or_else(|| anyhow::anyhow!("use section.setting, for example `security.level`"))?;
+        if FILE_ONLY_CONFIG_KEYS.contains(&key) || FILE_ONLY_CONFIG_SECTIONS.contains(&section) {
+            anyhow::bail!("`{key}` can only be set in {CONFIG_PATH}; edit it and restart gazed");
+        }
         let mut doc = toml_edit::ser::to_document(self)?;
         let mut table = doc.as_item_mut();
         for part in section.split('.') {
@@ -1346,43 +1064,40 @@ impl Config {
             });
         let parent = path
             .parent()
+            .map(|parent| {
+                if parent.as_os_str().is_empty() {
+                    Path::new(".")
+                } else {
+                    parent
+                }
+            })
             .context("config path must have a parent directory")?;
         let file_name = path
             .file_name()
             .and_then(|n| n.to_str())
             .context("config path must have a valid file name")?;
-        let tmp_path = parent.join(format!(".{file_name}.{}.tmp", std::process::id()));
-        let mut file = std::fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .mode(0o600)
-            .open(&tmp_path)
+        let (tmp_path, mut file, mut cleanup) = create_temp_config_file(parent, file_name)
             .with_context(|| {
                 format!(
-                    "failed to create temporary config file: {}",
-                    tmp_path.display()
+                    "failed to create temporary config file for {}",
+                    path.display()
                 )
             })?;
-        if let Err(err) = file
-            .write_all(encoded.as_bytes())
+        file.write_all(encoded.as_bytes())
             .and_then(|_| file.flush())
-        {
-            let _ = std::fs::remove_file(&tmp_path);
-            return Err(err)
-                .with_context(|| format!("failed to write config file: {}", path.display()));
-        }
-        drop(file);
+            .with_context(|| format!("failed to write config file: {}", path.display()))?;
         let target_mode = existing_mode.unwrap_or(DEFAULT_CONFIG_MODE);
-        if let Err(err) =
-            std::fs::set_permissions(&tmp_path, std::fs::Permissions::from_mode(target_mode))
-        {
-            let _ = std::fs::remove_file(&tmp_path);
-            return Err(err).with_context(|| {
-                format!("failed to set mode {target_mode:o} on {}", path.display())
-            });
-        }
+        file.set_permissions(std::fs::Permissions::from_mode(target_mode))
+            .with_context(|| format!("failed to set mode {target_mode:o} on {}", path.display()))?;
+        file.sync_all()
+            .with_context(|| format!("failed to sync config file: {}", path.display()))?;
+        drop(file);
         std::fs::rename(&tmp_path, path)
             .with_context(|| format!("failed to replace config file: {}", path.display()))?;
+        cleanup.disarm();
+        std::fs::File::open(parent)
+            .and_then(|dir| dir.sync_all())
+            .map_err(ConfigCommitUncertain)?;
         Ok(())
     }
 
@@ -1492,6 +1207,16 @@ mod tests {
         assert!(config.with_key("liveness", "1").is_err());
         assert!(config.get_key("liveness").is_err());
         assert!(config.to_toml().unwrap().contains("[duress]"));
+        assert!(config.with_key("liveness.ir_model", "true").is_err());
+        assert!(config.with_key("liveness.ir_threshold", "0.6").is_err());
+        for (key, value) in [
+            ("duress.enabled", "true"),
+            ("duress.closed_threshold", "0.8"),
+            ("duress.hold_ms", "900"),
+        ] {
+            let err = config.with_key(key, value).unwrap_err().to_string();
+            assert!(err.contains("restart gazed"), "{key}: {err}");
+        }
     }
     use std::fs;
     use std::path::PathBuf;
@@ -1524,88 +1249,6 @@ mod tests {
     impl Drop for TempDir {
         fn drop(&mut self) {
             let _ = fs::remove_dir_all(&self.path);
-        }
-    }
-
-    #[test]
-    fn security_level_mappings_are_stable() {
-        let cases = [
-            (SecurityLevel::low(), "det_500m.onnx", "w600k_mbf.onnx", 0.3),
-            (
-                SecurityLevel::medium(),
-                "det_500m.onnx",
-                "w600k_mbf.onnx",
-                0.4,
-            ),
-            (SecurityLevel::high(), "det_10g.onnx", "w600k_r50.onnx", 0.5),
-            (
-                SecurityLevel::maximum(),
-                "det_10g.onnx",
-                "w600k_r50.onnx",
-                0.6,
-            ),
-        ];
-
-        for (level, detector, recognizer, threshold) in cases {
-            assert_eq!(level.detector(), detector);
-            assert_eq!(level.recognizer(), recognizer);
-            assert!((level.threshold() - threshold).abs() < f32::EPSILON);
-            assert!((level.ir_threshold() - threshold).abs() < f32::EPSILON);
-        }
-
-        let custom = SecurityLevel::custom(
-            "accurate".to_string(),
-            "accurate".to_string(),
-            0.73,
-            String::new(),
-        );
-        assert_eq!(custom.detector(), "det_10g.onnx");
-        assert_eq!(custom.recognizer(), "w600k_r50.onnx");
-        assert!((custom.threshold() - 0.73).abs() < f32::EPSILON);
-        assert!((custom.ir_threshold() - 0.73).abs() < f32::EPSILON);
-
-        let custom_standard = SecurityLevel::custom(
-            "standard".to_string(),
-            "standard".to_string(),
-            0.35,
-            String::new(),
-        );
-        assert_eq!(custom_standard.detector(), "det_500m.onnx");
-        assert_eq!(custom_standard.recognizer(), "w600k_mbf.onnx");
-        assert!((custom_standard.threshold() - 0.35).abs() < f32::EPSILON);
-    }
-
-    #[test]
-    fn validate_rejects_out_of_range_custom_threshold() {
-        for bad in [-1.0, -0.5, 0.0, 0.09, 1.01, 5.0, f64::NAN, f64::INFINITY] {
-            let level = SecurityLevel::custom(
-                "standard".to_string(),
-                "standard".to_string(),
-                bad,
-                String::new(),
-            );
-            assert!(level.validate().is_err(), "{bad}");
-        }
-
-        for bad in [-1.0, -0.5, 0.0, 0.09, 1.01, 5.0, f64::NAN, f64::INFINITY] {
-            let level = SecurityLevel::custom_with_thresholds(
-                "standard".to_string(),
-                "standard".to_string(),
-                0.4,
-                bad,
-                String::new(),
-            );
-            assert!(level.validate().is_err(), "{bad}");
-        }
-
-        for good in [MIN_SECURITY_THRESHOLD, 0.4, MAX_SECURITY_THRESHOLD] {
-            let level = SecurityLevel::custom(
-                "standard".to_string(),
-                "standard".to_string(),
-                good,
-                String::new(),
-            );
-            level.validate().unwrap();
         }
     }
 
@@ -1665,129 +1308,6 @@ mod tests {
     }
 
     #[test]
-    fn out_of_range_custom_threshold_never_reaches_the_matcher() {
-        for bad in [-1.0, 0.0, 5.0, f64::NAN, f64::INFINITY] {
-            let level = SecurityLevel::custom(
-                "standard".to_string(),
-                "standard".to_string(),
-                bad,
-                String::new(),
-            );
-            assert_eq!(
-                level.threshold(),
-                DEFAULT_SECURITY_THRESHOLD as f32,
-                "{bad}"
-            );
-        }
-
-        let level = SecurityLevel::custom(
-            "standard".to_string(),
-            "standard".to_string(),
-            0.73,
-            String::new(),
-        );
-        assert!((level.threshold() - 0.73).abs() < f32::EPSILON);
-    }
-
-    #[test]
-    fn custom_security_thresholds_are_spectrum_specific() {
-        let level = SecurityLevel::custom_with_thresholds(
-            "standard".to_string(),
-            "standard".to_string(),
-            0.73,
-            0.31,
-            String::new(),
-        );
-
-        assert!((level.rgb_threshold() - 0.73).abs() < f32::EPSILON);
-        assert!((level.ir_threshold() - 0.31).abs() < f32::EPSILON);
-    }
-
-    #[test]
-    fn legacy_security_threshold_applies_to_both_spectra() {
-        let config: Config = toml_edit::de::from_str(
-            r#"
-            [security]
-            level = "custom"
-            detector = "standard"
-            recognizer = "standard"
-            threshold = 0.47
-            "#,
-        )
-        .unwrap();
-
-        assert!((config.security.rgb_threshold() - 0.47).abs() < f32::EPSILON);
-        assert!((config.security.ir_threshold() - 0.47).abs() < f32::EPSILON);
-
-        let migrated = toml_edit::ser::to_string(&config).unwrap();
-        assert!(migrated.contains("rgb_threshold = 0.47"));
-        assert!(migrated.contains("ir_threshold = 0.47"));
-
-        let security_section = migrated
-            .split("[security]")
-            .nth(1)
-            .and_then(|rest| rest.split("\n[").next())
-            .unwrap_or_default();
-        assert!(
-            !security_section
-                .lines()
-                .any(|line| line.trim_start().starts_with("threshold =")),
-            "the legacy security.threshold key must not be re-serialized: {security_section}"
-        );
-    }
-
-    #[test]
-    fn setting_one_spectrum_threshold_does_not_leak_into_the_other() {
-        let config: Config = toml_edit::de::from_str(
-            r#"
-            [security]
-            level = "custom"
-            detector = "standard"
-            recognizer = "standard"
-            rgb_threshold = 0.6
-            "#,
-        )
-        .unwrap();
-
-        assert!((config.security.rgb_threshold() - 0.6).abs() < f32::EPSILON);
-        assert_eq!(
-            config.security.ir_threshold(),
-            DEFAULT_SECURITY_THRESHOLD as f32,
-            "an unset ir_threshold must not silently inherit rgb_threshold"
-        );
-    }
-
-    #[test]
-    fn validate_rejects_unknown_hybrid_policy() {
-        let bad = SecurityLevel::custom(
-            "standard".to_string(),
-            "standard".to_string(),
-            0.5,
-            "not-a-real-policy".to_string(),
-        );
-        assert!(bad.validate().is_err());
-
-        for policy in HYBRID_POLICY_OPTIONS {
-            let level = SecurityLevel::custom(
-                "standard".to_string(),
-                "standard".to_string(),
-                0.5,
-                policy.to_string(),
-            );
-            level.validate().unwrap();
-        }
-
-        let empty = SecurityLevel::custom(
-            "standard".to_string(),
-            "standard".to_string(),
-            0.5,
-            String::new(),
-        );
-        empty.validate().unwrap();
-        assert_eq!(empty.hybrid_policy(), "fallback_on_dark");
-    }
-
-    #[test]
     fn validate_rejects_unknown_parallel_capture_mode() {
         let bad = CameraConfig {
             parallel_capture: "sometimes".to_string(),
@@ -1826,19 +1346,6 @@ mod tests {
     }
 
     #[test]
-    fn preset_levels_ignore_a_stored_custom_threshold() {
-        for preset in ["low", "medium", "high", "maximum"] {
-            let mut level = SecurityLevel::medium();
-            level.level = preset.to_string();
-            level.rgb_threshold = -1.0;
-            level.ir_threshold = -1.0;
-            level.validate().unwrap();
-            assert!(level.threshold() > 0.0, "{preset}");
-            assert!(level.ir_threshold() > 0.0, "{preset}");
-        }
-    }
-
-    #[test]
     fn liveness_validate_rejects_degenerate_settings() {
         let mut cfg = LivenessConfig::default();
         cfg.validate().unwrap();
@@ -1859,6 +1366,33 @@ mod tests {
         cfg.max_seconds = 2.5;
         cfg.validate().unwrap();
         assert_eq!(cfg.effective_max_seconds(), 2.5);
+
+        for bad in [0.0, 1.01, f64::NAN] {
+            cfg.ir_threshold = bad;
+            assert!(cfg.validate().is_err(), "{bad}");
+            assert_eq!(cfg.effective_ir_threshold(), DEFAULT_IR_LIVENESS_THRESHOLD);
+        }
+        cfg.ir_threshold = 0.7;
+        cfg.validate().unwrap();
+        assert_eq!(cfg.effective_ir_threshold(), 0.7);
+    }
+
+    #[test]
+    fn ir_model_is_opt_in_and_needs_liveness() {
+        let mut cfg = LivenessConfig::default();
+        assert!(!cfg.ir_model);
+        assert!(!cfg.ir_model_enabled());
+        cfg.ir_model = true;
+        assert!(cfg.ir_model_enabled());
+        cfg.enabled = false;
+        assert!(!cfg.ir_model_enabled());
+
+        let config: Config = toml_edit::de::from_str("[liveness]\nenabled = true\n").unwrap();
+        assert!(!config.liveness.ir_model);
+        assert_eq!(config.liveness.ir_threshold, DEFAULT_IR_LIVENESS_THRESHOLD);
+        assert!(
+            unknown_config_keys("[liveness]\nir_model = true\nir_threshold = 0.6\n").is_empty()
+        );
     }
 
     #[test]
@@ -1927,19 +1461,6 @@ mod tests {
     }
 
     #[test]
-    fn validate_rejects_unknown_security_level() {
-        let mut level = SecurityLevel::medium();
-        level.level = "bogus".to_string();
-        assert!(level.validate().is_err());
-        // Known presets still validate.
-        for preset in ["low", "medium", "high", "maximum"] {
-            let mut l = SecurityLevel::medium();
-            l.level = preset.to_string();
-            l.validate().unwrap();
-        }
-    }
-
-    #[test]
     fn inference_config_accepts_supported_provider_device_pairs() {
         let supported = [
             ("cpu", "cpu"),
@@ -1998,15 +1519,6 @@ mod tests {
     }
 
     #[test]
-    fn unknown_level_falls_back_to_medium_without_panicking() {
-        let mut level = SecurityLevel::medium();
-        level.level = "bogus".to_string();
-        assert_eq!(level.detector(), "det_500m.onnx");
-        assert_eq!(level.recognizer(), "w600k_mbf.onnx");
-        assert!((level.threshold() - 0.4).abs() < f32::EPSILON);
-    }
-
-    #[test]
     fn load_from_tolerates_invalid_level_with_fallback() {
         let temp = TempDir::new("bad-level");
         let path = temp.path().join("config.toml");
@@ -2046,7 +1558,7 @@ mod tests {
 
     #[test]
     fn the_packaged_config_has_no_unknown_keys() {
-        let contents = include_str!("../../../packaging/config/config.toml");
+        let contents = include_str!("../../../../packaging/config/config.toml");
         assert!(unknown_config_keys(contents).is_empty());
     }
 
@@ -2120,7 +1632,7 @@ mod tests {
     fn save_to_keeps_comments_and_file_mode() {
         let temp = TempDir::new("preserve-comments");
         let path = temp.path().join("config.toml");
-        let original = include_str!("../../../packaging/config/config.toml");
+        let original = include_str!("../../../../packaging/config/config.toml");
         fs::write(&path, original).unwrap();
         fs::set_permissions(&path, fs::Permissions::from_mode(0o644)).unwrap();
 
@@ -2184,6 +1696,64 @@ mod tests {
         );
     }
 
+    fn config_temp_files(dir: &Path, file_name: &str) -> Vec<PathBuf> {
+        let prefix = format!(".{file_name}.");
+        fs::read_dir(dir)
+            .unwrap()
+            .filter_map(Result::ok)
+            .map(|entry| entry.path())
+            .filter(|path| {
+                path.file_name()
+                    .and_then(|name| name.to_str())
+                    .map(|name| name.starts_with(&prefix) && name.ends_with(".tmp"))
+                    .unwrap_or(false)
+            })
+            .collect()
+    }
+
+    #[test]
+    fn save_to_cleans_up_after_replace_failure_and_allows_retry() {
+        let temp = TempDir::new("rename-failure-retry");
+        let path = temp.path().join("config.toml");
+        fs::create_dir(&path).unwrap();
+
+        let err = Config::default()
+            .save_to(path.to_str().unwrap())
+            .unwrap_err();
+        assert!(
+            err.to_string().contains("failed to replace config file"),
+            "unexpected error: {err:#}"
+        );
+        assert!(
+            config_temp_files(temp.path(), "config.toml").is_empty(),
+            "failed save must not leave a process-specific temp file"
+        );
+
+        fs::remove_dir(&path).unwrap();
+        Config::default().save_to(path.to_str().unwrap()).unwrap();
+        assert!(Config::load_from(path.to_str().unwrap()).is_ok());
+    }
+
+    #[test]
+    fn atomic_replace_cleans_up_after_rename_failure_and_allows_retry() {
+        let temp = TempDir::new("atomic-rename-failure-retry");
+        let path = temp.path().join("config.toml");
+        fs::create_dir(&path).unwrap();
+
+        replace_file_atomically(&path, "[security]\nlevel = \"high\"\n").unwrap_err();
+        assert!(
+            config_temp_files(temp.path(), "config.toml").is_empty(),
+            "failed atomic replace must not leave a process-specific temp file"
+        );
+
+        fs::remove_dir(&path).unwrap();
+        replace_file_atomically(&path, "[security]\nlevel = \"high\"\n").unwrap();
+        assert_eq!(
+            fs::read_to_string(&path).unwrap(),
+            "[security]\nlevel = \"high\"\n"
+        );
+    }
+
     #[test]
     fn load_from_missing_file_returns_default() {
         let temp = TempDir::new("missing");
@@ -2199,6 +1769,7 @@ mod tests {
         assert_eq!(config.cameras.rgb, DEFAULT_RGB_CAMERA);
         assert_eq!(config.cameras.dark_luma_threshold, 20);
         assert_eq!(config.cameras.parallel_capture(), "never");
+        assert!(config.cameras.auto_rotate);
         assert!(config.auth.abort_if_ssh);
         assert!(config.auth.abort_if_lid_closed);
         assert!(!config.auth.abort_before_first_resume);
@@ -2226,6 +1797,7 @@ mod tests {
                 emitter_enabled: true,
                 dark_luma_threshold: 55,
                 parallel_capture: "auto".to_string(),
+                auto_rotate: false,
                 ir_frame_width: Some(340),
                 ir_frame_height: Some(340),
             },
@@ -2247,6 +1819,8 @@ mod tests {
                 enabled: true,
                 threshold: 0.9,
                 max_seconds: 2.5,
+                ir_model: true,
+                ir_threshold: 0.6,
             },
             storage: StorageConfig {
                 encrypt_templates: true,
@@ -2279,6 +1853,7 @@ mod tests {
         assert_eq!(loaded.cameras.dark_luma_threshold, 55);
         assert_eq!(loaded.cameras.parallel_capture(), "auto");
         assert_eq!(loaded.cameras.ir_frame_size(), Some((340, 340)));
+        assert!(!loaded.cameras.auto_rotate);
         assert!(loaded.auth.abort_if_ssh);
         assert!(!loaded.auth.abort_if_lid_closed);
         assert!(loaded.auth.abort_before_first_resume);
@@ -2292,6 +1867,8 @@ mod tests {
         assert!(loaded.liveness.enabled);
         assert_eq!(loaded.liveness.threshold, 0.9);
         assert_eq!(loaded.liveness.max_seconds, 2.5);
+        assert!(loaded.liveness.ir_model);
+        assert_eq!(loaded.liveness.ir_threshold, 0.6);
         assert!(loaded.storage.encrypt_templates);
         assert!(loaded.storage.unlock_gnome_keyring);
         assert!(loaded.storage.unlock_kwallet);
@@ -2761,56 +2338,6 @@ level = "low""#,
     }
 
     #[test]
-    fn hybrid_policy_mappings() {
-        let mut config = Config::default();
-
-        config.security.level = "low".to_string();
-        assert_eq!(config.security.hybrid_policy(), "or");
-
-        config.security.level = "medium".to_string();
-        assert_eq!(config.security.hybrid_policy(), "fallback_on_dark");
-
-        config.security.level = "high".to_string();
-        assert_eq!(config.security.hybrid_policy(), "fallback_on_dark");
-
-        config.security.level = "maximum".to_string();
-        assert_eq!(config.security.hybrid_policy(), "and");
-
-        config.security.level = "unknown".to_string();
-        assert_eq!(config.security.hybrid_policy(), "fallback_on_dark");
-
-        config.security.level = "custom".to_string();
-        config.security.hybrid_policy = "custom_policy".to_string();
-        assert_eq!(config.security.hybrid_policy(), "custom_policy");
-    }
-
-    #[test]
-    fn validation_errors_accumulate_across_fields() {
-        let level = SecurityLevel::custom_with_thresholds(
-            "sharp".to_string(),
-            "standard".to_string(),
-            1.5,
-            -0.1,
-            "sometimes".to_string(),
-        );
-
-        let fields: Vec<SecurityField> = level
-            .validation_errors()
-            .iter()
-            .map(|err| err.field)
-            .collect();
-        assert_eq!(
-            fields,
-            vec![
-                SecurityField::ModelQuality,
-                SecurityField::Threshold,
-                SecurityField::Threshold,
-                SecurityField::HybridPolicy,
-            ]
-        );
-    }
-
-    #[test]
     fn option_lists_and_labels_stay_aligned() {
         assert_eq!(SECURITY_LEVEL_OPTIONS.len(), SECURITY_LEVEL_LABELS.len());
         assert_eq!(MODEL_QUALITY_OPTIONS.len(), MODEL_QUALITY_LABELS.len());
@@ -2830,80 +2357,11 @@ level = "low""#,
     }
 
     #[test]
-    fn validate_reports_only_the_first_error() {
-        let level = SecurityLevel::custom_with_thresholds(
-            "standard".to_string(),
-            "standard".to_string(),
-            1.5,
-            -0.1,
-            String::new(),
-        );
-
-        let message = level.validate().unwrap_err().to_string();
-        assert!(message.contains("security.rgb_threshold"), "{message}");
-        assert_eq!(level.validation_errors().len(), 2);
-    }
-
-    #[test]
-    fn an_unknown_level_stops_before_the_custom_checks() {
-        let mut level = SecurityLevel::custom_with_thresholds(
-            "sharp".to_string(),
-            "sharp".to_string(),
-            1.5,
-            -0.1,
-            "sometimes".to_string(),
-        );
-        level.level = "paranoid".to_string();
-
-        let errors = level.validation_errors();
-        assert_eq!(errors.len(), 1);
-        assert_eq!(errors[0].field, SecurityField::Level);
-    }
-
-    #[test]
-    fn custom_level_index_tracks_the_option_list() {
-        assert_eq!(
-            SecurityLevel::CUSTOM_LEVEL_INDEX as usize,
-            SECURITY_LEVEL_OPTIONS
-                .iter()
-                .position(|level| *level == "custom")
-                .expect("custom must be listed")
-        );
-    }
-
-    #[test]
     fn index_helpers_fall_back_when_unlisted() {
         assert_eq!(index_of(&SECURITY_LEVEL_OPTIONS, "high", 1), 2);
         assert_eq!(index_of(&SECURITY_LEVEL_OPTIONS, "nonsense", 1), 1);
         assert_eq!(value_at(&MODEL_QUALITY_OPTIONS, 1, "standard"), "accurate");
         assert_eq!(value_at(&MODEL_QUALITY_OPTIONS, 9, "standard"), "standard");
-    }
-
-    #[test]
-    fn custom_form_seeds_from_the_resolved_preset() {
-        let seed = SecurityLevel::high().custom_form();
-        assert_eq!(seed.detector, "accurate");
-        assert_eq!(seed.recognizer, "accurate");
-        assert_eq!(seed.rgb_threshold, 0.5);
-        assert_eq!(seed.ir_threshold, 0.5);
-        assert_eq!(seed.hybrid_policy, "fallback_on_dark");
-    }
-
-    #[test]
-    fn custom_form_keeps_stored_custom_values() {
-        let level = SecurityLevel::custom_with_thresholds(
-            "standard".to_string(),
-            "accurate".to_string(),
-            0.31,
-            0.62,
-            "and".to_string(),
-        );
-        let seed = level.custom_form();
-        assert_eq!(seed.detector, "standard");
-        assert_eq!(seed.recognizer, "accurate");
-        assert_eq!(seed.rgb_threshold, 0.31);
-        assert_eq!(seed.ir_threshold, 0.62);
-        assert_eq!(seed.hybrid_policy, "and");
     }
 
     #[test]
@@ -2963,10 +2421,10 @@ level = "low""#,
         assert!(!fs::read_to_string(path).unwrap().contains("ir_frame"));
 
         fs::write(
-            path,
-            "[cameras]\n# keep me\nir = \"/dev/video2\"\nir_frame_width = 340\nir_frame_height = 340\n",
-        )
-        .unwrap();
+        path,
+        "[cameras]\n# keep me\nir = \"/dev/video2\"\nir_frame_width = 340\nir_frame_height = 340\n",
+    )
+    .unwrap();
         let mut config = Config::load_from(path).unwrap();
         assert_eq!(config.cameras.ir_frame_size(), Some((340, 340)));
 

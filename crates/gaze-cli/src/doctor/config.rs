@@ -224,6 +224,19 @@ pub(super) fn config_findings(config: &Config) -> Vec<Check> {
                 "将 liveness.max_seconds 设为 0.2 至 30.0 之间的值（默认为 2.0）。",
             );
         }
+        if config.liveness.ir_model
+            && (!config.liveness.ir_threshold.is_finite()
+                || !(MIN_LIVENESS_THRESHOLD..=MAX_LIVENESS_THRESHOLD)
+                    .contains(&config.liveness.ir_threshold))
+        {
+            error(
+                format!(
+                    "liveness.ir_threshold must be between {MIN_LIVENESS_THRESHOLD} and {MAX_LIVENESS_THRESHOLD}, got {}",
+                    config.liveness.ir_threshold
+                ),
+                "Set liveness.ir_threshold to a value between 0.10 and 1.0 (the default is 0.5).",
+            );
+        }
     }
 
     if findings.is_empty() {
@@ -263,6 +276,23 @@ pub(super) fn config_findings(config: &Config) -> Vec<Check> {
             fix: Some("请启用 [liveness]，除非您有意接受照片或屏幕欺骗的风险。".to_string()),
         });
     }
+    if config.liveness.ir_model && !config.liveness.enabled {
+        findings.push(Check {
+            level: Level::Warning,
+            name: "IR anti-spoof model",
+            message: "liveness.ir_model is true but liveness is disabled, so it never runs"
+                .to_string(),
+            fix: Some("Enable [liveness] or remove ir_model.".to_string()),
+        });
+    } else if config.liveness.ir_model && ir.is_empty() {
+        findings.push(Check {
+            level: Level::Warning,
+            name: "IR anti-spoof model",
+            message: "liveness.ir_model is true but cameras.ir is empty, so it never runs"
+                .to_string(),
+            fix: Some("Configure cameras.ir or remove ir_model.".to_string()),
+        });
+    }
     if config.enrollment.max_templates == 0 {
         findings.push(Check {
             level: Level::Warning,
@@ -282,6 +312,34 @@ mod tests {
     #[test]
     fn valid_default_config_has_no_errors() {
         let findings = config_findings(&Config::default());
+        assert!(!findings.iter().any(|check| check.level == Level::Error));
+    }
+
+    #[test]
+    fn ir_model_settings_are_checked() {
+        let mut config = Config::default();
+        config.liveness.ir_model = true;
+        config.liveness.ir_threshold = 1.5;
+        let findings = config_findings(&config);
+        assert!(
+            findings.iter().any(|check| check.level == Level::Error
+                && check.message.contains("liveness.ir_threshold"))
+        );
+        assert!(
+            findings
+                .iter()
+                .any(|check| check.name == "IR anti-spoof model"
+                    && check.message.contains("cameras.ir is empty"))
+        );
+
+        config.liveness.ir_threshold = 0.5;
+        config.cameras.ir = "/dev/video2".to_string();
+        let findings = config_findings(&config);
+        assert!(
+            !findings
+                .iter()
+                .any(|check| check.name == "IR anti-spoof model")
+        );
         assert!(!findings.iter().any(|check| check.level == Level::Error));
     }
 

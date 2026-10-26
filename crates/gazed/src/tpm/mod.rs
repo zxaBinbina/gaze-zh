@@ -7,15 +7,16 @@ use std::path::PathBuf;
 use std::str::FromStr;
 
 use anyhow::{Context as _, anyhow};
-use gaze_security::tpm::{TPM_DEVICES, TPM_RAW_DEVICE, TPM_RM_DEVICE, seal_in, unseal_in};
+use gaze_security::tpm::{
+    SealedKey, TPM_DEVICES, TPM_RAW_DEVICE, TPM_RM_DEVICE, seal_in, unseal_in,
+};
 use tss_esapi::structures::{Private, Public};
 use tss_esapi::tcti_ldr::DeviceConfig;
 use tss_esapi::traits::{Marshall, UnMarshall};
 use tss_esapi::{Context, TctiNameConf};
+use zeroize::Zeroizing;
 
 use crate::crypto::KEY_LEN;
-use gaze_security::tpm::SealedKey;
-use zeroize::Zeroizing;
 
 pub const STATE_DIR: &str = "/var/lib/gaze/tpm";
 
@@ -65,6 +66,10 @@ pub fn load_or_create_dek(state_dir: &Path) -> anyhow::Result<SealedKey> {
         seal_in(&mut context, &dek).context("failed to seal the template key")?;
     persist_bundle(state_dir, &public.marshall()?, private.value())?;
     Ok(dek)
+}
+
+pub fn available() -> bool {
+    !present_devices().is_empty() || tcti_override_present()
 }
 
 fn present_devices() -> Vec<&'static str> {

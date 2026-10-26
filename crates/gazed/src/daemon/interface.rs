@@ -20,6 +20,14 @@ fn is_kwallet_pam_service(pam_service: &str) -> bool {
 
 #[interface(name = "com.gundulabs.Gaze")]
 impl AuthDaemon {
+    async fn authorize_enrollment(&self, #[zbus(header)] header: Header<'_>) -> fdo::Result<()> {
+        Self::ensure_authorized(&header, POLKIT_ACTION_MANAGE_FACES).await
+    }
+
+    async fn authorize_settings(&self, #[zbus(header)] header: Header<'_>) -> fdo::Result<()> {
+        Self::ensure_authorized(&header, POLKIT_ACTION_MANAGE_CONFIG).await
+    }
+
     async fn register_extension(
         &self,
         #[zbus(header)] header: Header<'_>,
@@ -320,7 +328,19 @@ impl AuthDaemon {
             };
 
             let run_rgb = !rgb_device.is_empty();
-            let run_ir = !ir_device.is_empty();
+            let mut run_ir = !ir_device.is_empty();
+            if run_ir && rgb_continues_without_ir(config.security.hybrid_policy(), run_rgb) {
+                let source = ir_device.clone();
+                let disconnected = tokio::task::spawn_blocking(move || {
+                    gaze_vision::camera::camera_disconnected(&source, false)
+                })
+                .await
+                .unwrap_or(false);
+                if disconnected {
+                    warn!("EnrollStart: IR camera {ir_device:?} is not connected; enrolling RGB only");
+                    run_ir = false;
+                }
+            }
 
             if !run_rgb && !run_ir {
                 error!("No cameras configured for enrollment");
@@ -356,6 +376,9 @@ impl AuthDaemon {
                 username, face_name, template_id, run_rgb, run_ir
             );
 
+            let orientation_watch = OrientationWatch::start(config.cameras.auto_rotate).await;
+            let orientation = orientation_watch.as_ref().map(OrientationWatch::handle);
+
             let prompts = [
                 EnrollPrompt::LookStraight,
                 EnrollPrompt::LookUp,
@@ -382,9 +405,11 @@ impl AuthDaemon {
                 let rgb_device_clone = rgb_device.clone();
                 let rgb_captured_for_step_clone = rgb_captured_for_step.clone();
                 let preview_tx_clone = preview_tx.clone();
+                let orientation_clone = orientation.clone();
 
                 rgb_thread = Some(std::thread::spawn(move || {
-                    let mut checker = FaceChecker::new(detector_arc, &config_clone, Spectrum::Rgb, true);
+                    let mut checker = FaceChecker::new(detector_arc, &config_clone, Spectrum::Rgb, true)
+                        .with_orientation(orientation_clone);
                     let mut preview = PreviewStream::new(preview_tx_clone);
                     let mut pose_baseline = None;
 
@@ -432,6 +457,7 @@ impl AuthDaemon {
                                     continue 'steps;
                                 }
 
+                                let frame = checker.orient(frame);
                                 preview.offer(&frame);
 
                                 let prompt = prompts[current_step];
@@ -519,6 +545,7 @@ impl AuthDaemon {
                             continue;
                         }
 
+                        let frame = checker.orient(frame);
                         preview.offer(&frame);
 
                         let prompt = prompts[current_step];
@@ -581,9 +608,11 @@ impl AuthDaemon {
                 let ir_node_clone = ir_node.clone();
                 let rgb_captured_for_step_clone = rgb_captured_for_step.clone();
                 let preview_tx_clone = preview_tx.clone();
+                let orientation_clone = orientation.clone();
 
                 ir_thread = Some(std::thread::spawn(move || {
-                    let mut checker = FaceChecker::new(detector_arc, &config_clone, Spectrum::Ir, true);
+                    let mut checker = FaceChecker::new(detector_arc, &config_clone, Spectrum::Ir, true)
+                        .with_orientation(orientation_clone);
                     let mut dark_gate = IrDarkFrameGate::new(config_clone.cameras.dark_luma_threshold);
                     let mut preview = PreviewStream::new(preview_tx_clone);
 
@@ -649,6 +678,7 @@ impl AuthDaemon {
                                     }
                                 }
 
+                                let frame = checker.orient(frame);
                                 preview.offer(&frame);
 
                                 let (status, result_opt) = {
@@ -733,6 +763,7 @@ impl AuthDaemon {
                             }
                         }
 
+                        let frame = checker.orient(frame);
                         preview.offer(&frame);
 
                         let prompt = prompts[current_step];
@@ -999,13 +1030,14 @@ impl AuthDaemon {
         };
 
         let liveness_arc = self.liveness.clone();
+        let ir_liveness_arc = self.ir_liveness.clone();
         let config = self.settings.read().await;
         let sessions = self.capture_models(&config)?;
 
         self.rt_handle
             .spawn_blocking(move || {
                 let _slot = slot;
-                let result = run_inference_benchmark(sessions, liveness_arc);
+                let result = run_inference_benchmark(sessions, liveness_arc, ir_liveness_arc);
                 drop(config);
                 result
             })
@@ -1197,6 +1229,7 @@ impl AuthDaemon {
             new_config
                 .cameras
                 .set_ir_frame_size(current.cameras.ir_frame_size());
+            new_config.cameras.auto_rotate = current.cameras.auto_rotate;
             // A legacy client cannot see or clear the flag, so treat it as turning the feature
             // off rather than rejecting every later write with an error it cannot act on.
             if new_config.clamp_keyring() {
@@ -1225,6 +1258,7 @@ impl AuthDaemon {
             config
                 .cameras
                 .set_ir_frame_size(current.cameras.ir_frame_size());
+            config.cameras.auto_rotate = current.cameras.auto_rotate;
             // This older client cannot clear a KWallet opt-in when removing prerequisites.
             if config.storage.validate_keyring(&config.liveness).is_err() {
                 config.storage.unlock_kwallet = false;
@@ -1255,6 +1289,7 @@ impl AuthDaemon {
             config
                 .cameras
                 .set_ir_frame_size(current.cameras.ir_frame_size());
+            config.cameras.auto_rotate = current.cameras.auto_rotate;
             Ok(config)
         })
         .await?;

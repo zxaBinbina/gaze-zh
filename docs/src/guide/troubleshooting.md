@@ -53,7 +53,7 @@ That command shows the most recent daemon log messages.
 
 ### Daemon exits when template encryption is enabled
 
-If `gazed` refuses to start and the logs show a message like *"template encryption is enabled ([storage] encrypt_templates) but no usable TPM is available"*, the daemon is failing closed on purpose. Encryption is enabled by default for new or omitted storage settings; it will not silently store biometric data unencrypted.
+If `gazed` refuses to start and the logs show a message like *"template encryption is enabled ([storage] encrypt_templates) but no usable TPM is available"*, the daemon is failing closed on purpose. Encryption is enabled by default for new or omitted storage settings; it will not silently store biometric data unencrypted. Stores enrolled before an upgrade on machines without a TPM are kept working automatically, so this only affects new installations or an explicit `encrypt_templates = true`. systemd does not restart the daemon after this exit.
 
 ```bash
 journalctl -u gazed -n 50 --no-pager
@@ -90,18 +90,24 @@ sudo systemctl start gazed
 
 ### Legacy template or incomplete TPM key errors after upgrading
 
-If logs mention `unbound or plaintext templates require explicit migration` or
-`legacy unbound templates require explicit migration`, stop the daemon and run the
-[template maintenance procedure](/guide/configuration#upgrade-legacy-encrypted-templates).
-This also applies to mixed stores left by an interrupted older migration. Do not
-simply keep retrying startup: plaintext and legacy ciphertext are deliberately not
-authenticated or rebound automatically. If the store's account ownership cannot be
-trusted, re-enroll instead.
+Upgrades bind existing templates automatically. If logs mention `unbound or
+plaintext templates require explicit migration`, unencrypted or legacy templates
+appeared after the store was already encrypted, for example from a restored backup.
+systemd does not restart the daemon after this exit. Follow the
+[repair procedure](/guide/configuration#repair-a-store-rejected-at-startup), or
+re-enroll if the store's account ownership cannot be trusted.
 
 If logs mention an `incomplete legacy TPM key pair`, restore the missing `dek.pub`
 or `dek.priv` from a protected backup. Do not delete the surviving file to bypass
 the error; a new key cannot decrypt the existing templates. An invalid `dek.blob`
 is also an error and never triggers fallback to legacy files.
+
+A `conflicting TPM key files` error means `dek.blob` disagrees with a surviving
+legacy key file. Stop `gazed` and preserve a protected backup of `/var/lib/gaze`.
+Do not delete key files to bypass the check: restore the templates and their
+original matching key set together. If an earlier version already deleted the
+original key pair, recover it from backup or re-enroll; migration cannot recover
+a lost encryption key.
 
 A `template storage needs recovery` error means a storage/config rollback failed.
 Matching and writes are disabled in that daemon process. Stop it, preserve a
@@ -368,6 +374,23 @@ rgb = ""
 ir = "/dev/video2"
 emitter_enabled = true
 ```
+
+### Auth fails on a 2-in-1 in tablet mode
+
+In portrait or upside-down tablet mode Gaze turns camera frames upright using
+the auto-rotate sensor. If it still finds no face, check that the sensor is
+visible:
+
+```bash
+monitor-sensor --accel
+```
+
+If that prints no accelerometer, install and start `iio-sensor-proxy`. Run
+`journalctl -u gazed -b | grep -i orientation` to see what Gaze read from the
+sensor; no output means gazed did not find it. If a laptop that is never used as a tablet starts failing after an
+upgrade because its sensor reports the wrong orientation, set
+`cameras.auto_rotate = false`. See
+[Tablet mode on 2-in-1s](./configuration.md#tablet-mode-on-2-in-1s).
 
 ## 4. Lock screen does not trigger face authentication
 

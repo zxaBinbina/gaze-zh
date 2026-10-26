@@ -39,6 +39,7 @@ rgb = "primary"
 # ir_frame_height = 340
 # parallel_capture = "never" # "never", "auto", or "always" (requires ir)
 dark_luma_threshold = 20
+auto_rotate = true          # turn frames upright on 2-in-1s in tablet mode
 
 [auth]
 abort_if_ssh = true
@@ -239,6 +240,34 @@ dark_luma_threshold = 20
 
 With the default, a frame is skipped when its mean luminance (0-255, BT.601 weighted) falls below 20. Raise it to reject dimmer scenes, lower it to be more permissive.
 
+### Tablet mode on 2-in-1s
+
+On a 2-in-1 the camera sits in the screen bezel and turns with it, so in portrait
+or upside-down tablet mode the frames arrive sideways and the face detector finds
+nothing. Gaze reads the same orientation sensor your desktop uses for auto-rotate
+(through `iio-sensor-proxy`) and turns RGB and IR frames upright before detection.
+The enrollment preview turns with them.
+
+```toml
+[cameras]
+auto_rotate = true
+```
+
+- Machines without an accelerometer, or without `iio-sensor-proxy` running, are
+  unaffected: frames are used exactly as captured and nothing extra runs.
+- When the sensor reports a clear orientation, Gaze applies that one rotation.
+  It costs no extra detection work.
+- When the device lies flat, the sensor has no orientation to report. Only then,
+  and only after the upright frame shows no face, Gaze also tries the other three
+  rotations on every fifth such frame and keeps whichever one finds a face.
+- The rotation only decides which way a frame is turned. Recognition, liveness,
+  and the match threshold run unchanged on the result, so it cannot make a face
+  pass that would otherwise fail.
+- If a laptop's sensor reports the wrong orientation in normal use (a known issue
+  on some models), set `auto_rotate = false`.
+
+This setting is only available in the config file, not in the GUI.
+
 ## Infrared (IR) camera
 
 Gaze supports Windows Hello-style infrared (IR) cameras to enable multi-camera hybrid authentication. The `ir` setting may point directly to the IR camera's `/dev/video*` node:
@@ -261,6 +290,10 @@ ir = "usb:046d:085e"
 When you configure an IR camera alongside RGB, Gaze captures templates from both
 during enrollment, then combines their results during verification according to
 the configured `hybrid_policy`.
+
+If the configured IR camera is not connected, for example a USB IR camera on an
+undocked laptop, Gaze enrolls and verifies with the RGB camera alone. The `and`
+policy is the exception: it keeps requiring both cameras and fails instead.
 
 ### IR only
 
@@ -342,7 +375,7 @@ Many IR cameras automatically light their infrared LED when streaming starts. If
 
 Gaze resolves the underlying `/dev/video*` node from the PipeWire camera, matches USB cameras by VID:PID against a small built-in table, and probes for the standard Microsoft Face Authentication UVC control. The files under `crates/gaze-core/ir-profiles/` describe USB UVC extension-unit requests only.
 
-Non-USB emitters driven over I2C use the reviewed profiles in `crates/gaze-core/i2c-ir-profiles/`, which are compiled into Gaze and never read from user configuration. The only one today is the Surface Pro 4 OV7251 sensor. It needs:
+Non-USB emitters driven over I2C use the reviewed profiles in `crates/gaze-core/ir-profiles/i2c/`, which are compiled into Gaze and never read from user configuration. The only one today is the Surface Pro 4 OV7251 sensor. It needs:
 
 - The `i2c-dev` kernel module loaded, so the sensor's `/dev/i2c-*` bus exists. To load it at every boot, run `echo i2c-dev | sudo tee /etc/modules-load.d/i2c-dev.conf`.
 - A userspace bridge that relays the IPU3/CIO2 IR stream into a v4l2loopback device at `/dev/video42` named `Surface IR Camera`, and writes the path of the CIO2 source node to `/run/surface_ir_bridge_dev`. Point `cameras.ir` at `/dev/video42`.
@@ -354,7 +387,7 @@ the emitter bit and reads the register back. `gaze doctor` reports which check
 failed. This register value has only been verified with the Surface Pro 4 wiring,
 so it may not work with other Surface models or OV7251 devices.
 
-On the IR path, liveness uses eye-motion analysis across frames; the RGB MiniFASNet model is not applied to infrared.
+On the IR path, liveness uses eye-motion analysis across frames; the RGB MiniFASNet model is not applied to infrared. You can add an IR anti-spoof model with `ir_model`; see [IR anti-spoof model](#ir-anti-spoof-model).
 
 Driving the emitter blaster needs read/write access to the IR `/dev/video*` node. The daemon runs as root and is a member of the `video` group, so the default `root:video` device permissions are sufficient; no extra udev rule is required.
 
@@ -509,20 +542,22 @@ Behavior to be aware of:
   recognized; inaccessible sysfs, network, overlay, or unsupported storage layouts
   produce an unknown-status warning. Full-disk encryption must cover the state
   storage, not just your home directory. Root can still recover secrets after unlock.
-- **Explicit migration.** Enabling encryption through `gaze config` or the GUI
-  explicitly migrates the existing plaintext store. If you enable it by hand-editing
-  the file, or upgrade an older plaintext or mixed-format store, run the maintenance
-  procedure below. Startup never silently encrypts planted plaintext or rebinds
-  legacy ciphertext. Turning encryption off decrypts current-format templates,
+- **Automatic migration.** When encryption is on, `gazed` encrypts existing
+  plaintext templates and rebinds older `GZE1` ciphertext on startup, as long as
+  the store has never been committed as encrypted by this version. This covers
+  upgrades and enabling encryption by editing the file. Once the store is recorded
+  as encrypted, startup rejects any plaintext or legacy ciphertext added later.
+  Enabling encryption through `gaze config` or the GUI migrates immediately.
+  Turning encryption off decrypts current-format templates,
   which also needs the TPM that sealed them. Migration stages a complete replacement
   store and atomically exchanges directories, so it needs enough free space for a
   second copy and a filesystem supporting atomic directory exchange. Unsupported
   filesystems fail without publishing a partial conversion. A failed live config
   save restores the old store.
-- **Legacy encrypted templates.** Older `GZE1` ciphertext has no account binding
-  and is never accepted for matching or automatically rebound during normal startup.
-  Follow the explicit maintenance procedure below, or remove the old templates and
-  re-enroll.
+- **Upgrades without a TPM.** A store enrolled before encryption became the
+  default, on a machine with no TPM, keeps working: `gazed` sets
+  `encrypt_templates = false` and logs a warning instead of refusing to start.
+  New installations without a TPM still fail closed.
 - **TPM reset.** If the TPM is cleared, the sealed key (and therefore the
   encrypted templates) becomes unrecoverable. Archive or remove the unreadable
   template store and stale `/var/lib/gaze/tpm`, then re-enroll. The daemon will not
@@ -534,14 +569,12 @@ Apply changes with:
 sudo systemctl restart gazed
 ```
 
-### Upgrade legacy encrypted templates
+### Repair a store rejected at startup
 
-Use this procedure for older encrypted, plaintext, or mixed-format templates when
-enabling encryption by editing the config or upgrading an omitted storage setting.
-Only migrate a store whose existing account-directory ownership you trust. Legacy
-encryption cannot prove that a template has not already been moved between users;
-if in doubt, re-enroll instead. Keep a protected backup of both `/var/lib/gaze/users`
-and `/var/lib/gaze/tpm` before migrating, and retain a working password login.
+Upgrades migrate automatically. If startup reports `unbound or plaintext templates
+require explicit migration`, plaintext or `GZE1` templates appeared in a store that
+was already encrypted, for example from a restored backup. Only migrate a store whose
+account-directory ownership you trust; if in doubt, re-enroll instead.
 
 ```bash
 sudo systemctl stop gazed
@@ -550,15 +583,15 @@ sudo systemctl start gazed
 ```
 
 The maintenance command does not load camera/inference models. A process lock
-prevents it from running concurrently with the daemon. It validates all encrypted
-records and binds plaintext inputs before publishing one complete owner-bound store; failed staging leaves
-the original store intact. After a successful upgrade, the command is not needed
-again. Normal startup still rejects any plaintext or legacy ciphertext introduced later.
+prevents it from running concurrently with the daemon. Failed staging leaves the
+original store intact.
 
 The old `dek.pub` / `dek.priv` key pair is upgraded automatically to a single
 owner-only `dek.blob` after successful unsealing. An incomplete legacy pair is an
 error, not permission to create a replacement key: restore the missing blob from
-backup. A malformed bundle never falls back to the old files.
+backup. A malformed bundle never falls back to the old files. If a bundle and
+legacy files coexist, their sealed blobs must match; conflicting key files are
+preserved and startup fails rather than choosing a key or deleting either set.
 
 Enrollment likewise publishes a fully synced batch before evicting old templates.
 Interrupted staging and deletion directories are excluded from matching and cleaned
@@ -637,6 +670,27 @@ When enabled, Gaze runs a local MiniFASNet-V2 anti-spoofing model on the detecte
 Alongside the model, Gaze watches how far your eyes travel between frames, measured against the distance between them so it does not depend on how close you sit. A run that has accumulated several frame pairs and never seen movement above that floor is treated as a still object and refused even when the model is confident. Moving normally (breathing, blinking, small head shifts) clears it; once any pair shows movement, holding still afterwards does not undo it. On IR cameras this movement check is the whole liveness test, since the anti-spoof model is trained on colour frames.
 
 `max_seconds` caps how long (in seconds of usable face frames) Gaze examines the camera before giving up and falling back to your password. It bounds the whole attempt, not just the liveness stage: an unrecognised face spends the same budget. Gaze calculates the frame budget dynamically using your camera's actual frame rate (e.g. 2.0 seconds corresponds to 60 frames on a 30fps webcam, or 120 frames on a 60fps camera). Frames only count while a usable face is in view, and the RGB and IR phases each get the full budget. Raise it if authentication gives up before you are ready; `gaze auth --verbose` reports when a run ends this way.
+
+### IR anti-spoof model
+
+```toml
+[liveness]
+enabled = true
+ir_model = false
+ir_threshold = 0.5
+```
+
+`ir_model = true` adds an infrared anti-spoof model to the IR path: Alibaba DAMO's [FLIR](https://modelscope.cn/models/iic/cv_manual_face-liveness_flir/summary) classifier (about 1.3 MB, MIT). It downloads into `/var/cache/gaze` the first time it is needed and is checked against a pinned SHA-256.
+
+With it on, an IR match needs both the eye-motion check and the model. The model scores every matched frame, and Gaze passes once at least three are scored and their average live score reaches `ir_threshold`. This is stricter than the RGB rule, so one lucky frame cannot carry an attempt. A good model score alone never unlocks.
+
+It fails closed. If the model cannot be downloaded, loaded, or run, the IR attempt ends with an error and you enter your password. Gaze does not fall back to the motion-only check or to RGB alone.
+
+Notes:
+
+- These keys live only in `/etc/gaze/config.toml`. The GUI and `gaze config` leave them untouched; restart with `sudo systemctl restart gazed` after editing.
+- The model's training data is private and Gaze has no measured error rates for it on laptop IR sensors. `ir_threshold` defaults to 0.5, the model's even-odds point. Test with `gaze auth` before relying on it, and with `RUST_LOG=debug` to see the per-frame scores.
+- Upstream notes weaker results against 3D masks and in strong light.
 
 ## Duress Signal
 

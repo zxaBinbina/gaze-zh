@@ -526,6 +526,20 @@ enable_desktop_integrations() {
     enable_hyprlock
 }
 
+pam_auth_stack_supports_gaze_insert() {
+    awk '
+        /^[[:space:]]*#/ || /^[[:space:]]*$/ { next }
+        /^[[:space:]]*-?auth[[:space:]]/ {
+            found = 1
+            if ($0 ~ /pam_faillock\.so/ && $0 ~ /preauth/) next
+            if ($0 ~ /^[[:space:]]*-?auth[[:space:]]+(include|substack)[[:space:]]+system-auth([[:space:]]|$)/) exit 0
+            if ($0 ~ /^[[:space:]]*-?auth[[:space:]]+(required|requisite)[[:space:]]+pam_unix\.so([[:space:]]|$)/) exit 0
+            exit 1
+        }
+        END { if (!found) exit 2 }
+    ' "$1"
+}
+
 configure_pam_arch() {
     pam_file=/etc/pam.d/sudo
 
@@ -553,21 +567,29 @@ configure_pam_arch() {
         return 0
     fi
 
-    first_auth=$(grep -m1 -E '^[[:space:]]*-?auth[[:space:]]' "$pam_file" 2>/dev/null || true)
-    case "$first_auth" in
-        *pam_faillock.so*preauth*) gate=after ;;
-        *) gate=before ;;
-    esac
+    supports_insert=0
+    pam_auth_stack_supports_gaze_insert "$pam_file" || supports_insert=$?
+    if [ "$supports_insert" -eq 2 ]; then
+        warn "$pam_file has no supported auth line; leaving it unchanged."
+        say "To enable Gaze for sudo, add a faillock preauth gate and pam_gaze.so manually:"
+        link "$PAM_DOCS_URL"
+        return 0
+    elif [ "$supports_insert" -ne 0 ]; then
+        warn "$pam_file has a custom auth rule before its password stack; leaving it unchanged."
+        say "This avoids making a successful face match skip an existing MFA or policy gate."
+        say "To enable Gaze for sudo, review the stack and add it manually:"
+        link "$PAM_DOCS_URL"
+        return 0
+    fi
 
-    awk -v gate="$gate" '
+    awk '
         /^[[:space:]]*-?auth[[:space:]]/ && !done {
-            if (gate == "after") {
+            if ($0 ~ /pam_faillock\.so/ && $0 ~ /preauth/) {
+                seen_preauth = 1
                 print
-                print "auth        sufficient    pam_gaze.so"
-                done = 1
                 next
             }
-            print "-auth       requisite     pam_faillock.so preauth"
+            if (!seen_preauth) print "-auth       requisite     pam_faillock.so preauth"
             print "auth        sufficient    pam_gaze.so"
             done = 1
         }
@@ -600,12 +622,29 @@ record_pam_sudo_optout() {
     $SUDO chmod 644 "$PAM_SUDO_OPTOUT" || true
 }
 
+authselect_profile_id() {
+    awk -F: '/^Profile ID:/ { gsub(/^[[:space:]]+|[[:space:]]+$/, "", $2); print $2; exit }'
+}
+
+authselect_profile_supports_gaze_select() {
+    case "$1" in
+    "" | gaze | custom/gaze | local | minimal) return 0 ;;
+    *) return 1 ;;
+    esac
+}
+
 configure_authselect() {
     if ! command -v authselect >/dev/null 2>&1; then
         return 0
     fi
 
     current_authselect="$($SUDO authselect current 2>/dev/null || true)"
+    current_profile="$(printf '%s\n' "$current_authselect" | authselect_profile_id)"
+
+    if ! authselect_profile_supports_gaze_select "$current_profile"; then
+        problem "Active authselect profile '$current_profile' is not replaced automatically; configure Gaze PAM manually to preserve the existing authentication backend."
+        return 0
+    fi
 
     if ! $SUDO test -f /etc/gaze/authselect.previous; then
         case "$current_authselect" in
