@@ -1,0 +1,3 @@
+# Include the upstream PAM samples in distribution vendor directories.
+!kde/**/vendor/
+!kde/**/vendor/**

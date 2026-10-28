@@ -1,0 +1,2 @@
+# Preserve downloaded source samples, including their upstream whitespace.
+kde/** -whitespace

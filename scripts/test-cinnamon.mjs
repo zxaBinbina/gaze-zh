@@ -124,7 +124,7 @@ const shown = widget => {
     return Boolean(widget);
 };
 
-const CONFIRM_LABEL = 'Face verified. Press Enter or click Authenticate to confirm.';
+const CONFIRM_LABEL = '人脸已验证。请按 Enter 或点击认证以确认。';
 const metadata = JSON.parse(await readFile(join(repo, 'integrations/cinnamon/metadata.json'), 'utf8'));
 
 async function environment(version, options = {}) {
@@ -484,7 +484,7 @@ for (const version of versions) {
             assert.equal(dialog._confirmMode ?? false, false);
             assert.equal(shown(dialog._passwordEntry), true, 'password entry is on screen');
             assert.equal(dialog._passwordEntry.reactive, true);
-            assert.equal(dialog._passwordEntry.hint_text, 'Password');
+            assert.equal(dialog._passwordEntry.hint_text, '密码');
             dialog._passwordEntry.set_text('test-password');
             dialog._onEntryActivate();
             assert.deepEqual(dialog._session.responses, ['test-password']);
@@ -517,12 +517,12 @@ for (const version of versions) {
             const hint = dialog._faceHintLabel;
             assert.equal(hint.parent, dialog._errorMessageLabel.parent);
             assert.equal(hint.visible, true);
-            assert.equal(hint.text, '(or look at the camera)');
+            assert.equal(hint.text, '（或看向摄像头）');
             assert.equal(dialog._infoMessageLabel.visible, false);
             assert.equal(dialog._errorMessageLabel.visible, false);
             assert.equal(dialog._passwordEntry.reactive, true);
             dialog._session.emit('show-info', 'Hold still...');
-            assert.equal(hint.text, 'Hold still...');
+            assert.equal(hint.text, '请保持不动...');
             dialog._session.emit('show-info', 'GAZE_MSG_FACE_VERIFIED');
             assert.equal(hint.visible, false);
             noErrors(env);
@@ -530,10 +530,10 @@ for (const version of versions) {
     });
 
     for (const [signal, message, expected] of [
-        ['show-info', 'GAZE_MSG_FACE_NOT_RECOGNIZED', 'Face not recognized. Please enter your password.'],
-        ['show-info', 'GAZE_MSG_FACE_TOO_DARK', 'Too dark for face authentication. Please enter your password.'],
-        ['show-info', 'GAZE_MSG_SOMETHING_NEW', 'Face authentication failed. Please enter your password.'],
-        ['show-error', 'Sorry, that didn’t work. Please try again.', 'Sorry, face authentication did not work. Please try again.'],
+        ['show-info', 'GAZE_MSG_FACE_NOT_RECOGNIZED', '未识别到匹配人脸。请输入密码。'],
+        ['show-info', 'GAZE_MSG_FACE_TOO_DARK', '光线过暗，无法进行人脸认证。请输入密码。'],
+        ['show-info', 'GAZE_MSG_SOMETHING_NEW', '人脸认证失败。请输入密码。'],
+        ['show-error', 'Sorry, that didn’t work. Please try again.', '抱歉，人脸认证未成功。请重试。'],
         ['show-error', 'Authentication failure', 'Authentication failure'],
     ]) {
         test(`${version}: ${signal} ${message} shows a readable error`, async () => {
@@ -663,10 +663,10 @@ for (const version of versions.filter(version => unlockVersions.has(version))) {
             const client = dialog._authClient;
             dialog._passwordEntry.hint_text = 'GAZE_MSG_LOOK_CAMERA';
             dialog._onAuthPrompt(client, 'GAZE_MSG_LOOK_CAMERA');
-            assert.equal(dialog._infoLabel.text, '(or look at the camera)');
-            assert.equal(dialog._passwordEntry.hint_text, 'Password');
+            assert.equal(dialog._infoLabel.text, '（或看向摄像头）');
+            assert.equal(dialog._passwordEntry.hint_text, '密码');
             dialog._onAuthInfo(client, 'Hold still...');
-            assert.equal(dialog._infoLabel.text, 'Hold still...');
+            assert.equal(dialog._infoLabel.text, '请保持不动...');
             dialog._onAuthInfo(client, 'GAZE_MSG_FACE_VERIFIED');
             assert.equal(dialog._infoLabel.text, '');
             noErrors(env);
@@ -674,9 +674,9 @@ for (const version of versions.filter(version => unlockVersions.has(version))) {
     });
 
     for (const [handler, message, field, expected] of [
-        ['_onAuthInfo', 'GAZE_MSG_FACE_NOT_RECOGNIZED', '_infoLabel', 'Face not recognized. Please enter your password.'],
-        ['_onAuthInfo', 'GAZE_MSG_SOMETHING_NEW', '_infoLabel', 'Face authentication failed. Please enter your password.'],
-        ['_onAuthError', 'Sorry, that didn’t work. Please try again.', '_messageLabel', 'Sorry, face authentication did not work. Please try again.'],
+        ['_onAuthInfo', 'GAZE_MSG_FACE_NOT_RECOGNIZED', '_infoLabel', '未识别到匹配人脸。请输入密码。'],
+        ['_onAuthInfo', 'GAZE_MSG_SOMETHING_NEW', '_infoLabel', '人脸认证失败。请输入密码。'],
+        ['_onAuthError', 'Sorry, that didn’t work. Please try again.', '_messageLabel', '抱歉，人脸认证未成功。请重试。'],
         ['_onAuthError', 'Authentication failure', '_messageLabel', 'Authentication failure'],
     ]) {
         test(`${version}: unlock ${handler} ${message} shows a readable message`, async () => {

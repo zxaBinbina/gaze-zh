@@ -11,6 +11,11 @@ on:
     branches:
       - "main"
   workflow_dispatch:
+    inputs:
+      test_live_kde:
+        description: Also test current KDE PAM sources from distribution servers
+        type: boolean
+        default: false
 
 concurrency:
   group: ci-${{ github.ref }}
@@ -161,6 +166,10 @@ jobs:
         run: node scripts/test-kcm.mjs
 
       - name: Test supported KDE distributions
+        run: node scripts/test-kde.mjs scripts/fixtures/kde
+
+      - name: Test current KDE distribution sources
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.test_live_kde }}
         run: node scripts/test-kde.mjs
 
   cinnamon:

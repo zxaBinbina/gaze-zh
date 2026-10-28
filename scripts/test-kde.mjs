@@ -2,12 +2,14 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 // Run with: node scripts/test-kde.mjs [upstream-source-directory]
+// Save a fresh snapshot: node scripts/test-kde.mjs --download <empty-directory>
 // Downloads the KDE PAM stacks each supported distribution ships when no source
 // directory is given, runs gaze-kde-pam against them, and evaluates the results
 // with Linux-PAM's dispatch rules. PAM modules are simulated; this is not a
 // replacement for unlocking an actual Plasma session.
 import assert from 'node:assert/strict';
 import {spawnSync} from 'node:child_process';
+import {createHash} from 'node:crypto';
 import {existsSync} from 'node:fs';
 import {cp, mkdir, mkdtemp, readFile, readdir, rm, writeFile} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
@@ -163,7 +165,8 @@ async function suseRpm(pkg) {
             const names = [...new Set((await download(`${mirror}/x86_64/?P=${pkg}-*`)).match(pattern) ?? [])]
                 .sort((a, b) => a.localeCompare(b, undefined, {numeric: true}));
             assert.ok(names.length, `no ${pkg} package listed`);
-            return rpmFiles(await download(`${mirror}/x86_64/${names.at(-1)}`, {binary: true}));
+            const url = `${mirror}/x86_64/${names.at(-1)}`;
+            return {url, files: rpmFiles(await download(url, {binary: true}))};
         } catch (error) {
             errors.push(`${mirror}: ${error.message}`);
         }
@@ -173,9 +176,9 @@ async function suseRpm(pkg) {
 
 const tumbleweed = async () => {
     const [kscreenlocker, sddm, pam] = await Promise.all(['kscreenlocker6', 'sddm-qt6', 'pam'].map(suseRpm));
-    const file = (files, path) => {
-        assert.ok(files.has(path), `missing ${path}`);
-        return {content: files.get(path).toString('utf8')};
+    const file = (rpm, path) => {
+        assert.ok(rpm.files.has(path), `missing ${path}`);
+        return {content: rpm.files.get(path).toString('utf8'), url: rpm.url, archivePath: path};
     };
     return [
         ...SLOTS.map(name => [`vendor/${name}`, file(kscreenlocker, `/usr/lib/pam.d/${name}`)]),
@@ -199,12 +202,29 @@ const targets = {
     'ubuntu-stonking': {files: ubuntu('stonking')},
 };
 
-const upstream = process.argv[2] ?? await mkdtemp(join(tmpdir(), 'gaze-kde-'));
-if (!process.argv[2]) {
-    after(() => rm(upstream, {recursive: true, force: true}));
+const args = process.argv.slice(2);
+const saveSnapshot = args[0] === '--download';
+assert.ok(saveSnapshot ? args.length === 2 : args.length <= 1 && !args[0]?.startsWith('-'),
+    'usage: node scripts/test-kde.mjs [source-directory | --download empty-directory]');
+const sourceDirectory = saveSnapshot ? null : args[0];
+const upstream = (saveSnapshot ? args[1] : sourceDirectory) ?? await mkdtemp(join(tmpdir(), 'gaze-kde-'));
+if (!sourceDirectory) {
+    if (saveSnapshot) {
+        await mkdir(upstream, {recursive: true});
+        assert.deepEqual(await readdir(upstream), [], 'snapshot destination must be empty');
+    } else {
+        after(() => rm(upstream, {recursive: true, force: true}));
+    }
+    const sources = [];
     const downloads = await Promise.allSettled(Object.entries(targets).map(async ([name, target]) => {
         await Promise.all((await target.files()).map(async ([file, url, optional]) => {
             const body = url.content ?? await download(url, {optional});
+            sources.push({
+                path: `${name}/${file}`,
+                url: url.url ?? url,
+                ...(url.archivePath ? {archivePath: url.archivePath} : {}),
+                ...(body === null ? {missing: true} : {sha256: createHash('sha256').update(body).digest('hex')}),
+            });
             if (body === null) return;
             assert.doesNotMatch(body, /^\s*</, `${url}: got an HTML page instead of a source file`);
             const destination = join(upstream, name, file);
@@ -214,6 +234,13 @@ if (!process.argv[2]) {
     }));
     for (const result of downloads)
         if (result.status === 'rejected') throw result.reason;
+    if (saveSnapshot) {
+        const manifest = {
+            fetchedAt: new Date().toISOString(),
+            sources: sources.sort((a, b) => a.path.localeCompare(b.path)),
+        };
+        await writeFile(join(upstream, 'manifest.json'), `${JSON.stringify(manifest, null, 2)}\n`);
+    }
 }
 
 function renderAuthselect(source, features) {

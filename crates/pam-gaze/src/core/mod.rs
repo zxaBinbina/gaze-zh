@@ -26,8 +26,8 @@ use service::is_kde_login_greeter;
 pub use service::{
     KDE_FACE_PAM_SERVICE, KDE_SMARTCARD_PAM_SERVICE, OMARCHY_FACE_PAM_FILE,
     OMARCHY_FACE_PAM_SERVICE, PLASMALOGIN_FACE_PAM_SERVICE, caller_is_remote,
-    face_auth_out_of_scope, pam_stack_runs_gaze, root_service_is_local, service_cannot_be_prompted,
-    is_krdp_network_login, service_defers_to_face_service, service_defers_to_face_slot,
+    face_auth_out_of_scope, is_krdp_network_login, pam_stack_runs_gaze, root_service_is_local,
+    service_cannot_be_prompted, service_defers_to_face_service, service_defers_to_face_slot,
     service_is_network_facing, service_retries_transient_give_up,
     service_shows_only_error_messages,
 };

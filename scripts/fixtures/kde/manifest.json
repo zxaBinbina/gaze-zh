@@ -1,0 +1,435 @@
+{
+  "fetchedAt": "2026-10-28T11:37:56.942Z",
+  "sources": [
+    {
+      "path": "arch/etc/sddm",
+      "url": "https://raw.githubusercontent.com/sddm/sddm/v0.21.0/services/sddm.pam",
+      "sha256": "d7394292a65ae463926c2c3d2cb4e67bbfeb20995450c8e4c92fe5a28e7c4254"
+    },
+    {
+      "path": "arch/etc/system-auth",
+      "url": "https://gitlab.archlinux.org/archlinux/packaging/packages/pambase/-/raw/main/system-auth",
+      "sha256": "2bb19ead55a7b9014d107eec63cc015426c39d93ddc8af3322649ff5f8b45d5b"
+    },
+    {
+      "path": "arch/etc/system-local-login",
+      "url": "https://gitlab.archlinux.org/archlinux/packaging/packages/pambase/-/raw/main/system-local-login",
+      "sha256": "005736b9bd650ff5e5d82a7e288853776d5bb8c90185d5774c07231c1e1c64a9"
+    },
+    {
+      "path": "arch/etc/system-login",
+      "url": "https://gitlab.archlinux.org/archlinux/packaging/packages/pambase/-/raw/main/system-login",
+      "sha256": "7272120f0ee937cbe6ba0a6e748ea234ab6799e1e2966c83ee85f97d9f254fd9"
+    },
+    {
+      "path": "arch/vendor/kde",
+      "url": "https://gitlab.archlinux.org/archlinux/packaging/packages/kscreenlocker/-/raw/main/kde.pam",
+      "sha256": "adba7bb7c27eb3a572e5e9d3cea0dbeebe59d3634472d1863d14fe892cb13b2b"
+    },
+    {
+      "path": "arch/vendor/kde-fingerprint",
+      "url": "https://gitlab.archlinux.org/archlinux/packaging/packages/kscreenlocker/-/raw/main/kde-fingerprint.pam",
+      "sha256": "32734b4e1ec8b7f7e32b6cb2d68285c5c4f15f53736bba085096e76095181241"
+    },
+    {
+      "path": "arch/vendor/kde-smartcard",
+      "url": "https://gitlab.archlinux.org/archlinux/packaging/packages/kscreenlocker/-/raw/main/kde-smartcard.pam",
+      "sha256": "5d9c31cbf66e8e455b9559c929f184efd598f714743d5a1e6ce20adb44dc4b2d"
+    },
+    {
+      "path": "arch/vendor/plasmalogin",
+      "url": "https://invent.kde.org/plasma/plasma-login-manager/-/raw/v6.8.1/data/pam/arch/plasmalogin",
+      "sha256": "d360492c4449e7727544795dfd3b752ea36e9374544fe78737f22b795d4098e8"
+    },
+    {
+      "path": "debian-forky/debian/common-auth",
+      "url": "https://sources.debian.org/data/main/p/pam/1.7.0-8/debian/local/common-auth",
+      "sha256": "940827d13f472a45ebd38cca4c4b2f91b7fc22f08a266a9e987222e88df4cc9b"
+    },
+    {
+      "path": "debian-forky/debian/unix",
+      "url": "https://sources.debian.org/data/main/p/pam/1.7.0-8/debian/pam-configs/unix",
+      "sha256": "66528ec667294fd2eaa1418ad4372f51e0c9a8fbe628275242276ca070639276"
+    },
+    {
+      "path": "debian-forky/etc/kde",
+      "url": "https://sources.debian.org/data/main/k/kscreenlocker/6.7.4-1/debian/pam.d/kde",
+      "sha256": "31443948fe5c2c0c1a9670578925bdd6e19a7678066a6d468089af10c0714353"
+    },
+    {
+      "path": "debian-forky/etc/kde-fingerprint",
+      "url": "https://sources.debian.org/data/main/k/kscreenlocker/6.7.4-1/debian/pam.d/kde-fingerprint",
+      "sha256": "a7e7b0d00197dc8920d9841968675e851661443701cdeb86bc10bb657db64b3e"
+    },
+    {
+      "path": "debian-forky/etc/kde-smartcard",
+      "url": "https://sources.debian.org/data/main/k/kscreenlocker/6.7.4-1/debian/pam.d/kde-smartcard",
+      "sha256": "a82b6eac82c3d89a6a3343c5179e6dda5f874a05d2db50e71ca5ec0ebe6fc32f"
+    },
+    {
+      "path": "debian-forky/etc/sddm",
+      "url": "https://sources.debian.org/data/main/s/sddm/0.21.0+git20260819.da0b64d-1/debian/sddm.pam",
+      "sha256": "6ae0bd5739d776ee3ac74b1c638bb038fdcf949abe4ee1cfc033cd7449060426"
+    },
+    {
+      "path": "debian-trixie/debian/common-auth",
+      "url": "https://sources.debian.org/data/main/p/pam/1.7.0-5/debian/local/common-auth",
+      "sha256": "940827d13f472a45ebd38cca4c4b2f91b7fc22f08a266a9e987222e88df4cc9b"
+    },
+    {
+      "path": "debian-trixie/debian/unix",
+      "url": "https://sources.debian.org/data/main/p/pam/1.7.0-5/debian/pam-configs/unix",
+      "sha256": "66528ec667294fd2eaa1418ad4372f51e0c9a8fbe628275242276ca070639276"
+    },
+    {
+      "path": "debian-trixie/etc/kde",
+      "url": "https://sources.debian.org/data/main/k/kscreenlocker/6.3.5-1/debian/pam.d/kde",
+      "sha256": "31443948fe5c2c0c1a9670578925bdd6e19a7678066a6d468089af10c0714353"
+    },
+    {
+      "path": "debian-trixie/etc/kde-fingerprint",
+      "url": "https://sources.debian.org/data/main/k/kscreenlocker/6.3.5-1/debian/pam.d/kde-fingerprint",
+      "sha256": "a7e7b0d00197dc8920d9841968675e851661443701cdeb86bc10bb657db64b3e"
+    },
+    {
+      "path": "debian-trixie/etc/kde-smartcard",
+      "url": "https://sources.debian.org/data/main/k/kscreenlocker/6.3.5-1/debian/pam.d/kde-smartcard",
+      "sha256": "a82b6eac82c3d89a6a3343c5179e6dda5f874a05d2db50e71ca5ec0ebe6fc32f"
+    },
+    {
+      "path": "debian-trixie/etc/sddm",
+      "url": "https://sources.debian.org/data/main/s/sddm/0.21.0+git20250502.4fe234b-2/debian/sddm.pam",
+      "sha256": "7d77ea3afc28bb9585adf4a79170a24b1bb422fe090bc01f3559a63c3950e360"
+    },
+    {
+      "path": "fedora-42/authselect/fingerprint-auth",
+      "url": "https://raw.githubusercontent.com/authselect/authselect/1.5.1/profiles/local/fingerprint-auth",
+      "sha256": "2b4a6c1c8befa52f1db5f2b5f17974d77748c751a59bce307a8cf78c6729e47c"
+    },
+    {
+      "path": "fedora-42/authselect/password-auth",
+      "url": "https://raw.githubusercontent.com/authselect/authselect/1.5.1/profiles/local/password-auth",
+      "sha256": "a3e41a8e381058b92d8e31b6b42ce4c074017978d15967c30afcce8ce6466ece"
+    },
+    {
+      "path": "fedora-42/authselect/postlogin",
+      "url": "https://raw.githubusercontent.com/authselect/authselect/1.5.1/profiles/local/postlogin",
+      "sha256": "998188d410edea7345ed7608f37eab7434c412b9831bac3957b5e4f6b351598d"
+    },
+    {
+      "path": "fedora-42/authselect/smartcard-auth",
+      "url": "https://raw.githubusercontent.com/authselect/authselect/1.5.1/profiles/local/smartcard-auth",
+      "sha256": "b131d418a57da78d32af42f44e083829e219a1f8a99a6c1525f899a0c3569428"
+    },
+    {
+      "path": "fedora-42/etc/kde",
+      "url": "https://src.fedoraproject.org/rpms/plasma-workspace/raw/f42/f/kde",
+      "sha256": "7d91b3ad73a998e8b10f9edccd74ba04179a778c4a5e61d9176872f43c7bbac3"
+    },
+    {
+      "path": "fedora-42/etc/kde-fingerprint",
+      "url": "https://src.fedoraproject.org/rpms/plasma-workspace/raw/f42/f/kde-fingerprint",
+      "sha256": "8b3181ce5979f498e2cd07acaf3f57c63b1e2f9593e44bfa9027b6dd8bb62437"
+    },
+    {
+      "path": "fedora-42/etc/kde-smartcard",
+      "url": "https://src.fedoraproject.org/rpms/plasma-workspace/raw/f42/f/kde-smartcard",
+      "sha256": "a9fe599caef8ca42c5a256186588ff80bc719f608a340f3efccfcad4148d7a55"
+    },
+    {
+      "path": "fedora-42/etc/sddm",
+      "url": "https://src.fedoraproject.org/rpms/sddm/raw/f42/f/sddm.pam",
+      "sha256": "9060da3ce6cd4f5ed71fe1c5874fcf9f18921007613bc82ab3d094c2ee9b163a"
+    },
+    {
+      "path": "fedora-42/vendor/plasmalogin",
+      "url": "https://invent.kde.org/plasma/plasma-login-manager/-/raw/c96b1944419fb49837253705be41961f2b3e6159/data/pam/fedora/plasmalogin",
+      "sha256": "9060da3ce6cd4f5ed71fe1c5874fcf9f18921007613bc82ab3d094c2ee9b163a"
+    },
+    {
+      "path": "fedora-43/authselect/fingerprint-auth",
+      "url": "https://raw.githubusercontent.com/authselect/authselect/1.6.2/profiles/local/fingerprint-auth",
+      "sha256": "2b4a6c1c8befa52f1db5f2b5f17974d77748c751a59bce307a8cf78c6729e47c"
+    },
+    {
+      "path": "fedora-43/authselect/password-auth",
+      "url": "https://raw.githubusercontent.com/authselect/authselect/1.6.2/profiles/local/password-auth",
+      "sha256": "a3e41a8e381058b92d8e31b6b42ce4c074017978d15967c30afcce8ce6466ece"
+    },
+    {
+      "path": "fedora-43/authselect/postlogin",
+      "url": "https://raw.githubusercontent.com/authselect/authselect/1.6.2/profiles/local/postlogin",
+      "sha256": "6c3e62e3f90c18378318a931f447b90a72c5e2aea4a1e2cb28a6d17f1eb1e45c"
+    },
+    {
+      "path": "fedora-43/authselect/smartcard-auth",
+      "url": "https://raw.githubusercontent.com/authselect/authselect/1.6.2/profiles/local/smartcard-auth",
+      "sha256": "b131d418a57da78d32af42f44e083829e219a1f8a99a6c1525f899a0c3569428"
+    },
+    {
+      "path": "fedora-43/etc/kde",
+      "url": "https://src.fedoraproject.org/rpms/plasma-workspace/raw/f43/f/kde",
+      "sha256": "7d91b3ad73a998e8b10f9edccd74ba04179a778c4a5e61d9176872f43c7bbac3"
+    },
+    {
+      "path": "fedora-43/etc/kde-fingerprint",
+      "url": "https://src.fedoraproject.org/rpms/plasma-workspace/raw/f43/f/kde-fingerprint",
+      "sha256": "8b3181ce5979f498e2cd07acaf3f57c63b1e2f9593e44bfa9027b6dd8bb62437"
+    },
+    {
+      "path": "fedora-43/etc/kde-smartcard",
+      "url": "https://src.fedoraproject.org/rpms/plasma-workspace/raw/f43/f/kde-smartcard",
+      "sha256": "a9fe599caef8ca42c5a256186588ff80bc719f608a340f3efccfcad4148d7a55"
+    },
+    {
+      "path": "fedora-43/etc/sddm",
+      "url": "https://src.fedoraproject.org/rpms/sddm/raw/f43/f/sddm.pam",
+      "sha256": "9060da3ce6cd4f5ed71fe1c5874fcf9f18921007613bc82ab3d094c2ee9b163a"
+    },
+    {
+      "path": "fedora-43/vendor/plasmalogin",
+      "url": "https://invent.kde.org/plasma/plasma-login-manager/-/raw/v6.7.5/data/pam/fedora/plasmalogin",
+      "sha256": "9060da3ce6cd4f5ed71fe1c5874fcf9f18921007613bc82ab3d094c2ee9b163a"
+    },
+    {
+      "path": "fedora-44/authselect/fingerprint-auth",
+      "url": "https://raw.githubusercontent.com/authselect/authselect/1.7.1/profiles/local/fingerprint-auth",
+      "sha256": "2b4a6c1c8befa52f1db5f2b5f17974d77748c751a59bce307a8cf78c6729e47c"
+    },
+    {
+      "path": "fedora-44/authselect/password-auth",
+      "url": "https://raw.githubusercontent.com/authselect/authselect/1.7.1/profiles/local/password-auth",
+      "sha256": "a3e41a8e381058b92d8e31b6b42ce4c074017978d15967c30afcce8ce6466ece"
+    },
+    {
+      "path": "fedora-44/authselect/postlogin",
+      "url": "https://raw.githubusercontent.com/authselect/authselect/1.7.1/profiles/local/postlogin",
+      "sha256": "6c3e62e3f90c18378318a931f447b90a72c5e2aea4a1e2cb28a6d17f1eb1e45c"
+    },
+    {
+      "path": "fedora-44/authselect/smartcard-auth",
+      "url": "https://raw.githubusercontent.com/authselect/authselect/1.7.1/profiles/local/smartcard-auth",
+      "sha256": "b131d418a57da78d32af42f44e083829e219a1f8a99a6c1525f899a0c3569428"
+    },
+    {
+      "path": "fedora-44/etc/kde",
+      "url": "https://src.fedoraproject.org/rpms/plasma-workspace/raw/f44/f/kde",
+      "sha256": "7d91b3ad73a998e8b10f9edccd74ba04179a778c4a5e61d9176872f43c7bbac3"
+    },
+    {
+      "path": "fedora-44/etc/kde-fingerprint",
+      "url": "https://src.fedoraproject.org/rpms/plasma-workspace/raw/f44/f/kde-fingerprint",
+      "sha256": "8b3181ce5979f498e2cd07acaf3f57c63b1e2f9593e44bfa9027b6dd8bb62437"
+    },
+    {
+      "path": "fedora-44/etc/kde-smartcard",
+      "url": "https://src.fedoraproject.org/rpms/plasma-workspace/raw/f44/f/kde-smartcard",
+      "sha256": "a9fe599caef8ca42c5a256186588ff80bc719f608a340f3efccfcad4148d7a55"
+    },
+    {
+      "path": "fedora-44/etc/sddm",
+      "url": "https://src.fedoraproject.org/rpms/sddm/raw/f44/f/sddm.pam",
+      "sha256": "9060da3ce6cd4f5ed71fe1c5874fcf9f18921007613bc82ab3d094c2ee9b163a"
+    },
+    {
+      "path": "fedora-44/vendor/plasmalogin",
+      "url": "https://invent.kde.org/plasma/plasma-login-manager/-/raw/v6.7.5/data/pam/fedora/plasmalogin",
+      "sha256": "9060da3ce6cd4f5ed71fe1c5874fcf9f18921007613bc82ab3d094c2ee9b163a"
+    },
+    {
+      "path": "fedora-45/authselect/fingerprint-auth",
+      "url": "https://raw.githubusercontent.com/authselect/authselect/1.8.0/profiles/local/fingerprint-auth",
+      "sha256": "2b4a6c1c8befa52f1db5f2b5f17974d77748c751a59bce307a8cf78c6729e47c"
+    },
+    {
+      "path": "fedora-45/authselect/password-auth",
+      "url": "https://raw.githubusercontent.com/authselect/authselect/1.8.0/profiles/local/password-auth",
+      "sha256": "82127f94aa8e40241376d877470ee81d037ffd866e99178dede5f25c5fa22451"
+    },
+    {
+      "path": "fedora-45/authselect/postlogin",
+      "url": "https://raw.githubusercontent.com/authselect/authselect/1.8.0/profiles/local/postlogin",
+      "sha256": "6c3e62e3f90c18378318a931f447b90a72c5e2aea4a1e2cb28a6d17f1eb1e45c"
+    },
+    {
+      "path": "fedora-45/authselect/smartcard-auth",
+      "url": "https://raw.githubusercontent.com/authselect/authselect/1.8.0/profiles/local/smartcard-auth",
+      "sha256": "b131d418a57da78d32af42f44e083829e219a1f8a99a6c1525f899a0c3569428"
+    },
+    {
+      "path": "fedora-45/etc/kde",
+      "url": "https://src.fedoraproject.org/rpms/plasma-workspace/raw/f45/f/kde",
+      "sha256": "7d91b3ad73a998e8b10f9edccd74ba04179a778c4a5e61d9176872f43c7bbac3"
+    },
+    {
+      "path": "fedora-45/etc/kde-fingerprint",
+      "url": "https://src.fedoraproject.org/rpms/plasma-workspace/raw/f45/f/kde-fingerprint",
+      "sha256": "8b3181ce5979f498e2cd07acaf3f57c63b1e2f9593e44bfa9027b6dd8bb62437"
+    },
+    {
+      "path": "fedora-45/etc/kde-smartcard",
+      "url": "https://src.fedoraproject.org/rpms/plasma-workspace/raw/f45/f/kde-smartcard",
+      "sha256": "a9fe599caef8ca42c5a256186588ff80bc719f608a340f3efccfcad4148d7a55"
+    },
+    {
+      "path": "fedora-45/etc/sddm",
+      "url": "https://src.fedoraproject.org/rpms/sddm/raw/f45/f/sddm.pam",
+      "sha256": "c6fc4a0bc2d89f88fa15ca7e9a6c5aaeccfbe66897755b5416ce9c5e35b4e40b"
+    },
+    {
+      "path": "fedora-45/vendor/plasmalogin",
+      "url": "https://invent.kde.org/plasma/plasma-login-manager/-/raw/v6.8.1/data/pam/fedora/plasmalogin",
+      "sha256": "c6fc4a0bc2d89f88fa15ca7e9a6c5aaeccfbe66897755b5416ce9c5e35b4e40b"
+    },
+    {
+      "path": "opensuse-tumbleweed/vendor/common-auth",
+      "url": "https://download.opensuse.org/tumbleweed/repo/oss/x86_64/pam-1.7.3-1.1.x86_64.rpm",
+      "archivePath": "/usr/lib/pam.d/common-auth",
+      "sha256": "81239d477a14c57016e01cc8b0d41c1fd5bf2508abed3628f80e894e826ff684"
+    },
+    {
+      "path": "opensuse-tumbleweed/vendor/kde",
+      "url": "https://download.opensuse.org/tumbleweed/repo/oss/x86_64/kscreenlocker6-6.8.1-1.1.x86_64.rpm",
+      "archivePath": "/usr/lib/pam.d/kde",
+      "sha256": "e578ca781ae6873b440e5d69860017d01ea61d60a807ee0fa4435850b6dacb3c"
+    },
+    {
+      "path": "opensuse-tumbleweed/vendor/kde-fingerprint",
+      "url": "https://download.opensuse.org/tumbleweed/repo/oss/x86_64/kscreenlocker6-6.8.1-1.1.x86_64.rpm",
+      "archivePath": "/usr/lib/pam.d/kde-fingerprint",
+      "sha256": "46a8215c56bae9d8835f7cfcf728a701b13147843aa6607734c81bc5566b419c"
+    },
+    {
+      "path": "opensuse-tumbleweed/vendor/kde-smartcard",
+      "url": "https://download.opensuse.org/tumbleweed/repo/oss/x86_64/kscreenlocker6-6.8.1-1.1.x86_64.rpm",
+      "archivePath": "/usr/lib/pam.d/kde-smartcard",
+      "sha256": "73cdef57505ceae31d2e30bf4c6ff2d7b428db87d7bf96861eb90e0b6117b289"
+    },
+    {
+      "path": "opensuse-tumbleweed/vendor/sddm",
+      "url": "https://download.opensuse.org/tumbleweed/repo/oss/x86_64/sddm-qt6-0.21.0+git57-1.1.x86_64.rpm",
+      "archivePath": "/usr/lib/pam.d/sddm",
+      "sha256": "0ba19bd2671b543b15e9cc1f871736b1a43ccd73f28b96f4e6cd7e1340079127"
+    },
+    {
+      "path": "ubuntu-noble/debian/common-auth",
+      "url": "https://git.launchpad.net/ubuntu/+source/pam/plain/debian/local/common-auth?h=ubuntu/noble",
+      "sha256": "940827d13f472a45ebd38cca4c4b2f91b7fc22f08a266a9e987222e88df4cc9b"
+    },
+    {
+      "path": "ubuntu-noble/debian/unix",
+      "url": "https://git.launchpad.net/ubuntu/+source/pam/plain/debian/pam-configs/unix?h=ubuntu/noble",
+      "sha256": "66528ec667294fd2eaa1418ad4372f51e0c9a8fbe628275242276ca070639276"
+    },
+    {
+      "path": "ubuntu-noble/etc/kde",
+      "url": "https://git.launchpad.net/ubuntu/+source/kscreenlocker/plain/debian/pam.d/kde?h=ubuntu/noble",
+      "missing": true
+    },
+    {
+      "path": "ubuntu-noble/etc/kde-fingerprint",
+      "url": "https://git.launchpad.net/ubuntu/+source/kscreenlocker/plain/debian/pam.d/kde-fingerprint?h=ubuntu/noble",
+      "missing": true
+    },
+    {
+      "path": "ubuntu-noble/etc/kde-smartcard",
+      "url": "https://git.launchpad.net/ubuntu/+source/kscreenlocker/plain/debian/pam.d/kde-smartcard?h=ubuntu/noble",
+      "missing": true
+    },
+    {
+      "path": "ubuntu-noble/etc/sddm",
+      "url": "https://git.launchpad.net/ubuntu/+source/sddm/plain/debian/sddm.pam?h=ubuntu/noble",
+      "sha256": "7d77ea3afc28bb9585adf4a79170a24b1bb422fe090bc01f3559a63c3950e360"
+    },
+    {
+      "path": "ubuntu-questing/debian/common-auth",
+      "url": "https://git.launchpad.net/ubuntu/+source/pam/plain/debian/local/common-auth?h=ubuntu/questing",
+      "sha256": "940827d13f472a45ebd38cca4c4b2f91b7fc22f08a266a9e987222e88df4cc9b"
+    },
+    {
+      "path": "ubuntu-questing/debian/unix",
+      "url": "https://git.launchpad.net/ubuntu/+source/pam/plain/debian/pam-configs/unix?h=ubuntu/questing",
+      "sha256": "66528ec667294fd2eaa1418ad4372f51e0c9a8fbe628275242276ca070639276"
+    },
+    {
+      "path": "ubuntu-questing/etc/kde",
+      "url": "https://git.launchpad.net/ubuntu/+source/kscreenlocker/plain/debian/pam.d/kde?h=ubuntu/questing",
+      "sha256": "31443948fe5c2c0c1a9670578925bdd6e19a7678066a6d468089af10c0714353"
+    },
+    {
+      "path": "ubuntu-questing/etc/kde-fingerprint",
+      "url": "https://git.launchpad.net/ubuntu/+source/kscreenlocker/plain/debian/pam.d/kde-fingerprint?h=ubuntu/questing",
+      "sha256": "a7e7b0d00197dc8920d9841968675e851661443701cdeb86bc10bb657db64b3e"
+    },
+    {
+      "path": "ubuntu-questing/etc/kde-smartcard",
+      "url": "https://git.launchpad.net/ubuntu/+source/kscreenlocker/plain/debian/pam.d/kde-smartcard?h=ubuntu/questing",
+      "sha256": "a82b6eac82c3d89a6a3343c5179e6dda5f874a05d2db50e71ca5ec0ebe6fc32f"
+    },
+    {
+      "path": "ubuntu-questing/etc/sddm",
+      "url": "https://git.launchpad.net/ubuntu/+source/sddm/plain/debian/sddm.pam?h=ubuntu/questing",
+      "sha256": "7d77ea3afc28bb9585adf4a79170a24b1bb422fe090bc01f3559a63c3950e360"
+    },
+    {
+      "path": "ubuntu-resolute/debian/common-auth",
+      "url": "https://git.launchpad.net/ubuntu/+source/pam/plain/debian/local/common-auth?h=ubuntu/resolute",
+      "sha256": "940827d13f472a45ebd38cca4c4b2f91b7fc22f08a266a9e987222e88df4cc9b"
+    },
+    {
+      "path": "ubuntu-resolute/debian/unix",
+      "url": "https://git.launchpad.net/ubuntu/+source/pam/plain/debian/pam-configs/unix?h=ubuntu/resolute",
+      "sha256": "66528ec667294fd2eaa1418ad4372f51e0c9a8fbe628275242276ca070639276"
+    },
+    {
+      "path": "ubuntu-resolute/etc/kde",
+      "url": "https://git.launchpad.net/ubuntu/+source/kscreenlocker/plain/debian/pam.d/kde?h=ubuntu/resolute",
+      "sha256": "31443948fe5c2c0c1a9670578925bdd6e19a7678066a6d468089af10c0714353"
+    },
+    {
+      "path": "ubuntu-resolute/etc/kde-fingerprint",
+      "url": "https://git.launchpad.net/ubuntu/+source/kscreenlocker/plain/debian/pam.d/kde-fingerprint?h=ubuntu/resolute",
+      "sha256": "a7e7b0d00197dc8920d9841968675e851661443701cdeb86bc10bb657db64b3e"
+    },
+    {
+      "path": "ubuntu-resolute/etc/kde-smartcard",
+      "url": "https://git.launchpad.net/ubuntu/+source/kscreenlocker/plain/debian/pam.d/kde-smartcard?h=ubuntu/resolute",
+      "sha256": "a82b6eac82c3d89a6a3343c5179e6dda5f874a05d2db50e71ca5ec0ebe6fc32f"
+    },
+    {
+      "path": "ubuntu-resolute/etc/sddm",
+      "url": "https://git.launchpad.net/ubuntu/+source/sddm/plain/debian/sddm.pam?h=ubuntu/resolute",
+      "sha256": "7d77ea3afc28bb9585adf4a79170a24b1bb422fe090bc01f3559a63c3950e360"
+    },
+    {
+      "path": "ubuntu-stonking/debian/common-auth",
+      "url": "https://git.launchpad.net/ubuntu/+source/pam/plain/debian/local/common-auth?h=ubuntu/stonking",
+      "sha256": "940827d13f472a45ebd38cca4c4b2f91b7fc22f08a266a9e987222e88df4cc9b"
+    },
+    {
+      "path": "ubuntu-stonking/debian/unix",
+      "url": "https://git.launchpad.net/ubuntu/+source/pam/plain/debian/pam-configs/unix?h=ubuntu/stonking",
+      "sha256": "66528ec667294fd2eaa1418ad4372f51e0c9a8fbe628275242276ca070639276"
+    },
+    {
+      "path": "ubuntu-stonking/etc/kde",
+      "url": "https://git.launchpad.net/ubuntu/+source/kscreenlocker/plain/debian/pam.d/kde?h=ubuntu/stonking",
+      "sha256": "31443948fe5c2c0c1a9670578925bdd6e19a7678066a6d468089af10c0714353"
+    },
+    {
+      "path": "ubuntu-stonking/etc/kde-fingerprint",
+      "url": "https://git.launchpad.net/ubuntu/+source/kscreenlocker/plain/debian/pam.d/kde-fingerprint?h=ubuntu/stonking",
+      "sha256": "a7e7b0d00197dc8920d9841968675e851661443701cdeb86bc10bb657db64b3e"
+    },
+    {
+      "path": "ubuntu-stonking/etc/kde-smartcard",
+      "url": "https://git.launchpad.net/ubuntu/+source/kscreenlocker/plain/debian/pam.d/kde-smartcard?h=ubuntu/stonking",
+      "sha256": "a82b6eac82c3d89a6a3343c5179e6dda5f874a05d2db50e71ca5ec0ebe6fc32f"
+    },
+    {
+      "path": "ubuntu-stonking/etc/sddm",
+      "url": "https://git.launchpad.net/ubuntu/+source/sddm/plain/debian/sddm.pam?h=ubuntu/stonking",
+      "sha256": "ea7d3b4bb9abeae2c1ef23c571f6794dc31e0305ecfec1985857573752f00c94"
+    }
+  ]
+}
