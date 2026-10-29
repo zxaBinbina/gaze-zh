@@ -29,6 +29,8 @@ env:
 jobs:
   build-native:
     name: Build ${{ matrix.name }}
+    # Fork releases use packages.yml; this pipeline also publishes to upstream infrastructure.
+    if: github.repository == 'GunduLabs/gaze'
     runs-on: ${{ matrix.runner }}
     container: ${{ matrix.container }}
     env:
@@ -413,6 +415,7 @@ jobs:
             dist/packages/package-target.env
 
   build-flatpak:
+    if: github.repository == 'GunduLabs/gaze'
     name: Build flatpak (${{ matrix.arch }})
     runs-on: ${{ matrix.runner }}
     env:
@@ -476,6 +479,7 @@ jobs:
             dist/packages/*.flatpakrepo
 
   build-srpm:
+    if: github.repository == 'GunduLabs/gaze'
     name: Build source RPM for Copr
     runs-on: ubuntu-latest
     container: fedora:45

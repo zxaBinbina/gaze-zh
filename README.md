@@ -26,6 +26,27 @@ Facial authentication for Linux with on-device face recognition, PAM integration
 
 本仓库基于上游 [GunduLabs/gaze](https://github.com/GunduLabs/gaze)，并保留中文 PAM 提示与 KRDP 兼容修复。KRDP 6.7.5 画面冻结修复及构建说明见 [docs/krdp-fix.md](docs/krdp-fix.md)。
 
+### 下载中文版
+
+[最新发行版](https://github.com/zxaBinbina/gaze-zh/releases/latest) · [中文官网与文档](https://zxabinbina.cc.cd/projects/gaze)
+
+从 **v0.4.1-zh.2** 起，发行附件按构建环境整理为四个压缩包，另附 `SHA256SUMS`。每份都保留主程序、GUI、KDE、GNOME、Cinnamon、Hyprlock 和 Omarchy 共七个组件包，解压后按需安装。
+
+| 附件标识 | 构建环境 / 架构 | 内含格式 |
+| --- | --- | --- |
+| `ubuntu-24.04-amd64` | Ubuntu 24.04（Linux Mint 22 同系）/ amd64 | `.deb` |
+| `fedora-45-x86_64` | Fedora 45 / x86_64 | `.rpm` |
+| `opensuse-tumbleweed-x86_64` | openSUSE Tumbleweed / x86_64 | `.rpm` |
+| `archlinux-x86_64` | Arch Linux / x86_64 | `.pkg.tar.zst` |
+
+下载匹配系统的压缩包，校验并解压，按照包内 `README.md` 安装 `gaze-zh`、可选的 `gaze-gui`，以及当前桌面对应的一个集成包。不要把所有桌面组件一起安装。Fedora 与 openSUSE 的 RPM 依赖和 PAM 配置不同，不能混用；Ubuntu 24.04 构建的 DEB 也不代表适用于所有 Debian/Ubuntu 版本。
+
+`gaze-zh` 核心包与 GUI、桌面集成的文件不重复。标准发行包保留中文提示与 KRDP 登录兼容逻辑，但不包含 Fedora 44 专用的 KRDP 6.7.5 私有修复库；该历史合并包的构建方式单列于 [KRDP 文档](docs/krdp-fix.md)。
+
+中文修订标签 `v0.4.1-zh.2` 对应软件版本 `0.4.1`、安装包修订号 `2`，可从上一版 `0.4.1-1` 正常升级。[本版更新说明](docs/releases/v0.4.1-zh.2.md)
+
+下方上游安装器及软件源安装的是上游版本。中文版请使用以上下载入口或中文官网的一键安装命令。
+
 ## Install
 
 ```bash

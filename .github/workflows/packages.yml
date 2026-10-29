@@ -17,7 +17,7 @@ on:
         default: main
         type: string
       release_tag:
-        description: Optional release tag, for example v0.3.10. Leave empty to keep the build as an artifact only.
+        description: Optional release tag, for example v0.4.1-zh.2 (package revision 2). Also applies when publish is false.
         required: false
         type: string
       publish:
@@ -98,18 +98,30 @@ jobs:
           CARGO_BUILD_JOBS: 2
           RUSTFLAGS: -Cdebuginfo=0
           GAZE_KCM: ${{ matrix.format == 'deb' && matrix.deb_suite == 'noble' && 'legacy' || 'plasma6' }}
+          INPUT_RELEASE_TAG: ${{ inputs.release_tag }}
         run: |
           set -euo pipefail
-          case "$BUILD_REF" in
-            refs/tags/v*) version="${BUILD_REF#refs/tags/v}" ;;
-            v*) version="${BUILD_REF#v}" ;;
-            *) version="$(sed -n 's/^version = "\([0-9][^"]*\)"/\1/p' Cargo.toml | head -n1)" ;;
-          esac
-          if [ -z "$version" ]; then
+          version="$(sed -n 's/^version = "\([0-9][^"]*\)"/\1/p' Cargo.toml | head -n1)"
+          if [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
             echo "Could not determine a package version" >&2
             exit 1
           fi
-          VERSION="$version" PACKAGE_RELEASE=1 just package "${{ matrix.format }}"
+          package_release=1
+          release_ref="${INPUT_RELEASE_TAG:-$BUILD_REF}"
+          release_ref="${release_ref#refs/tags/}"
+          if [[ "$release_ref" == v* || -n "$INPUT_RELEASE_TAG" ]]; then
+            [[ "$release_ref" =~ ^v([0-9]+\.[0-9]+\.[0-9]+)(-zh(\.([1-9][0-9]*))?)?$ ]] || {
+              echo "Unsupported release tag: $release_ref" >&2
+              exit 1
+            }
+            tag_version="${BASH_REMATCH[1]}"
+            package_release="${BASH_REMATCH[4]:-1}"
+            [[ "$tag_version" == "$version" ]] || {
+              echo "Tag version $tag_version differs from Cargo.toml version $version" >&2
+              exit 1
+            }
+          fi
+          VERSION="$version" PACKAGE_RELEASE="$package_release" just package "${{ matrix.format }}"
           find dist/packages -maxdepth 1 -type f \( -name '*.deb' -o -name '*.rpm' -o -name '*.pkg.tar.*' \) -print -exec sha256sum {} \;
 
       - name: Upload distribution packages
@@ -135,6 +147,12 @@ jobs:
     permissions:
       contents: write
     steps:
+      - name: Checkout release tooling
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.ref || github.ref }}
+          persist-credentials: false
+
       - name: Resolve release tag
         id: tag
         env:
@@ -148,8 +166,8 @@ jobs:
           else
             tag="$INPUT_TAG"
           fi
-          [[ "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z.-]+)?$ ]] || {
-            echo "Release tag must look like v0.3.10 (got: $tag)" >&2
+          [[ "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-zh(\.[1-9][0-9]*)?)?$ ]] || {
+            echo "Release tag must look like v0.4.1-zh.2 (got: $tag)" >&2
             exit 1
           }
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
@@ -160,6 +178,16 @@ jobs:
           pattern: gaze-*-packages
           path: dist/packages
 
+      - name: Bundle packages by distribution
+        env:
+          RELEASE_TAG: ${{ steps.tag.outputs.tag }}
+          BUILD_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          python3 scripts/bundle-release.py \
+            --packages-dir dist/packages --output-dir dist/release \
+            --tag "$RELEASE_TAG" --source-commit "$(git rev-parse HEAD)" \
+            --build-url "$BUILD_URL"
+
       - name: Create or update GitHub Release
         uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3
         with:
@@ -167,6 +195,5 @@ jobs:
           target_commitish: ${{ inputs.ref || github.sha }}
           generate_release_notes: true
           files: |
-            dist/packages/**/*.deb
-            dist/packages/**/*.rpm
-            dist/packages/**/*.pkg.tar.*
+            dist/release/*.tar.gz
+            dist/release/SHA256SUMS
