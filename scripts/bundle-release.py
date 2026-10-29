@@ -23,10 +23,10 @@ COMPONENTS = {
     "gaze-omarchy": "Omarchy 集成（仅用于已有 Omarchy 环境）",
 }
 TARGETS = {
-    "deb-ubuntu-noble": ("ubuntu-24.04-amd64", "Ubuntu 24.04 / Linux Mint 22", "deb", "sudo apt install"),
-    "rpm-fedora": ("fedora-45-x86_64", "Fedora 45", "rpm", "sudo dnf install"),
-    "rpm-opensuse": ("opensuse-tumbleweed-x86_64", "openSUSE Tumbleweed", "rpm", "sudo zypper install"),
-    "arch": ("archlinux-x86_64", "Arch Linux", "pkg.tar.zst", "sudo pacman -U"),
+    target["id"]: target
+    for target in json.loads(
+        (Path(__file__).resolve().parents[1] / "packaging/release-targets.json").read_text()
+    )
 }
 
 
@@ -34,12 +34,13 @@ def digest(data):
     return hashlib.sha256(data).hexdigest()
 
 
-def package_name(component, version, revision, extension):
+def package_name(component, version, revision, extension, arch):
     if extension == "deb":
-        return f"{component}_{version}-{revision}_amd64.deb"
+        deb_arch = {"x86_64": "amd64", "aarch64": "arm64"}[arch]
+        return f"{component}_{version}-{revision}_{deb_arch}.deb"
     if extension == "rpm":
-        return f"{component}-{version}-{revision}.x86_64.rpm"
-    return f"{component}-{version}-{revision}-x86_64.pkg.tar.zst"
+        return f"{component}-{version}-{revision}.{arch}.rpm"
+    return f"{component}-{version}-{revision}-{arch}.pkg.tar.zst"
 
 
 def readme(tag, title, install, names):
@@ -88,6 +89,8 @@ def main():
     parser.add_argument("--tag", required=True)
     parser.add_argument("--source-commit", required=True)
     parser.add_argument("--build-url", required=True)
+    parser.add_argument("--target", action="append", choices=TARGETS,
+                        help="Bundle only this target (repeatable); default requires every target")
     args = parser.parse_args()
     match = re.fullmatch(r"v(\d+\.\d+\.\d+)(?:-zh(?:\.([1-9]\d*))?)?", args.tag)
     if not match:
@@ -99,9 +102,12 @@ def main():
     # Validate all targets before writing any release assets. Keeping RPM targets
     # in separate directories avoids collisions between identical filenames.
     prepared = []
-    for target, (label, title, extension, install) in TARGETS.items():
+    for target in dict.fromkeys(args.target or TARGETS):
+        config = TARGETS[target]
+        label, title = config["label"], config["title"]
+        extension, install, arch = config["extension"], config["install"], config["arch"]
         directory = args.packages_dir / f"gaze-{target}-packages"
-        names = {component: package_name(component, version, revision, extension) for component in COMPONENTS}
+        names = {component: package_name(component, version, revision, extension, arch) for component in COMPONENTS}
         actual = {p.name for p in directory.iterdir()} if directory.is_dir() else set()
         expected = set(names.values())
         if actual != expected:
@@ -118,6 +124,7 @@ def main():
             "version": version,
             "package_revision": revision,
             "target": label,
+            "architecture": arch,
             "source_commit": args.source_commit,
             "build_url": args.build_url,
             "packages": {name: digest(files[name]) for name in sorted(expected)},

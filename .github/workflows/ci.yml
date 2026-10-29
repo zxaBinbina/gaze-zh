@@ -30,6 +30,15 @@ env:
   NFPM_VERSION: v2.48.0
 
 jobs:
+  release-tooling:
+    name: Release architecture checks
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - run: python3 -m unittest discover -s scripts/tests -p 'test_release_bundles.py'
+
   fmt:
     name: Format
     runs-on: ubuntu-latest

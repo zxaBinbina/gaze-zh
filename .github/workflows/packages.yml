@@ -25,6 +25,11 @@ on:
         required: true
         default: false
         type: boolean
+      build_targets:
+        description: Comma-separated IDs from packaging/release-targets.json, or all. Partial builds are artifact-only.
+        required: true
+        default: all
+        type: string
 
 concurrency:
   group: packages-${{ inputs.ref || github.ref }}
@@ -39,40 +44,52 @@ env:
   NFPM_VERSION: v2.48.0
 
 jobs:
-  package:
-    name: ${{ matrix.name }}
+  targets:
+    name: Select distribution and architecture targets
     runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.matrix.outputs.matrix }}
+    steps:
+      - name: Checkout workflow target definitions
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Select targets
+        id: matrix
+        env:
+          BUILD_TARGETS: ${{ inputs.build_targets || 'all' }}
+          PUBLISH: ${{ inputs.publish || false }}
+        run: |
+          python3 - <<'PY'
+          import json, os
+          from pathlib import Path
+          targets = json.loads(Path('packaging/release-targets.json').read_text())
+          requested = os.environ['BUILD_TARGETS']
+          if requested != 'all':
+              if os.environ['PUBLISH'] == 'true':
+                  raise SystemExit('A release requires all targets; partial builds must use publish=false')
+              selected = {value.strip() for value in requested.split(',')}
+              unknown = selected - {target['id'] for target in targets}
+              if unknown:
+                  raise SystemExit(f'Unknown build targets: {sorted(unknown)}')
+              targets = [target for target in targets if target['id'] in selected]
+          if not targets:
+              raise SystemExit('No build targets selected')
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
+              output.write('matrix=' + json.dumps({'include': targets}) + '\n')
+          PY
+
+  package:
+    needs: targets
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.runner }}
     container: ${{ matrix.container }}
     env:
       BUILD_REF: ${{ inputs.ref || github.ref }}
     strategy:
       fail-fast: false
-      matrix:
-        include:
-          - id: deb-ubuntu-noble
-            name: Debian packages (Ubuntu 24.04 noble)
-            container: ubuntu:24.04
-            format: deb
-            distro: ubuntu
-            deb_suite: noble
-          - id: rpm-fedora
-            name: Fedora packages (RPM)
-            container: fedora:45
-            format: rpm
-            distro: fedora
-            deb_suite: ""
-          - id: rpm-opensuse
-            name: openSUSE Tumbleweed packages (RPM)
-            container: opensuse/tumbleweed:latest
-            format: rpm
-            distro: opensuse
-            deb_suite: ""
-          - id: arch
-            name: Arch Linux packages
-            container: archlinux:latest
-            format: archlinux
-            distro: archlinux
-            deb_suite: ""
+      matrix: ${{ fromJSON(needs.targets.outputs.matrix) }}
 
     steps:
       - name: Checkout source
@@ -99,8 +116,13 @@ jobs:
           RUSTFLAGS: -Cdebuginfo=0
           GAZE_KCM: ${{ matrix.format == 'deb' && matrix.deb_suite == 'noble' && 'legacy' || 'plasma6' }}
           INPUT_RELEASE_TAG: ${{ inputs.release_tag }}
+          EXPECTED_ARCH: ${{ matrix.arch }}
         run: |
           set -euo pipefail
+          [[ "$(uname -m)" == "$EXPECTED_ARCH" ]] || {
+            echo "Runner architecture differs from target $EXPECTED_ARCH" >&2
+            exit 1
+          }
           version="$(sed -n 's/^version = "\([0-9][^"]*\)"/\1/p' Cargo.toml | head -n1)"
           if [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
             echo "Could not determine a package version" >&2
