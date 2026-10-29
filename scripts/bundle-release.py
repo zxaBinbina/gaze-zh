@@ -71,7 +71,7 @@ def readme(tag, title, install, names):
         "Fedora 与 openSUSE 的依赖和 PAM 配置不同，请勿混用。",
         "安装管理器提示缺少依赖时，请检查系统版本，不要强行忽略依赖。",
         "",
-        "首次安装后运行 `gaze enroll` 录入，再用 `gaze auth` 验证。",
+        "首次安装后运行 `gaze add-face default` 录入，再用 `gaze auth` 验证。",
         "这些是分组件安装包；Fedora 44 专用的 KRDP 6.7.5 私有修复库需单独构建，未包含在本压缩包中。",
         "",
         "中文文档：https://zxabinbina.cc.cd/projects/gaze",
