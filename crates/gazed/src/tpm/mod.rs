@@ -28,7 +28,14 @@ use store::{ensure_private_dir, persist_bundle, read_sealed_blobs};
 /// The DEK stays inside a `Zeroizing` wrapper. Callers borrow it to set up the
 /// cipher, and the wrapper wipes it on drop so it does not remain in freed memory.
 pub fn load_or_create_dek(state_dir: &Path) -> anyhow::Result<SealedKey> {
-    if present_devices().is_empty() && !tcti_override_present() {
+    load_or_create_dek_with_availability(state_dir, available())
+}
+
+fn load_or_create_dek_with_availability(
+    state_dir: &Path,
+    tpm_available: bool,
+) -> anyhow::Result<SealedKey> {
+    if !tpm_available {
         return Err(anyhow!(
             "未找到 TPM 设备（已检查 {TPM_RM_DEVICE} 和 {TPM_RAW_DEVICE}）"
         ));
@@ -406,15 +413,14 @@ mod tests {
 
     #[test]
     fn a_host_without_a_tpm_says_so_instead_of_failing_obscurely() {
-        if !present_devices().is_empty() || tcti_override_present() {
-            return;
-        }
         let dir = scratch("no-tpm");
 
-        let err = load_or_create_dek(&dir).expect_err("there is no TPM to seal against");
+        // Exercise the missing-TPM path even on hosts with a TPM or a TCTI override.
+        let err = load_or_create_dek_with_availability(&dir, false)
+            .expect_err("there is no TPM to seal against");
         let message = err.to_string();
 
-        assert!(message.contains("no TPM device found"), "{message}");
+        assert!(message.contains("未找到 TPM 设备"), "{message}");
         assert!(message.contains(TPM_RM_DEVICE), "{message}");
         assert!(message.contains(TPM_RAW_DEVICE), "{message}");
         assert!(
