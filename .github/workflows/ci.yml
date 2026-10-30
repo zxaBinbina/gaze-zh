@@ -38,6 +38,7 @@ jobs:
         with:
           persist-credentials: false
       - run: python3 -m unittest discover -s scripts/tests -p 'test_release_bundles.py'
+      - run: node scripts/test-localization.mjs
 
   fmt:
     name: Format

@@ -489,7 +489,7 @@ for (const version of versions) {
         } finally { env.extension.disable(); }
     });
 
-    for (const entry of ['Enter', 'Authenticate button', 'password']) {
+    for (const entry of ['Enter', 'Authenticate button', 'password', '中文确认', '旧版确认']) {
         test(`${version}: Polkit ${entry} sends the expected PAM answer`, async () => {
             const env = await environment(version);
             try {
@@ -506,11 +506,16 @@ for (const version of versions) {
                 const component = Object.create(env.PolkitAgent.Component.prototype);
                 component.testDialog = dialog;
                 component._onInitiate();
-                session.emit('request', entry === 'password' ? 'Password:' : 'GAZE_REQUIRE_CONFIRMATION', false);
+                const question = entry === 'password' ? 'Password:'
+                    : entry === '中文确认' ? '人脸已验证。按回车键确认。'
+                    : entry === '旧版确认' ? 'Face Verified. Press Enter to confirm.'
+                    : 'GAZE_REQUIRE_CONFIRMATION';
+                session.emit('request', question, false);
                 if (entry === 'password') dialog._passwordEntry.text = 'test-password';
                 if (entry === 'Authenticate button') dialog._onAuthenticateButtonPressed();
                 else dialog._onEntryActivate();
-                assert.deepEqual(responses, [entry === 'password' ? 'test-password' : 'GAZE_CONFIRMED']);
+                assert.deepEqual(responses, [entry === 'password' ? 'test-password'
+                    : entry === '中文确认' || entry === '旧版确认' ? '' : 'GAZE_CONFIRMED']);
                 assert.equal(env.errors.length, 0, env.errors.map(String).join('\n'));
                 const handler = env.extension._originalDialogRequest;
                 env.extension.disable();

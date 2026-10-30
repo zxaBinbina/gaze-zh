@@ -13,33 +13,33 @@ fi
 if [ "$gaze_kde_status" -eq 0 ]; then
 	cat <<'EOF'
 
-Gaze face unlock is enabled on the KDE Plasma lock screen.
+已在 KDE Plasma 锁屏上启用 Gaze 人脸解锁。
 
-It runs in the slot KScreenLocker starts up front for biometrics, alongside the
-password field, so a face match unlocks without pressing a key. Lock your screen
-and look at the camera.
+Gaze 通过 KScreenLocker 预先启动的生物识别服务运行，与密码框并行，
+人脸匹配即可解锁，无需按键。锁定屏幕后
+看向摄像头即可尝试。
 
-The login greeter is separate and off by default. Unless your Plasma Login Manager
-ships an up-front biometric service, face auth there starts when you submit the
-login form, exactly as a fingerprint reader does on that screen. Turn it on with:
+登录界面单独设置且默认关闭。如果 Plasma 登录管理器
+没有预先启动的生物识别服务，人脸认证会在提交
+登录表单时开始，与该界面的指纹认证相同。可用以下命令启用：
 
     sudo gaze-kde-pam enable-login
 
-Turn face unlock off again with:
+使用以下命令关闭人脸解锁：
 
     sudo gaze-kde-pam disable
 
-Docs: https://gaze.gundulabs.com/guide/kde
+文档：https://gaze.gundulabs.com/guide/kde
 EOF
 else
 	cat <<'EOF'
 
-Gaze could not wire itself into KScreenLocker's biometric slot.
+Gaze 无法接入 KScreenLocker 的生物识别服务。
 
-Run this once KDE Plasma is installed:
+安装 KDE Plasma 后请运行：
 
     sudo gaze-kde-pam enable
 
-Docs: https://gaze.gundulabs.com/guide/kde
+文档：https://gaze.gundulabs.com/guide/kde
 EOF
 fi

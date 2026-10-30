@@ -54,11 +54,11 @@ impl VerifyGiveUp {
     fn reason(self) -> String {
         match self {
             Self::NoFace => format!(
-                "giving up after {}s without a detected face",
+                "{} 秒内未检测到人脸，停止尝试",
                 VERIFY_NO_FACE_TIMEOUT.as_secs()
             ),
             Self::NoUsableFrame => format!(
-                "giving up after {}s without a usable frame",
+                "{} 秒内未获取到可用画面，停止尝试",
                 VERIFY_NO_USABLE_TIMEOUT.as_secs()
             ),
         }
@@ -203,7 +203,7 @@ pub(super) fn crop_liveness_face(data: &FaceData) -> anyhow::Result<image::RgbIm
     let mat_rgb = data
         .liveness_frame
         .as_ref()
-        .ok_or_else(|| anyhow::anyhow!("liveness frame was not retained"))?;
+        .ok_or_else(|| anyhow::anyhow!("未保留活体检测画面"))?;
     let rgb = mat_to_rgb(mat_rgb)?;
     let (frame_w, frame_h) = data.frame_size;
     let frame_w = frame_w.min(rgb.width()).max(1);
@@ -224,7 +224,7 @@ pub(super) fn crop_ir_liveness_face(data: &FaceData) -> anyhow::Result<image::Rg
     let mat_rgb = data
         .liveness_frame
         .as_ref()
-        .ok_or_else(|| anyhow::anyhow!("IR liveness frame was not retained"))?;
+        .ok_or_else(|| anyhow::anyhow!("未保留红外活体检测画面"))?;
     let rgb = mat_to_rgb(mat_rgb)?;
     let (frame_w, frame_h) = data.frame_size;
     let frame_w = frame_w.min(rgb.width()).max(1);
@@ -263,16 +263,15 @@ pub(super) fn eyes_closed_in_frame(
     let frame = data
         .liveness_frame
         .as_ref()
-        .ok_or_else(|| anyhow::anyhow!("frame was not retained for the eye-state check"))?;
-    let eyes =
-        eyes_from_kpss(&data.kpss).ok_or_else(|| anyhow::anyhow!("face landmarks are missing"))?;
+        .ok_or_else(|| anyhow::anyhow!("未保留眼部状态检查所需画面"))?;
+    let eyes = eyes_from_kpss(&data.kpss).ok_or_else(|| anyhow::anyhow!("缺少人脸关键点"))?;
     let rgb = mat_to_rgb(frame)?;
     let mut guard = eye_state.blocking_lock();
-    let classifier = guard.as_mut().ok_or_else(|| {
-        anyhow::anyhow!("duress detection is enabled but the eye-state model is unavailable")
-    })?;
+    let classifier = guard
+        .as_mut()
+        .ok_or_else(|| anyhow::anyhow!("已启用胁迫检测，但眼部状态模型不可用"))?;
     let probabilities = classifier.closed_probabilities(&rgb, [eyes[0], eyes[1]])?;
-    tracing::debug!(?probabilities, threshold, "Duress eye state");
+    tracing::debug!(?probabilities, threshold, "胁迫检测眼部状态");
     Ok(crate::duress::any_eye_closed(probabilities, threshold))
 }
 
@@ -345,7 +344,7 @@ impl AuthDaemon {
     ) -> fdo::Result<()> {
         if Self::face_barred_for_admin_prompt(pam_service.as_deref()) {
             return Err(fdo::Error::AccessDenied(
-                "changing Gaze's own settings or faces needs a password, not a face match".into(),
+                "更改 Gaze 自身设置或人脸数据需要输入密码".into(),
             ));
         }
         let claim = self.check_claim(&header).await?;
@@ -355,7 +354,7 @@ impl AuthDaemon {
         let config = self.settings.for_run(&mut rx).await?;
         let lid_wait = tokio::select! {
             biased;
-            _ = &mut rx => return Err(fdo::Error::Failed("capture cancelled".into())),
+            _ = &mut rx => return Err(fdo::Error::Failed("采集已取消".into())),
             result = async {
                 self.ensure_auth_not_aborted(&header, &config.auth).await?;
                 self.lid_closed_wait(config.auth.abort_if_lid_closed).await
@@ -391,7 +390,7 @@ impl AuthDaemon {
             service = pam_service.as_deref().unwrap_or("<unknown>"),
             ?surface,
             lock_elapsed_ms,
-            "Face auth requested"
+            "已收到人脸认证请求"
         );
         let abort_if_lid_closed = config.auth.abort_if_lid_closed;
         let sources = resolve_configured_sources(&config.cameras);
@@ -416,15 +415,15 @@ impl AuthDaemon {
                 .spawn_blocking(move || load_eye_state(&inference));
             let loaded = tokio::select! {
                 biased;
-                _ = &mut rx => return Err(fdo::Error::Failed("capture cancelled".into())),
+                _ = &mut rx => return Err(fdo::Error::Failed("采集已取消".into())),
                 loaded = loading => loaded,
             };
             match loaded {
                 Ok(Ok(classifier)) => *self.eye_state.lock().await = Some(classifier),
                 Ok(Err(e)) => {
-                    warn!("Duress detection is enabled but the eye-state model failed to load: {e}")
+                    warn!("已启用胁迫检测，但眼部状态模型加载失败：{e}")
                 }
-                Err(e) => warn!("Loading the eye-state model panicked: {e}"),
+                Err(e) => warn!("加载眼部状态模型时异常退出：{e}"),
             }
         }
         if liveness_cfg.ir_model_enabled()
@@ -437,13 +436,13 @@ impl AuthDaemon {
                 .spawn_blocking(move || load_ir_liveness(&inference));
             let loaded = tokio::select! {
                 biased;
-                _ = &mut rx => return Err(fdo::Error::Failed("capture cancelled".into())),
+                _ = &mut rx => return Err(fdo::Error::Failed("采集已取消".into())),
                 loaded = loading => loaded,
             };
             match loaded {
                 Ok(Ok(detector)) => *self.ir_liveness.lock().await = Some(detector),
-                Ok(Err(e)) => warn!("The IR anti-spoof model is enabled but failed to load: {e}"),
-                Err(e) => warn!("Loading the IR anti-spoof model panicked: {e}"),
+                Ok(Err(e)) => warn!("已启用红外防伪模型，但加载失败：{e}"),
+                Err(e) => warn!("加载红外防伪模型时异常退出：{e}"),
             }
         }
         let ir_liveness_arc = self.ir_liveness.clone();
@@ -458,14 +457,14 @@ impl AuthDaemon {
             let ctxt = match SignalEmitter::new(&conn, path) {
                 Ok(emitter) => emitter.set_destination(signal_destination),
                 Err(e) => {
-                    error!("Failed to create signal emitter: {e}");
+                    error!("无法创建信号发送器：{e}");
                     return;
                 }
             };
 
             if duress_locked {
                 info!(
-                    "Face authentication for {} is locked after a duress signal until a password login",
+                    "收到胁迫信号，已锁定 {} 的人脸认证，直到使用密码登录",
                     username
                 );
                 let _ = Self::verify_status(&ctxt, VerifyResult::VerifyNoMatch, Vec::new(), CaptureStatus::Unused, CaptureStatus::Unused).await;
@@ -494,7 +493,7 @@ impl AuthDaemon {
             );
 
             if !run_rgb && !run_ir {
-                error!("No matching templates or cameras configured for auth");
+                error!("没有可用于认证的匹配模板或摄像头配置");
                 // Idle rather than no-face: nothing a retry could change.
                 let _ = Self::verify_status(&ctxt, VerifyResult::VerifyNoMatch, Vec::new(), CaptureStatus::Unused, CaptureStatus::Unused).await;
                 return;
@@ -506,8 +505,7 @@ impl AuthDaemon {
                     run_ir,
                     has_rgb_templates,
                     has_ir_templates,
-                    "Hybrid policy \"and\" requires both spectra but {} has no {} templates; \
-                     refusing to authenticate on one spectrum. Re-enroll to cover both.",
+                    "混合策略 and 要求同时使用两种光谱，但 {} 没有 {} 模板；拒绝仅凭单一光谱认证。请重新录入两种光谱的模板。",
                     username,
                     if has_rgb_templates { "IR" } else { "RGB" }
                 );
@@ -526,12 +524,12 @@ impl AuthDaemon {
                         delay = Duration::from_millis(config.auth.resume_grace_ms);
                     }
                     SleepHold::Cancelled => {
-                        info!("VerifyStart: cancelled while the system was suspending");
+                        info!("开始验证：系统挂起时已取消");
                         let _ = Self::verify_status(&ctxt, VerifyResult::VerifyNoMatch, Vec::new(), CaptureStatus::Unused, CaptureStatus::Unused).await;
                         return;
                     }
                     SleepHold::LidClosed => {
-                        warn!("Laptop lid is closed, aborting face auth");
+                        warn!("笔记本盖已合上，终止人脸认证");
                         let _ = Self::verify_status(&ctxt, VerifyResult::VerifyNoMatch, Vec::new(), CaptureStatus::Unused, CaptureStatus::Unused).await;
                         return;
                     }
@@ -539,11 +537,11 @@ impl AuthDaemon {
                 lid_wait = false;
 
                 if !delay.is_zero() {
-                    info!(?delay, resumed = resumed || held, ?surface, "Delaying face auth before capture");
+                    info!(?delay, resumed = resumed || held, ?surface, "采集前延迟人脸认证");
                     tokio::select! {
                         biased;
                         _ = &mut rx => {
-                            info!("VerifyStart: cancelled during start delay");
+                            info!("开始验证：在启动延迟期间已取消");
                             let _ = Self::verify_status(&ctxt, VerifyResult::VerifyNoMatch, Vec::new(), CaptureStatus::NoFace, CaptureStatus::NoFace).await;
                             return;
                         }
@@ -565,13 +563,13 @@ impl AuthDaemon {
                     Some(&mut sleeping),
                     async {
                         if abort_if_lid_closed && Self::is_lid_closed().await {
-                            warn!("Laptop lid is closed, aborting face auth");
+                            warn!("笔记本盖已合上，终止人脸认证");
                             return false;
                         }
                         // Check the seat last, after all other waits.
                         let allowed = Self::seat_camera_available(caller_uid, target_uid).await;
                         if !allowed {
-                            warn!("VerifyStart: seat camera access changed before capture");
+                            warn!("开始验证：采集前座席摄像头访问权限已改变");
                         }
                         allowed
                     },
@@ -583,7 +581,7 @@ impl AuthDaemon {
                         continue;
                     }
                     Err(reason) => {
-                        info!(?reason, "VerifyStart: camera lease refused");
+                        info!(?reason, "开始验证：摄像头使用申请被拒绝");
                         let _ = Self::verify_status(&ctxt, VerifyResult::VerifyNoMatch, Vec::new(), CaptureStatus::Unused, CaptureStatus::Unused).await;
                         return;
                     }
@@ -609,8 +607,8 @@ impl AuthDaemon {
                     .await
                     .unwrap_or(false);
                     if disconnected {
-                        warn!("VerifyStart: IR camera {ir_device:?} is not connected; continuing with RGB only");
-                        let _ = Self::verify_diagnostic(&ctxt, "IR camera is not connected; continuing with the RGB camera").await;
+                        warn!("开始验证：红外摄像头 {ir_device:?} 未连接；仅使用 RGB 继续");
+                        let _ = Self::verify_diagnostic(&ctxt, "红外摄像头未连接；继续使用 RGB 摄像头").await;
                         run_ir = false;
                     }
                 }
@@ -624,7 +622,7 @@ impl AuthDaemon {
                     run_rgb = run_rgb,
                     run_ir = run_ir,
                     serial_capture = serial_capture,
-                    "VerifyStart: sensing faces for user {}",
+                    "开始验证：正在检测用户 {} 的人脸",
                     username
                 );
 
@@ -674,11 +672,11 @@ impl AuthDaemon {
                         let mut cam = match Camera::open_privileged(&rgb_device_clone) {
                             Ok(c) => c,
                             Err(e) => {
-                                let _ = tx.blocking_send(VerifyMsg::Unavailable(Spectrum::Rgb, format!("RGB Camera open error: {e}")));
+                                let _ = tx.blocking_send(VerifyMsg::Unavailable(Spectrum::Rgb, format!("RGB 摄像头打开失败：{e}")));
                                 return;
                             }
                         };
-                        tracing::debug!("RGB camera opened successfully at: {}", rgb_device_clone);
+                        tracing::debug!("RGB 摄像头已打开：{}", rgb_device_clone);
                         let _ = tx.blocking_send(VerifyMsg::PhaseStarted(Spectrum::Rgb));
 
                         let mut checker = FaceChecker::new(detector_arc, &config_clone, Spectrum::Rgb, false)
@@ -712,7 +710,7 @@ impl AuthDaemon {
                                 (RgbFrameKind::SettledDark, luma) => {
                                     if !logged_dark_stream {
                                         let message = format!(
-                                            "RGB stream remains dark after warmup: mean_luma={luma}"
+                                            "RGB 数据流预热后仍过暗：平均亮度={luma}"
                                         );
                                         info!("{message}");
                                         let _ = tx.blocking_send(VerifyMsg::Diagnostic(message));
@@ -722,7 +720,7 @@ impl AuthDaemon {
                                 (RgbFrameKind::SteadyDark, luma) => {
                                     if !logged_dark_stream {
                                         let message = format!(
-                                            "RGB stream never brightened: mean_luma={luma}"
+                                            "RGB 数据流始终未变亮：平均亮度={luma}"
                                         );
                                         info!("{message}");
                                         let _ = tx.blocking_send(VerifyMsg::Diagnostic(message));
@@ -737,7 +735,7 @@ impl AuthDaemon {
                                 match process_frame_sync(&mut checker, &mut recognizer, &frame, liveness_enabled || duress_enabled) {
                                     Ok(res) => res,
                                     Err(error) => {
-                                        let message = format!("RGB inference failed: {error:#}");
+                                        let message = format!("RGB 推理失败：{error:#}");
                                         error!("{message}");
                                         let _ = tx.blocking_send(VerifyMsg::Error(message));
                                         return;
@@ -747,14 +745,14 @@ impl AuthDaemon {
                             if checker.take_rotation_changed() {
                                 landmark_seq.clear();
                             }
-                            tracing::debug!("Processed RGB frame: status={:?}, embedding_extracted={}", status, embed_opt.is_some());
+                            tracing::debug!("已处理 RGB 画面：状态={:?}，已提取特征向量={}", status, embed_opt.is_some());
 
                             if let Some(luma) = checker.rgb_face_luma() {
                                 let frame_kind = face_warmup.classify_mean_luma(luma.mean);
                                 tracing::debug!(
                                     mean_luma = luma.mean,
                                     ?frame_kind,
-                                    "RGB face exposure"
+                                    "RGB 人脸曝光"
                                 );
                                 if frame_kind == RgbFrameKind::WarmupDark {
                                     continue;
@@ -765,7 +763,7 @@ impl AuthDaemon {
                                 && !logged_rgb_luma_statuses.contains(&status)
                             {
                                 let message = format!(
-                                    "RGB face region: mean_luma={}, rolling_mean_luma={:.1}, threshold={}, status={status:?}",
+                                    "RGB 人脸区域：平均亮度={}，滚动平均亮度={:.1}，阈值={}，状态={status:?}",
                                     luma.mean, luma.rolling_mean, luma.threshold
                                 );
                                 info!("{message}");
@@ -787,13 +785,13 @@ impl AuthDaemon {
                                 let scores = match db.match_faces(&username_clone, &data.embedding, threshold, Spectrum::Rgb) {
                                     Ok(s) => s,
                                     Err(e) => {
-                                        let _ = tx.blocking_send(VerifyMsg::Error(format!("DB error: {e}")));
+                                        let _ = tx.blocking_send(VerifyMsg::Error(format!("数据库错误：{e}")));
                                         return;
                                     }
                                 };
                                 drop(db);
 
-                                tracing::debug!("RGB match scores: {:?}", scores);
+                                tracing::debug!("RGB 匹配得分：{:?}", scores);
 
                                 let matched = scores.iter().any(|(_, _, _, passed, _)| *passed);
                                 if matched {
@@ -801,7 +799,7 @@ impl AuthDaemon {
                                         let closed = match eyes_closed_in_frame(&eye_state_arc, &data, duress_threshold) {
                                             Ok(closed) => closed,
                                             Err(e) => {
-                                                let _ = tx.blocking_send(VerifyMsg::Error(format!("Duress check failed: {e}")));
+                                                let _ = tx.blocking_send(VerifyMsg::Error(format!("胁迫检查失败：{e}")));
                                                 return;
                                             }
                                         };
@@ -822,14 +820,14 @@ impl AuthDaemon {
                                         let liveness_face = match crop_liveness_face(&data) {
                                             Ok(face) => face,
                                             Err(e) => {
-                                                error!("Liveness crop failed: {e}");
+                                                error!("活体检测画面裁剪失败：{e}");
                                                 continue;
                                             }
                                         };
                                         let mut live_guard = liveness_arc.blocking_lock();
                                         let Some(detector) = live_guard.as_mut() else {
                                             let _ = tx.blocking_send(VerifyMsg::Error(
-                                                "Liveness is enabled but the anti-spoof model is unavailable".to_string(),
+                                                "已启用活体检测，但防伪模型不可用".to_string(),
                                             ));
                                             return;
                                         };
@@ -837,7 +835,7 @@ impl AuthDaemon {
                                             Ok(score) => score,
                                             Err(e) => {
                                                 let _ = tx.blocking_send(VerifyMsg::Error(format!(
-                                                    "Liveness inference failed: {e}"
+                                                    "活体检测推理失败：{e}"
                                                 )));
                                                 return;
                                             }
@@ -851,7 +849,7 @@ impl AuthDaemon {
                                         liveness_passed = model_pass && !confirmed_static;
 
                                         tracing::debug!(
-                                            "Liveness checked: score={:?}, pass={}, motion={:?}, confirmed_static={}, overall={}",
+                                            "活体检测结果：得分={:?}，通过={}，运动={:?}，确认静止={}，总体={}",
                                             live_scores,
                                             model_pass,
                                             motion,
@@ -872,7 +870,7 @@ impl AuthDaemon {
                             // A device taken by another program only fails once it tries to stream,
                             // so this is where "already in use" surfaces.
                             let reason = cam.take_stream_error().unwrap_or_else(|| {
-                                "RGB camera stream stopped unexpectedly".to_string()
+                                "RGB 摄像头数据流意外中断".to_string()
                             });
                             let _ = tx.blocking_send(VerifyMsg::Unavailable(Spectrum::Rgb, reason));
                         }
@@ -906,7 +904,7 @@ impl AuthDaemon {
                     ir_thread = Some(std::thread::spawn(move || {
                         if ir_model && ir_liveness_arc.blocking_lock().is_none() {
                             let _ = tx.blocking_send(VerifyMsg::Error(
-                                "The IR anti-spoof model is enabled but unavailable".to_string(),
+                                "已启用红外防伪模型，但模型不可用".to_string(),
                             ));
                             return;
                         }
@@ -935,11 +933,11 @@ impl AuthDaemon {
                         let mut cam = match Camera::open_ir_privileged(&ir_device_clone, config_clone.cameras.ir_frame_size()) {
                             Ok(c) => c,
                             Err(e) => {
-                                let _ = tx.blocking_send(VerifyMsg::Error(format!("IR Camera open error: {e}")));
+                                let _ = tx.blocking_send(VerifyMsg::Error(format!("红外摄像头打开失败：{e}")));
                                 return;
                             }
                         };
-                        tracing::debug!("IR camera opened successfully at: {}", ir_device_clone);
+                        tracing::debug!("红外摄像头已打开：{}", ir_device_clone);
 
                         let _ = tx.blocking_send(VerifyMsg::PhaseStarted(Spectrum::Ir));
 
@@ -963,13 +961,13 @@ impl AuthDaemon {
                                 mean_luma = luma,
                                 threshold = config_clone.cameras.dark_luma_threshold,
                                 ?frame_kind,
-                                "IR frame exposure"
+                                "红外画面曝光"
                             );
                             match frame_kind {
                                 IrFrameKind::Lit => {
                                     if !logged_lit_luma {
                                         let message = format!(
-                                            "IR stream produced a lit frame: mean_luma={luma}"
+                                            "红外数据流已生成有光照的画面：平均亮度={luma}"
                                         );
                                         info!("{message}");
                                         let _ = tx.blocking_send(VerifyMsg::Diagnostic(message));
@@ -981,7 +979,7 @@ impl AuthDaemon {
                                 IrFrameKind::EmitterDark => {
                                     if !logged_dark_luma {
                                         let message = format!(
-                                            "IR stream remains dark after emitter warmup: mean_luma={luma}"
+                                            "红外发射器预热后画面仍过暗：平均亮度={luma}"
                                         );
                                         info!("{message}");
                                         let _ = tx.blocking_send(VerifyMsg::Diagnostic(message));
@@ -998,7 +996,7 @@ impl AuthDaemon {
                                 match process_frame_sync(&mut checker, &mut recognizer, &frame, ir_model || duress_enabled) {
                                     Ok(res) => res,
                                     Err(error) => {
-                                        let message = format!("IR inference failed: {error:#}");
+                                        let message = format!("红外推理失败：{error:#}");
                                         error!("{message}");
                                         let _ = tx.blocking_send(VerifyMsg::Error(message));
                                         return;
@@ -1008,7 +1006,7 @@ impl AuthDaemon {
                             if checker.take_rotation_changed() {
                                 landmark_seq.clear();
                             }
-                            tracing::debug!("Processed IR frame: status={:?}, embedding_extracted={}", status, embed_opt.is_some());
+                            tracing::debug!("已处理红外画面：状态={:?}，已提取特征向量={}", status, embed_opt.is_some());
 
                             let latest_embed = embed_opt.as_ref().map(|d| d.embedding.clone());
                             let _ = tx.try_send(VerifyMsg::Status(Spectrum::Ir, status, latest_embed, cam.fps()));
@@ -1019,13 +1017,13 @@ impl AuthDaemon {
                                 let scores = match db.match_faces(&username_clone, &data.embedding, threshold, Spectrum::Ir) {
                                     Ok(s) => s,
                                     Err(e) => {
-                                        let _ = tx.blocking_send(VerifyMsg::Error(format!("DB error: {e}")));
+                                        let _ = tx.blocking_send(VerifyMsg::Error(format!("数据库错误：{e}")));
                                         return;
                                     }
                                 };
                                 drop(db);
 
-                                tracing::debug!("IR match scores: {:?}", scores);
+                                tracing::debug!("红外匹配得分：{:?}", scores);
 
                                 let matched = scores.iter().any(|(_, _, _, passed, _)| *passed);
                                 if matched {
@@ -1033,7 +1031,7 @@ impl AuthDaemon {
                                         let closed = match eyes_closed_in_frame(&eye_state_arc, &data, duress_threshold) {
                                             Ok(closed) => closed,
                                             Err(e) => {
-                                                let _ = tx.blocking_send(VerifyMsg::Error(format!("Duress check failed: {e}")));
+                                                let _ = tx.blocking_send(VerifyMsg::Error(format!("胁迫检查失败：{e}")));
                                                 return;
                                             }
                                         };
@@ -1056,14 +1054,14 @@ impl AuthDaemon {
                                             let liveness_face = match crop_ir_liveness_face(&data) {
                                                 Ok(face) => face,
                                                 Err(e) => {
-                                                    error!("IR liveness crop failed: {e}");
+                                                    error!("红外活体检测画面裁剪失败：{e}");
                                                     continue;
                                                 }
                                             };
                                             let mut live_guard = ir_liveness_arc.blocking_lock();
                                             let Some(detector) = live_guard.as_mut() else {
                                                 let _ = tx.blocking_send(VerifyMsg::Error(
-                                                    "The IR anti-spoof model is enabled but unavailable".to_string(),
+                                                    "已启用红外防伪模型，但模型不可用".to_string(),
                                                 ));
                                                 return;
                                             };
@@ -1071,7 +1069,7 @@ impl AuthDaemon {
                                                 Ok(score) => score,
                                                 Err(e) => {
                                                     let _ = tx.blocking_send(VerifyMsg::Error(format!(
-                                                        "IR liveness inference failed: {e}"
+                                                        "红外活体检测推理失败：{e}"
                                                     )));
                                                     return;
                                                 }
@@ -1091,7 +1089,7 @@ impl AuthDaemon {
                                         }
 
                                         tracing::debug!(
-                                            "Liveness checked (IR): scores={:?}, motion={:?}, overall={}",
+                                            "红外活体检测结果：得分={:?}，运动={:?}，总体={}",
                                             ir_live_scores,
                                             motion,
                                             liveness_passed
@@ -1108,7 +1106,7 @@ impl AuthDaemon {
 
                         if !stop_clone.load(std::sync::atomic::Ordering::Relaxed) {
                             let reason = cam.take_stream_error().unwrap_or_else(|| {
-                                "IR camera stream stopped unexpectedly".to_string()
+                                "红外摄像头数据流意外中断".to_string()
                             });
                             let _ = tx.blocking_send(VerifyMsg::Error(reason));
                         }
@@ -1179,7 +1177,7 @@ impl AuthDaemon {
                     tokio::select! {
                         biased;
                         _ = &mut rx => {
-                            info!("VerifyStart: cancelled");
+                            info!("开始验证：已取消");
                             stop_flag.store(true, std::sync::atomic::Ordering::Relaxed);
                             // Report the camera as idle, not as a rejection: a cancelled attempt
                             // never decided anything, and a rejection counts toward lockout.
@@ -1187,7 +1185,7 @@ impl AuthDaemon {
                             break;
                         }
                         true = sleep_reaches(&mut sleeping, true) => {
-                            info!("VerifyStart: system is suspending, pausing until resume");
+                            info!("开始验证：系统正在挂起，暂停直到恢复");
                             stop_flag.store(true, std::sync::atomic::Ordering::Relaxed);
                             suspended = true;
                             break;
@@ -1202,7 +1200,7 @@ impl AuthDaemon {
                         }
                         msg_opt = result_rx.recv() => {
                             let Some(msg) = msg_opt else {
-                                warn!("VerifyStart: all capture threads exited without a result");
+                                warn!("开始验证：所有采集线程已退出，但没有返回结果");
                                 stop_flag.store(true, std::sync::atomic::Ordering::Relaxed);
                                 let _ = Self::verify_status(&ctxt, VerifyResult::VerifyNoMatch, Vec::new(), rgb_status, ir_status).await;
                                 break;
@@ -1248,7 +1246,7 @@ impl AuthDaemon {
                                             let matched = final_scores
                                                 .iter()
                                                 .any(|face| face.3 || face.6);
-                                            info!(matched, "VerifyStart: frame budget spent");
+                                            info!(matched, "开始验证：已达到最大采集帧数");
                                             if matched {
                                                 let _ = Self::verify_diagnostic(&ctxt, LIVENESS_GATE_DIAGNOSTIC).await;
                                             }
@@ -1275,7 +1273,7 @@ impl AuthDaemon {
                                         let started = *dark_since.get_or_insert_with(Instant::now);
                                         if started.elapsed() >= VERIFY_TOO_DARK_TIMEOUT {
                                             info!(
-                                                "VerifyStart: giving up after {}ms of dark frames",
+                                                "开始验证：画面持续过暗达 {} 毫秒，停止尝试",
                                                 VERIFY_TOO_DARK_TIMEOUT.as_millis()
                                             );
                                             stop_flag.store(true, std::sync::atomic::Ordering::Relaxed);
@@ -1312,9 +1310,9 @@ impl AuthDaemon {
                                 }
                                 VerifyMsg::Duress(spectrum) => {
                                     stop_flag.store(true, std::sync::atomic::Ordering::Relaxed);
-                                    info!(?spectrum, "Duress signal held; locking face authentication for {} until a password login", username);
+                                    info!(?spectrum, "胁迫信号持续有效；锁定 {} 的人脸认证，直到使用密码登录", username);
                                     if let Err(e) = duress_lockout.lock(&username) {
-                                        error!("Failed to persist the duress lockout, holding it in memory: {e}");
+                                        error!("无法保存胁迫锁定，暂存于内存中：{e}");
                                     }
                                     let _ = Self::verify_status(&ctxt, VerifyResult::VerifyNoMatch, Vec::new(), rgb_status, ir_status).await;
                                     break;
@@ -1322,8 +1320,8 @@ impl AuthDaemon {
                                 VerifyMsg::Unavailable(Spectrum::Rgb, reason)
                                     if run_rgb && ir_continues_without_rgb(&hybrid_policy, run_ir) =>
                                 {
-                                    warn!("VerifyStart: {reason}; continuing with IR only");
-                                    let _ = Self::verify_diagnostic(&ctxt, &format!("{reason}; continuing with the IR camera")).await;
+                                    warn!("开始验证：{reason}；仅使用红外继续");
+                                    let _ = Self::verify_diagnostic(&ctxt, &format!("{reason}；继续使用红外摄像头")).await;
                                     run_rgb = false;
                                     rgb_status = CaptureStatus::Unused;
                                     if finish_if_auth_passed!() {
@@ -1331,7 +1329,7 @@ impl AuthDaemon {
                                     }
                                 }
                                 VerifyMsg::Error(e) | VerifyMsg::Unavailable(_, e) => {
-                                    error!("VerifyStart loop error: {e}");
+                                    error!("验证循环错误：{e}");
                                     stop_flag.store(true, std::sync::atomic::Ordering::Relaxed);
                                     // The verdict alone reads as a face that was not found.
                                     let _ = Self::verify_diagnostic(&ctxt, &e).await;

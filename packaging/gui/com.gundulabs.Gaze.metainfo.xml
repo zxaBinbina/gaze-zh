@@ -16,6 +16,9 @@
   <developer_name>Gundu Labs</developer_name>
   <content_rating type="oars-1.1"/>
   <releases>
+    <release version="0.5.1" date="2026-10-30">
+      <description><p>补齐认证成功、确认、错误及安装提示的汉化，并加入上游同步后的汉化回归检查。</p></description>
+    </release>
     <release version="0.5.0" date="2026-10-30">
       <description><p>完善图形界面与命令行汉化，保留原有排版，并同步上游更新。</p></description>
     </release>

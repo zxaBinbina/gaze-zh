@@ -36,15 +36,15 @@ impl OrientationWatch {
         let proxy = match tokio::time::timeout(SENSOR_CONNECT_TIMEOUT, claim()).await {
             Ok(Ok(Some(proxy))) => proxy,
             Ok(Ok(None)) => {
-                debug!("No accelerometer; camera frames stay as captured");
+                debug!("没有加速度计；摄像头画面保持采集时的方向");
                 return None;
             }
             Ok(Err(err)) => {
-                debug!("Orientation sensor unavailable: {err}");
+                debug!("方向传感器不可用：{err}");
                 return None;
             }
             Err(_) => {
-                debug!("Orientation sensor did not answer in time");
+                debug!("方向传感器未及时响应");
                 return None;
             }
         };
@@ -55,13 +55,13 @@ impl OrientationWatch {
             let mut changes = proxy.receive_accelerometer_orientation_changed().await;
             if let Ok(value) = proxy.accelerometer_orientation().await {
                 let orientation = DeviceOrientation::from_sensor(&value);
-                info!(?orientation, "Device orientation");
+                info!(?orientation, "设备方向");
                 watched.set(orientation);
             }
             while let Some(change) = changes.next().await {
                 if let Ok(value) = change.get().await {
                     let orientation = DeviceOrientation::from_sensor(&value);
-                    debug!(?orientation, "Device orientation changed");
+                    debug!(?orientation, "设备方向已改变");
                     watched.set(orientation);
                 }
             }

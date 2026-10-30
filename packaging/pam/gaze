@@ -1,4 +1,4 @@
-Name: Gaze Face Authentication (Sequential)
+Name: Gaze 人脸认证（顺序模式）
 Default: yes
 Conflicts: gaze-simultaneous
 Priority: 800

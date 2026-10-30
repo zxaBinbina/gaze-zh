@@ -19,11 +19,11 @@ cpu_lacks_avx2() {
 
 warn_missing_avx2() {
 	cpu_lacks_avx2 || return 0
-	printf '\n\033[1;33m[Gaze Notice]\033[0m This CPU does not support AVX2.\n' >&2
-	printf 'The gazed daemon cannot run here: it would crash with an illegal instruction\n' >&2
-	printf 'on every start. The CLI and PAM modules are installed, but face authentication\n' >&2
-	printf 'will not work. gazed has been left stopped.\n' >&2
-	printf 'See https://gaze.gundulabs.com/guide/troubleshooting\n\n' >&2
+	printf '\n\033[1;33m[Gaze 提示]\033[0m 此 CPU 不支持 AVX2。\n' >&2
+	printf 'gazed 守护进程无法在此设备运行：每次启动都会因非法指令崩溃。\n' >&2
+	printf '命令行和 PAM 模块已安装，但人脸认证\n' >&2
+	printf '无法工作。gazed 已保持停止状态。\n' >&2
+	printf '参见 https://gaze.gundulabs.com/guide/troubleshooting\n\n' >&2
 }
 
 record_edited_pam_file() {
@@ -59,14 +59,14 @@ insert_pam_gaze() {
 	supports_insert=0
 	pam_auth_stack_supports_gaze_insert "$pam_file" || supports_insert=$?
 	if [ "$supports_insert" -eq 2 ]; then
-		printf '\n\033[1;33m[Gaze Notice]\033[0m %s has no supported auth line, so pam_gaze.so was not added.\n' "$pam_file" >&2
-		printf 'Add a "-auth requisite pam_faillock.so preauth" gate and "auth sufficient pam_gaze.so" to it by hand, then restart polkit.\n' >&2
-		printf 'See https://gaze.gundulabs.com/guide/pam for the full stack.\n\n' >&2
+		printf '\n\033[1;33m[Gaze 提示]\033[0m %s 中没有受支持的认证行，因此未添加 pam_gaze.so。\n' "$pam_file" >&2
+		printf '请手动添加“-auth requisite pam_faillock.so preauth”和“auth sufficient pam_gaze.so”，然后重启 polkit。\n' >&2
+		printf '完整认证栈参见 https://gaze.gundulabs.com/guide/pam。\n\n' >&2
 		return 0
 	elif [ "$supports_insert" -ne 0 ]; then
-		printf '\n\033[1;33m[Gaze Notice]\033[0m %s has a custom auth rule before its password stack, so pam_gaze.so was not added automatically.\n' "$pam_file" >&2
-		printf 'Leaving it unchanged avoids making a successful face match skip an existing MFA or policy gate.\n' >&2
-		printf 'Add Gaze to this PAM stack by hand after reviewing https://gaze.gundulabs.com/guide/pam.\n\n' >&2
+		printf '\n\033[1;33m[Gaze 提示]\033[0m %s 的密码认证栈前存在自定义认证规则，因此未自动添加 pam_gaze.so。\n' "$pam_file" >&2
+		printf '保留现有配置可避免人脸匹配成功后跳过已有的多因素认证或策略检查。\n' >&2
+		printf '请参阅 https://gaze.gundulabs.com/guide/pam，手动将 Gaze 添加到此 PAM 认证栈。\n\n' >&2
 		return 0
 	fi
 
@@ -95,8 +95,8 @@ insert_pam_gaze() {
 		return 0
 	fi
 
-	printf '\n\033[1;33m[Gaze Notice]\033[0m Could not add pam_gaze.so to %s.\n' "$pam_file" >&2
-	printf 'See https://gaze.gundulabs.com/guide/pam for the full stack.\n\n' >&2
+	printf '\n\033[1;33m[Gaze 提示]\033[0m 无法将 pam_gaze.so 添加到 %s。\n' "$pam_file" >&2
+	printf '完整认证栈参见 https://gaze.gundulabs.com/guide/pam。\n\n' >&2
 }
 
 record_pam_sudo_optout() {
@@ -108,17 +108,17 @@ record_pam_sudo_optout() {
 	EOF
 	chmod 644 "$PAM_SUDO_OPTOUT"
 
-	printf '\n\033[1;33m[Gaze Notice]\033[0m pam_gaze.so is no longer in /etc/pam.d/sudo, so face\n' >&2
-	printf 'authentication for sudo stays off. Recorded in %s;\n' "$PAM_SUDO_OPTOUT" >&2
-	printf 'delete that file to let Gaze configure sudo again.\n\n' >&2
+	printf '\n\033[1;33m[Gaze 提示]\033[0m /etc/pam.d/sudo 中已没有 pam_gaze.so，因此 sudo 的人脸\n' >&2
+	printf '认证将保持关闭。已记录到 %s；\n' "$PAM_SUDO_OPTOUT" >&2
+	printf '删除该文件可让 Gaze 重新配置 sudo。\n\n' >&2
 }
 
 notice_pam_sudo_configured() {
-	printf '\n\033[1;33m[Gaze Notice]\033[0m Added a faillock preauth gate and "auth sufficient pam_gaze.so" to /etc/pam.d/sudo.\n' >&2
-	printf 'That file belongs to the sudo package, so pacman now treats it as modified and\n' >&2
-	printf 'will write /etc/pam.d/sudo.pacnew on later sudo updates; merge those by hand.\n' >&2
-	printf 'To opt out, delete the pam_gaze.so line. Gaze will not put it back.\n' >&2
-	printf 'See https://gaze.gundulabs.com/guide/pam\n\n' >&2
+	printf '\n\033[1;33m[Gaze 提示]\033[0m 已向 /etc/pam.d/sudo 添加 faillock 预认证检查和“auth sufficient pam_gaze.so”。\n' >&2
+	printf '该文件属于 sudo 软件包，pacman 会将其视为已修改，并在\n' >&2
+	printf '后续 sudo 更新时生成 /etc/pam.d/sudo.pacnew；请手动合并。\n' >&2
+	printf '如需禁用，请删除 pam_gaze.so 行。Gaze 不会自动加回。\n' >&2
+	printf '参见 https://gaze.gundulabs.com/guide/pam\n\n' >&2
 }
 
 configure_pam_sudo() {
@@ -167,11 +167,11 @@ configure_pam_polkit() {
 
 check_deprecated_pam_grosshack() {
 	if [ -d /etc/pam.d ] && grep -rnE '^[[:space:]]*[^#].*pam_gaze_grosshack\.so' /etc/pam.d/ >/dev/null 2>&1; then
-		printf '\n\033[1;33m[Gaze Notice]\033[0m Found legacy pam_gaze_grosshack.so in /etc/pam.d/:\n' >&2
+		printf '\n\033[1;33m[Gaze 提示]\033[0m 在 /etc/pam.d/ 中发现旧版 pam_gaze_grosshack.so：\n' >&2
 		grep -rnE '^[[:space:]]*[^#].*pam_gaze_grosshack\.so' /etc/pam.d/ 2>/dev/null | head -n 5 | sed 's/^/  /' >&2
-		printf 'This module is deprecated and will be removed in a future release.\n' >&2
-		printf 'Please update your PAM configuration to use: pam_gaze.so simultaneous\n' >&2
-		printf 'Run "gaze doctor" for more information.\n\n' >&2
+		printf '此模块已弃用，将在未来版本中移除。\n' >&2
+		printf '请更新 PAM 配置，改用：pam_gaze.so simultaneous\n' >&2
+		printf '运行“gaze doctor”查看详细信息。\n\n' >&2
 	fi
 }
 

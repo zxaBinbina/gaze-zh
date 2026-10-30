@@ -41,7 +41,7 @@ fn expected_pack_sha256(pack_name: &str) -> anyhow::Result<&'static str> {
     match pack_name {
         "buffalo_sc" => Ok(BUFFALO_SC_SHA256),
         "buffalo_l" => Ok(BUFFALO_L_SHA256),
-        _ => anyhow::bail!("unknown model pack '{pack_name}'"),
+        _ => anyhow::bail!("未知模型包“{pack_name}”"),
     }
 }
 
@@ -49,7 +49,7 @@ fn pack_for_model(model_name: &str) -> anyhow::Result<&'static str> {
     match model_name {
         "det_500m.onnx" | "w600k_mbf.onnx" => Ok("buffalo_sc"),
         "det_10g.onnx" | "w600k_r50.onnx" => Ok("buffalo_l"),
-        _ => anyhow::bail!("no known model pack provides '{model_name}'"),
+        _ => anyhow::bail!("已知模型包均未提供“{model_name}”"),
     }
 }
 
@@ -85,7 +85,7 @@ fn ensure_private_dir(path: &Path) -> anyhow::Result<()> {
     fs::create_dir_all(path)?;
     let meta = fs::symlink_metadata(path)?;
     if meta.file_type().is_symlink() || !meta.is_dir() {
-        anyhow::bail!("{} is not a private directory", path.display());
+        anyhow::bail!("{} 不是私有目录", path.display());
     }
     fs::set_permissions(path, fs::Permissions::from_mode(0o700))?;
     Ok(())
@@ -102,7 +102,7 @@ fn validate_model_name(name: &str) -> anyhow::Result<()> {
         || name.chars().any(char::is_control)
         || !name.ends_with(".onnx")
     {
-        anyhow::bail!("model name must be a single .onnx file name");
+        anyhow::bail!("模型名称必须是单个 .onnx 文件名");
     }
     Ok(())
 }
@@ -117,7 +117,7 @@ fn cached_model(path: &Path, name: &str) -> anyhow::Result<Option<ModelFile>> {
     if let Some(expected) = expected_model_sha256(name)
         && model.sha256() != expected
     {
-        warn!(path = %path.display(), "Cached model checksum mismatch; downloading a replacement");
+        warn!(path = %path.display(), "缓存模型的校验和不匹配；正在重新下载");
         return Ok(None);
     }
     Ok(Some(model))
@@ -132,7 +132,7 @@ impl Drop for DownloadTemp {
 }
 
 fn download_file(url: &str, dest: &Path, expected_sha256: &str) -> anyhow::Result<ModelFile> {
-    info!(url, timeout = ?MODEL_DOWNLOAD_TIMEOUT, "Downloading model file");
+    info!(url, timeout = ?MODEL_DOWNLOAD_TIMEOUT, "正在下载模型文件");
     let agent: ureq::Agent = ureq::Agent::config_builder()
         .timeout_global(Some(MODEL_DOWNLOAD_TIMEOUT))
         .build()
@@ -157,7 +157,7 @@ fn save_model(
     let file_name = dest
         .file_name()
         .and_then(|n| n.to_str())
-        .ok_or_else(|| anyhow::anyhow!("invalid model file path"))?;
+        .ok_or_else(|| anyhow::anyhow!("模型文件路径无效"))?;
     let tmp_path = dest.with_file_name(format!(".{file_name}.{}.tmp", uuid::Uuid::new_v4()));
     let mut file = fs::OpenOptions::new()
         .write(true)
@@ -174,7 +174,7 @@ fn save_model(
     let model = model.rename(dest)?;
     fs::File::open(
         dest.parent()
-            .ok_or_else(|| anyhow::anyhow!("model has no parent directory"))?,
+            .ok_or_else(|| anyhow::anyhow!("模型没有父目录"))?,
     )?
     .sync_all()?;
     Ok(model)
@@ -204,7 +204,7 @@ fn extract_onnx_from_zip(
                 continue;
             }
             if let Some(model) = cached_model(&out_path, &basename)? {
-                debug!(file = %basename, "Verified model already exists, skipping extraction");
+                debug!(file = %basename, "已存在通过校验的模型，跳过解压");
                 extracted.push(model);
                 continue;
             }
@@ -213,7 +213,7 @@ fn extract_onnx_from_zip(
                 &out_path,
                 expected_model_sha256(&basename),
             )?);
-            debug!(file = %basename, "Extracted model");
+            debug!(file = %basename, "模型已解压");
         }
     }
 
@@ -275,12 +275,8 @@ fn ensure_models_with(
     }
 
     Ok((
-        detector.ok_or_else(|| {
-            anyhow::anyhow!("Detection model '{detector_name}' not found in pack")
-        })?,
-        recognizer.ok_or_else(|| {
-            anyhow::anyhow!("Recognition model '{recognizer_name}' not found in pack")
-        })?,
+        detector.ok_or_else(|| anyhow::anyhow!("模型包中未找到检测模型“{detector_name}”"))?,
+        recognizer.ok_or_else(|| anyhow::anyhow!("模型包中未找到识别模型“{recognizer_name}”"))?,
     ))
 }
 

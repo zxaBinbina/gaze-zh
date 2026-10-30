@@ -31,7 +31,7 @@ impl ModelFile {
         let metadata = std::fs::symlink_metadata(&path)?;
         anyhow::ensure!(
             metadata.is_file() && !metadata.file_type().is_symlink(),
-            "model path is not a regular file: {}",
+            "模型路径不是普通文件：{}",
             path.display()
         );
         let mut file = std::fs::File::open(&path)?;
@@ -55,7 +55,7 @@ impl ModelFile {
         if let Some(expected) = expected {
             anyhow::ensure!(
                 sha256 == expected,
-                "checksum mismatch for {}: expected {expected}, got {sha256}",
+                "{} 的校验和不匹配：应为 {expected}，实际为 {sha256}",
                 path.display()
             );
         }
@@ -109,12 +109,9 @@ impl InferenceRuntime {
 }
 
 fn session_builder(library: &RuntimeLibrary) -> anyhow::Result<SessionBuilder> {
-    let configure_error =
-        |error| anyhow::anyhow!("failed to configure ONNX Runtime session: {error}");
+    let configure_error = |error| anyhow::anyhow!("无法配置 ONNX Runtime 会话：{error}");
     Session::builder(&library.environment)
-        .map_err(|error| {
-            anyhow::anyhow!("failed to create an ONNX Runtime session builder: {error}")
-        })?
+        .map_err(|error| anyhow::anyhow!("无法创建 ONNX Runtime 会话构建器：{error}"))?
         .with_optimization_level(GraphOptimizationLevel::All)
         .map_err(configure_error)?
         .with_intra_threads(inference_threads(
@@ -138,12 +135,7 @@ fn inference_threads(available: usize) -> usize {
 fn build_cpu_session(library: &RuntimeLibrary, model: &ModelFile) -> anyhow::Result<Session> {
     session_builder(library)?
         .commit_from_file(model.path())
-        .with_context(|| {
-            format!(
-                "failed to load ONNX model {} on cpu",
-                model.path().display()
-            )
-        })
+        .with_context(|| format!("无法在 CPU 上加载 ONNX 模型 {}", model.path().display()))
 }
 
 fn cache_dir(
@@ -171,8 +163,7 @@ fn cache_dir(
                 .collect::<String>(),
         )
         .join(model.sha256());
-    std::fs::create_dir_all(&dir)
-        .with_context(|| format!("cannot create inference cache {}", dir.display()))?;
+    std::fs::create_dir_all(&dir).with_context(|| format!("无法创建推理缓存 {}", dir.display()))?;
     Ok(dir)
 }
 
@@ -189,7 +180,7 @@ fn build_accelerated_session(
     };
     anyhow::ensure!(
         available,
-        "loaded ONNX Runtime does not include the {provider} execution provider; register its runtime and restart gazed"
+        "已加载的 ONNX Runtime 不包含 {provider} 执行提供程序；请注册对应运行库并重启 gazed"
     );
     let cache = cache_dir(library, model, provider)?;
     let cache = cache.to_string_lossy();
@@ -206,7 +197,7 @@ fn build_accelerated_session(
                 .with_arbitrary_config("enable_cache_file_io_in_mem", "0");
             ep.build().error_on_failure()
         }
-        _ => anyhow::bail!("unsupported acceleration provider {provider}"),
+        _ => anyhow::bail!("不支持的加速提供程序 {provider}"),
     };
     let mut builder = session_builder(library)?;
     if device == "npu" {
@@ -214,16 +205,16 @@ fn build_accelerated_session(
         for (symbol, size) in model_dimension_overrides(model.path())? {
             builder = builder
                 .with_dimension_override(symbol, size)
-                .map_err(|error| anyhow::anyhow!("failed to freeze input dimensions: {error}"))?;
+                .map_err(|error| anyhow::anyhow!("无法固定输入维度：{error}"))?;
         }
     }
     let mut session = builder
         .with_execution_providers([dispatch])
-        .map_err(|error| anyhow::anyhow!("failed to register {provider}: {error}"))?
+        .map_err(|error| anyhow::anyhow!("无法注册 {provider}：{error}"))?
         .commit_from_file(model.path())
         .with_context(|| {
             format!(
-                "failed to load ONNX model {} on {provider}/{device}",
+                "无法在 {provider}/{device} 上加载 ONNX 模型 {}",
                 model.path().display()
             )
         })?;
@@ -235,22 +226,16 @@ fn build_accelerated_session(
 fn proto_varint(reader: &mut (impl Read + Seek), end: u64) -> anyhow::Result<u64> {
     let mut value = 0u64;
     for shift in (0..70).step_by(7) {
-        anyhow::ensure!(
-            reader.stream_position()? < end,
-            "truncated ONNX protobuf value"
-        );
+        anyhow::ensure!(reader.stream_position()? < end, "ONNX protobuf 值不完整");
         let mut byte = [0u8];
         reader.read_exact(&mut byte)?;
-        anyhow::ensure!(
-            shift != 63 || byte[0] <= 1,
-            "overflowing ONNX protobuf value"
-        );
+        anyhow::ensure!(shift != 63 || byte[0] <= 1, "ONNX protobuf 值溢出");
         value |= u64::from(byte[0] & 0x7f) << shift;
         if byte[0] & 0x80 == 0 {
             return Ok(value);
         }
     }
-    anyhow::bail!("invalid ONNX protobuf value")
+    anyhow::bail!("ONNX protobuf 值无效")
 }
 
 /// Find a length-delimited field, seeking past weights without allocating them.
@@ -262,7 +247,7 @@ fn proto_field(
     reader.seek(SeekFrom::Start(region.start))?;
     while reader.stream_position()? < region.end {
         let key = proto_varint(reader, region.end)?;
-        anyhow::ensure!(key >> 3 != 0, "invalid ONNX protobuf field");
+        anyhow::ensure!(key >> 3 != 0, "ONNX protobuf 字段无效");
         let length = match key & 7 {
             0 => {
                 proto_varint(reader, region.end)?;
@@ -271,13 +256,13 @@ fn proto_field(
             1 => 8,
             2 => proto_varint(reader, region.end)?,
             5 => 4,
-            _ => anyhow::bail!("unsupported ONNX protobuf wire type"),
+            _ => anyhow::bail!("不支持的 ONNX protobuf 编码类型"),
         };
         let start = reader.stream_position()?;
         let end = start
             .checked_add(length)
-            .context("ONNX protobuf length overflow")?;
-        anyhow::ensure!(end <= region.end, "truncated ONNX protobuf field");
+            .context("ONNX protobuf 长度溢出")?;
+        anyhow::ensure!(end <= region.end, "ONNX protobuf 字段不完整");
         if key >> 3 == wanted && key & 7 == 2 {
             return Ok(Some(start..end));
         }
@@ -306,11 +291,11 @@ fn input_dimension_symbols(
         let symbol = match proto_field(reader, dimension, 2)? {
             Some(symbol) => {
                 let length = symbol.end - symbol.start;
-                anyhow::ensure!(length <= 1024, "ONNX dimension symbol is too long");
+                anyhow::ensure!(length <= 1024, "ONNX 维度符号过长");
                 let mut bytes = vec![0u8; length as usize];
                 reader.seek(SeekFrom::Start(symbol.start))?;
                 reader.read_exact(&mut bytes)?;
-                Some(String::from_utf8(bytes).context("invalid ONNX dimension symbol")?)
+                Some(String::from_utf8(bytes).context("ONNX 维度符号无效")?)
             }
             None => None,
         };
@@ -343,7 +328,7 @@ fn nchw_overrides(symbols: Vec<Option<String>>, size: usize) -> anyhow::Result<V
                 !overrides
                     .iter()
                     .any(|(name, value)| name == &symbol && *value != size),
-                "conflicting ONNX dimension symbol {symbol}"
+                "ONNX 维度符号 {symbol} 冲突"
             );
             overrides.push((symbol, size));
         }
@@ -371,7 +356,7 @@ fn probe_session(session: &mut Session, model_path: &Path) -> anyhow::Result<()>
         .run(ort::inputs![ort::value::TensorRef::from_array_view(
             &input
         )?])
-        .with_context(|| format!("{} failed its accelerator warmup", model_path.display()))?;
+        .with_context(|| format!("{} 加速器预热失败", model_path.display()))?;
     Ok(())
 }
 
@@ -387,7 +372,7 @@ pub fn create_session(
     if let Some(reason) = unusable_reason(config) {
         tracing::warn!(
             reason,
-            "Unusable inference configuration; falling back to the ONNX Runtime CPU execution provider"
+            "推理配置不可用；回退到 ONNX Runtime 的 CPU 执行提供程序"
         );
         let session = build_cpu_session(library, model)?;
         return Ok((session, InferenceRuntime::cpu(config, Some(reason))));
@@ -404,13 +389,13 @@ pub fn create_session(
         config.execution_provider.as_str()
     };
     let reason = if provider == "cpu" {
-        library.fallback_reason.clone().unwrap_or_else(|| {
-            "no accelerator runtime selected; restart gazed after installing a vendor runtime"
-                .to_string()
-        })
+        library
+            .fallback_reason
+            .clone()
+            .unwrap_or_else(|| "未选择加速器运行库；请安装厂商运行库后重启 gazed".to_string())
     } else if library.provider != provider && library.provider != "cpu" {
         format!(
-            "the loaded runtime is {}; restart gazed to select {provider}",
+            "当前加载的运行库为 {}；请重启 gazed 以选择 {provider}",
             library.provider
         )
     } else {
@@ -420,7 +405,7 @@ pub fn create_session(
                     provider,
                     device = config.device,
                     model = %model.path().display(),
-                    "Loaded accelerated ONNX session (CPU graph partitions may remain)"
+                    "已加载加速的 ONNX 会话（部分计算图可能仍在 CPU 上运行）"
                 );
                 return Ok((session, InferenceRuntime::accelerated(config, provider)));
             }
@@ -430,10 +415,9 @@ pub fn create_session(
             },
         }
     };
-    tracing::warn!(provider, model = %model.path().display(), %reason, "Accelerator setup failed; using CPU");
-    let session = build_cpu_session(library, model).with_context(|| {
-        format!("accelerator setup failed ({reason}) and CPU fallback also failed")
-    })?;
+    tracing::warn!(provider, model = %model.path().display(), %reason, "加速器设置失败；使用 CPU");
+    let session = build_cpu_session(library, model)
+        .with_context(|| format!("加速器设置失败（{reason}），回退到 CPU 也失败"))?;
     Ok((session, InferenceRuntime::cpu(config, Some(reason))))
 }
 

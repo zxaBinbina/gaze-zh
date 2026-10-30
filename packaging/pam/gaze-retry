@@ -1,4 +1,4 @@
-Name: Gaze Face Authentication (Retry After Password)
+Name: Gaze 人脸认证（密码失败后重试）
 Default: no
 Priority: 128
 Auth-Type: Primary

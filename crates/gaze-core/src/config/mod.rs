@@ -616,7 +616,7 @@ impl AuthConfig {
             "screen_lock" => "screen_lock",
             "" | "all" => "all",
             other => {
-                tracing::warn!("Invalid start delay scope {other:?}; delaying every auth");
+                tracing::warn!("启动延迟范围 {other:?} 无效；对每次认证应用延迟");
                 "all"
             }
         }
@@ -1000,8 +1000,8 @@ impl Config {
             return;
         };
         match replace_file_atomically(Path::new(path), &migrated) {
-            Ok(()) => tracing::info!("Migrated legacy configuration in {path}"),
-            Err(e) => tracing::warn!("Failed to write migrated config to {path}: {e}"),
+            Ok(()) => tracing::info!("已迁移 {path} 中的旧版配置"),
+            Err(e) => tracing::warn!("无法将迁移后的配置写入 {path}：{e}"),
         }
     }
 
@@ -1012,28 +1012,28 @@ impl Config {
             let config: Config = toml_edit::de::from_str(&contents)?;
             for key in unknown_config_keys(&contents) {
                 tracing::warn!(
-                    "{path} sets {key}, which Gaze does not read; it has no effect and is probably a typo"
+                    "{path} 设置了 Gaze 不读取的 {key}；该设置不会生效，可能存在拼写错误"
                 );
             }
             // Keep startup available for an invalid level: warn and let the total
             // accessors fall back. `set_config` rejects invalid admin input earlier.
             if let Err(e) = config.security.validate() {
-                tracing::warn!("{e}; using safe fallbacks for invalid security fields");
+                tracing::warn!("{e}；无效的安全字段将使用安全的默认值");
             }
             if let Err(e) = config.enrollment.validate() {
-                tracing::warn!("{e}; using the default enrollment face-size ratio");
+                tracing::warn!("{e}；使用默认录入人脸大小比例");
             }
             if let Err(e) = config.inference.validate() {
-                tracing::warn!("{e}; inference configuration will be checked when models load");
+                tracing::warn!("{e}；加载模型时将检查推理配置");
             }
             if let Err(e) = config.liveness.validate() {
-                tracing::warn!("{e}; using the default liveness settings");
+                tracing::warn!("{e}；使用默认活体检测设置");
             }
             if let Err(e) = config.cameras.validate() {
-                tracing::warn!("{e}; using the default for the invalid camera setting");
+                tracing::warn!("{e}；无效的摄像头设置将使用默认值");
             }
             if let Err(e) = config.duress.validate() {
-                tracing::warn!("{e}; using the default duress settings");
+                tracing::warn!("{e}；使用默认胁迫检测设置");
             }
             Ok(config)
         } else {

@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: 2026 Gundu Labs
 # SPDX-License-Identifier: GPL-3.0-or-later
 
-# GTK4/Adwaita GUI for Gaze (mirrors packaging/nfpm/gui.yaml).
+# Gaze 的 GTK4/Adwaita 图形界面 (mirrors packaging/nfpm/gui.yaml).
 {
   lib,
   rustPlatform,
@@ -82,7 +82,7 @@ rustPlatform.buildRustPackage {
   '';
 
   meta = {
-    description = "GTK4/Adwaita GUI for Gaze facial authentication";
+    description = "Gaze 人脸认证的 GTK4/Adwaita 图形界面";
     homepage = "https://gaze.gundulabs.com";
     license = lib.licenses.gpl3Plus;
     platforms = [

@@ -67,7 +67,7 @@ pub async fn watch_resume(
             Some(Err(e)) => return Err(e),
             None => {
                 return Err(zbus::Error::Failure(
-                    "PrepareForSleep stream ended".to_string(),
+                    "PrepareForSleep 信号流已结束".to_string(),
                 ));
             }
         };
@@ -77,7 +77,7 @@ pub async fn watch_resume(
             }
             Ok(false) => {
                 if let Err(e) = persist_resume_seen_marker() {
-                    warn!("Failed to persist resume marker: {e}");
+                    warn!("无法保存恢复标记：{e}");
                 }
                 sleeping.send_modify(|state| {
                     resume_pending.store(true, Ordering::SeqCst);
@@ -117,7 +117,7 @@ pub(super) async fn hold_for_sleep(
 ) -> SleepHold {
     let already_sleeping = *sleeping.borrow();
     if lid_wait && !already_sleeping {
-        info!("Lid is closed, waiting to see whether the system suspends");
+        info!("笔记本盖已合上，等待系统进入挂起状态");
         tokio::select! {
             biased;
             _ = &mut *cancel => return SleepHold::Cancelled,
@@ -134,12 +134,12 @@ pub(super) async fn hold_for_sleep(
         return SleepHold::Awake;
     }
 
-    info!("System is suspending, holding face auth until resume");
+    info!("系统正在挂起，暂停人脸认证直至恢复");
     tokio::select! {
         biased;
         _ = &mut *cancel => SleepHold::Cancelled,
         _ = sleep_reaches(sleeping, false) => {
-            info!("Resumed, restarting face auth");
+            info!("系统已恢复，重新开始人脸认证");
             SleepHold::Resumed
         }
     }
@@ -181,7 +181,7 @@ pub async fn watch_claim_owner(
         if args.new_owner().is_none()
             && forget_pam_internal_sender(&mut *pam_internal.lock().await, name)
         {
-            info!(sender = %name, "Sender vanished, dropping its internal PAM services");
+            info!(sender = %name, "发送方已退出，移除其内部 PAM 服务");
         }
         let epoch = {
             let state = claim_state.lock().await;
@@ -204,12 +204,12 @@ pub async fn watch_claim_owner(
 
         let name = name.to_string();
         if release_claim_epoch(&claim_state, &active_cancel, epoch).await {
-            info!(sender = %name, "Sender vanished, auto-releasing claim");
+            info!(sender = %name, "发送方已退出，自动释放设备");
         }
     }
 
     Err(zbus::Error::Failure(
-        "NameOwnerChanged stream ended; claims will only be released on timeout".to_string(),
+        "NameOwnerChanged 信号流已结束；设备占用将仅在超时后释放".to_string(),
     ))
 }
 
@@ -264,7 +264,7 @@ pub async fn watch_session_locks(
             Some(Err(e)) => return Err(e),
             None => {
                 return Err(zbus::Error::Failure(
-                    "session LockedHint stream ended".to_string(),
+                    "会话 LockedHint 信号流已结束".to_string(),
                 ));
             }
         };

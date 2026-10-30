@@ -36,7 +36,7 @@ impl AuthDaemon {
         let caller_uid = Self::caller_uid(&header)
             .await
             .map_err(|e| zbus::fdo::Error::Failed(e.to_string()))?;
-        info!(caller_uid, active, "Registered extension status");
+        info!(caller_uid, active, "已注册扩展状态");
         Ok(())
     }
 
@@ -49,7 +49,7 @@ impl AuthDaemon {
         let sender = header
             .sender()
             .map(|s| s.to_string())
-            .ok_or_else(|| fdo::Error::AccessDenied("Missing DBus sender".into()))?;
+            .ok_or_else(|| fdo::Error::AccessDenied("缺少 D-Bus 发送方".into()))?;
 
         let caller_uid = Self::caller_uid(&header).await?;
         let target_uid = Self::username_uid(&username)?;
@@ -59,8 +59,7 @@ impl AuthDaemon {
 
         if !Self::seat_camera_available(caller_uid, target_uid).await {
             return Err(fdo::Error::AccessDenied(
-                "refusing face authentication: the seat camera belongs to another user's session"
-                    .into(),
+                "拒绝人脸认证：当前座席的摄像头属于其他用户的会话".into(),
             ));
         }
 
@@ -71,7 +70,7 @@ impl AuthDaemon {
                     return Ok(());
                 }
                 return Err(fdo::Error::Failed(format!(
-                    "Device already claimed for '{}'; release it before claiming for another user",
+                    "设备已由“{}”申请使用；请先释放，再为其他用户申请",
                     existing.username
                 )));
             }
@@ -80,12 +79,10 @@ impl AuthDaemon {
                 info!(
                     sender = %sender,
                     previous_sender = %existing.sender,
-                    "Root caller preempting existing daemon claim"
+                    "root 调用方正在接管已占用的守护进程"
                 );
             } else {
-                return Err(fdo::Error::Failed(
-                    "Device already claimed by another interface".into(),
-                ));
+                return Err(fdo::Error::Failed("设备已被其他界面占用".into()));
             }
         }
 
@@ -94,7 +91,7 @@ impl AuthDaemon {
             username = %username,
             target_uid,
             caller_uid,
-            "Claimed daemon"
+            "已申请使用守护进程"
         );
         let epoch = CLAIM_EPOCH.fetch_add(1, Ordering::Relaxed);
 
@@ -107,7 +104,7 @@ impl AuthDaemon {
                 warn!(
                     sender = %timeout_sender,
                     timeout_secs = CLAIM_TIMEOUT_SECS,
-                    "Claim timed out and was reclaimed; the client never released it"
+                    "客户端未释放设备，占用超时后已回收"
                 );
             }
         });
@@ -134,8 +131,7 @@ impl AuthDaemon {
                     warn!(
                         sender = %sender_for_check,
                         error = %e,
-                        "No DBus proxy to confirm the claim owner; this claim will hold \
-                         until it times out"
+                        "没有可用于确认占用方的 D-Bus 代理；设备将保持占用直到超时"
                     );
                     return;
                 }
@@ -147,7 +143,7 @@ impl AuthDaemon {
                     warn!(
                         sender = %sender_for_check,
                         error = %e,
-                        "Unparsable claim sender; skipping the owner confirmation"
+                        "无法解析申请方；跳过所有者确认"
                     );
                     return;
                 }
@@ -158,7 +154,7 @@ impl AuthDaemon {
                     if release_claim_epoch(&claim_state, &active_cancel, epoch).await {
                         info!(
                             sender = %sender_for_check,
-                            "Sender vanished while claiming, auto-releasing claim"
+                            "发送方在申请过程中退出，自动释放设备"
                         );
                     }
                 }
@@ -166,8 +162,7 @@ impl AuthDaemon {
                 Err(e) => warn!(
                     sender = %sender_for_check,
                     error = %e,
-                    "Could not confirm the claim owner; a sender that vanished while \
-                     claiming will hold the claim until it times out"
+                    "无法确认设备占用方；若发送方在申请时退出，设备将保持占用直到超时"
                 ),
             }
         });
@@ -179,20 +174,20 @@ impl AuthDaemon {
         let sender = header
             .sender()
             .map(|s| s.to_string())
-            .ok_or_else(|| fdo::Error::AccessDenied("Missing DBus sender".into()))?;
+            .ok_or_else(|| fdo::Error::AccessDenied("缺少 D-Bus 发送方".into()))?;
 
         let mut state = self.claim_state.lock().await;
         if let Some(claim) = &*state {
             if claim.sender != sender {
-                return Err(fdo::Error::Failed("Sender does not own the claim".into()));
+                return Err(fdo::Error::Failed("发送方不拥有此次设备占用".into()));
             }
 
             self.cancel_active_tasks().await;
             *state = None;
-            info!(sender = %sender, "Released daemon");
+            info!(sender = %sender, "已释放守护进程");
             Ok(())
         } else {
-            Err(fdo::Error::Failed("Daemon not claimed".into()))
+            Err(fdo::Error::Failed("尚未申请使用守护进程".into()))
         }
     }
 
@@ -232,9 +227,7 @@ impl AuthDaemon {
         pam_service: String,
     ) -> fdo::Result<()> {
         if !is_kwallet_pam_service(pam_service.as_str()) {
-            return Err(fdo::Error::InvalidArgs(
-                "KWallet requires a KDE login service".into(),
-            ));
+            return Err(fdo::Error::InvalidArgs("KWallet 需要 KDE 登录服务".into()));
         }
         self.start_verification(ctxt, header, Some(pam_service), true)
             .await
@@ -322,7 +315,7 @@ impl AuthDaemon {
             let ctxt = match SignalEmitter::new(&conn, path) {
                 Ok(emitter) => emitter.set_destination(signal_destination),
                 Err(e) => {
-                    error!("Failed to create signal emitter: {e}");
+                    error!("无法创建信号发送器：{e}");
                     return;
                 }
             };
@@ -337,13 +330,13 @@ impl AuthDaemon {
                 .await
                 .unwrap_or(false);
                 if disconnected {
-                    warn!("EnrollStart: IR camera {ir_device:?} is not connected; enrolling RGB only");
+                    warn!("开始录入：红外摄像头 {ir_device:?} 未连接；仅录入 RGB 模板");
                     run_ir = false;
                 }
             }
 
             if !run_rgb && !run_ir {
-                error!("No cameras configured for enrollment");
+                error!("尚未配置录入使用的摄像头");
                 let _ = Self::enroll_status(&ctxt, &face_name, 0, 5, true, EnrollPrompt::Cancelled, -1.0).await;
                 return;
             }
@@ -356,7 +349,7 @@ impl AuthDaemon {
             ).await {
                 Ok(guard) => guard,
                 Err(reason) => {
-                    info!(?reason, "EnrollStart: camera lease refused");
+                    info!(?reason, "开始录入：摄像头使用申请被拒绝");
                     let _ = Self::enroll_status(&ctxt, &face_name, 0, 5, true, EnrollPrompt::Cancelled, -1.0).await;
                     return;
                 }
@@ -372,7 +365,7 @@ impl AuthDaemon {
                 .unwrap_or_else(|_| "0".to_string());
 
             info!(
-                "EnrollStart: capturing faces for {}, target: {}, template: {}, run_rgb: {}, run_ir: {}",
+                "开始录入：为 {} 采集人脸，目标：{}，模板：{}，采集 RGB：{}，采集红外：{}",
                 username, face_name, template_id, run_rgb, run_ir
             );
 
@@ -436,7 +429,7 @@ impl AuthDaemon {
                                 Err(e) => {
                                     dead_streams += 1;
                                     if dead_streams >= 3 {
-                                        let _ = tx.blocking_send(EnrollMsg::Error(format!("RGB Camera open error: {e}")));
+                                        let _ = tx.blocking_send(EnrollMsg::Error(format!("RGB 摄像头打开失败：{e}")));
                                         return;
                                     }
                                     std::thread::sleep(Duration::from_millis(200));
@@ -467,7 +460,7 @@ impl AuthDaemon {
                                     match process_frame_sync(&mut checker, &mut recognizer, &frame, false) {
                                         Ok(res) => res,
                                         Err(error) => {
-                                            let message = format!("RGB inference failed: {error:#}");
+                                            let message = format!("RGB 推理失败：{error:#}");
                                             error!("{message}");
                                             let _ = tx.blocking_send(EnrollMsg::Error(message));
                                             return;
@@ -505,7 +498,7 @@ impl AuthDaemon {
                             dead_streams += 1;
                             if dead_streams >= 3 {
                                 let _ = tx.blocking_send(EnrollMsg::Error(
-                                    "RGB camera stream stopped unexpectedly".into(),
+                                    "RGB 摄像头数据流意外中断".into(),
                                 ));
                                 return;
                             }
@@ -516,7 +509,7 @@ impl AuthDaemon {
                     let mut cam = match Camera::open_privileged(&rgb_device_clone) {
                         Ok(c) => c,
                         Err(e) => {
-                            let _ = tx.blocking_send(EnrollMsg::Error(format!("RGB Camera open error: {e}")));
+                            let _ = tx.blocking_send(EnrollMsg::Error(format!("RGB 摄像头打开失败：{e}")));
                             return;
                         }
                     };
@@ -555,7 +548,7 @@ impl AuthDaemon {
                             match process_frame_sync(&mut checker, &mut recognizer, &frame, false) {
                                 Ok(res) => res,
                                 Err(error) => {
-                                    let message = format!("RGB inference failed: {error:#}");
+                                    let message = format!("RGB 推理失败：{error:#}");
                                     error!("{message}");
                                     let _ = tx.blocking_send(EnrollMsg::Error(message));
                                     return;
@@ -590,7 +583,7 @@ impl AuthDaemon {
                         && completed_steps_clone.load(std::sync::atomic::Ordering::Relaxed) < max_steps
                     {
                         let _ = tx.blocking_send(EnrollMsg::Error(
-                            "RGB camera stream stopped unexpectedly".into(),
+                            "RGB 摄像头数据流意外中断".into(),
                         ));
                     }
                 }));
@@ -648,7 +641,7 @@ impl AuthDaemon {
                                 Err(e) => {
                                     dead_streams += 1;
                                     if dead_streams >= 3 {
-                                        let _ = tx.blocking_send(EnrollMsg::Error(format!("IR Camera open error: {e}")));
+                                        let _ = tx.blocking_send(EnrollMsg::Error(format!("红外摄像头打开失败：{e}")));
                                         return;
                                     }
                                     std::thread::sleep(Duration::from_millis(200));
@@ -686,7 +679,7 @@ impl AuthDaemon {
                                     match process_frame_sync(&mut checker, &mut recognizer, &frame, false) {
                                         Ok(res) => res,
                                         Err(error) => {
-                                            let message = format!("IR inference failed: {error:#}");
+                                            let message = format!("红外推理失败：{error:#}");
                                             error!("{message}");
                                             let _ = tx.blocking_send(EnrollMsg::Error(message));
                                             return;
@@ -707,7 +700,7 @@ impl AuthDaemon {
                             dead_streams += 1;
                             if dead_streams >= 3 {
                                 let _ = tx.blocking_send(EnrollMsg::Error(
-                                    "IR camera stream stopped unexpectedly".into(),
+                                    "红外摄像头数据流意外中断".into(),
                                 ));
                                 return;
                             }
@@ -723,7 +716,7 @@ impl AuthDaemon {
                     let mut cam = match Camera::open_ir_privileged(&ir_device_clone, config_clone.cameras.ir_frame_size()) {
                         Ok(c) => c,
                         Err(e) => {
-                            let _ = tx.blocking_send(EnrollMsg::Error(format!("IR Camera open error: {e}")));
+                            let _ = tx.blocking_send(EnrollMsg::Error(format!("红外摄像头打开失败：{e}")));
                             return;
                         }
                     };
@@ -773,7 +766,7 @@ impl AuthDaemon {
                             match process_frame_sync(&mut checker, &mut recognizer, &frame, false) {
                                 Ok(res) => res,
                                 Err(error) => {
-                                    let message = format!("IR inference failed: {error:#}");
+                                    let message = format!("红外推理失败：{error:#}");
                                     error!("{message}");
                                     let _ = tx.blocking_send(EnrollMsg::Error(message));
                                     return;
@@ -808,7 +801,7 @@ impl AuthDaemon {
                         && completed_steps_clone.load(std::sync::atomic::Ordering::Relaxed) < max_steps
                     {
                         let _ = tx.blocking_send(EnrollMsg::Error(
-                            "IR camera stream stopped unexpectedly".into(),
+                            "红外摄像头数据流意外中断".into(),
                         ));
                     }
                 }));
@@ -851,7 +844,7 @@ impl AuthDaemon {
                     }
                     msg_opt = enroll_rx.recv() => {
                         let Some(msg) = msg_opt else {
-                            warn!("EnrollStart: all capture threads exited before enrollment finished");
+                            warn!("开始录入：录入完成前所有采集线程均已退出");
                             let _ = Self::enroll_status(&ctxt, &face_name, completed_steps as u32, max_steps, true, EnrollPrompt::CameraFailed, -1.0).await;
                             aborted = true;
                             break;
@@ -927,7 +920,7 @@ impl AuthDaemon {
                                 }
                             }
                             EnrollMsg::Error(e) => {
-                                error!("Enrollment error: {e}");
+                                error!("录入错误：{e}");
                                 let _ = Self::enroll_status(&ctxt, &face_name, completed_steps as u32, max_steps, true, EnrollPrompt::CameraFailed, -1.0).await;
                                 aborted = true;
                                 break;
@@ -952,11 +945,11 @@ impl AuthDaemon {
                 };
                 match saved {
                     Some(Ok(_)) => {
-                        info!("Template saved successfully!");
+                        info!("模板保存成功！");
                         let _ = Self::enroll_status(&ctxt, &face_name, max_steps, max_steps, true, EnrollPrompt::Completed, 0.0).await;
                     }
                     Some(Err(e)) => {
-                        error!("DB error saving template: {}", e);
+                        error!("保存模板时发生数据库错误：{}", e);
                         let _ = Self::enroll_status(&ctxt, &face_name, max_steps, max_steps, true, EnrollPrompt::DbFailed, -1.0).await;
                     }
                     None => {
@@ -1025,7 +1018,7 @@ impl AuthDaemon {
 
         let Some(slot) = BenchmarkSlot::acquire(&self.benchmark_running) else {
             return Err(fdo::Error::Failed(
-                "RETRYABLE: a benchmark is already running".into(),
+                "RETRYABLE: 性能测试正在运行，请稍后重试".into(),
             ));
         };
 
@@ -1042,7 +1035,7 @@ impl AuthDaemon {
                 result
             })
             .await
-            .map_err(|e| fdo::Error::Failed(format!("benchmark task panicked: {e}")))?
+            .map_err(|e| fdo::Error::Failed(format!("性能测试任务异常退出：{e}")))?
     }
 
     async fn delete_face(
@@ -1103,12 +1096,9 @@ impl AuthDaemon {
         let cleared = self
             .duress_lockout
             .clear(&username)
-            .map_err(|e| fdo::Error::Failed(format!("Failed to clear duress lockout: {e}")))?;
+            .map_err(|e| fdo::Error::Failed(format!("无法解除胁迫锁定：{e}")))?;
         if cleared {
-            info!(
-                "Cleared the duress lockout for {}; face authentication is available again",
-                username
-            );
+            info!("已解除 {} 的胁迫锁定；人脸认证已恢复可用", username);
         }
         Ok(cleared)
     }
@@ -1120,8 +1110,7 @@ impl AuthDaemon {
         &self,
         #[zbus(header)] header: Option<Header<'_>>,
     ) -> fdo::Result<Vec<String>> {
-        let header =
-            header.ok_or_else(|| fdo::Error::Failed("No message header provided".to_string()))?;
+        let header = header.ok_or_else(|| fdo::Error::Failed("未提供消息头".to_string()))?;
         let owner = Self::pam_internal_read_owner(&header).await?;
         let sets = self.pam_internal.lock().await;
         let mut list: Vec<String> = sets
@@ -1139,8 +1128,7 @@ impl AuthDaemon {
         #[zbus(header)] header: Option<Header<'_>>,
         services: Vec<String>,
     ) -> fdo::Result<()> {
-        let header =
-            header.ok_or_else(|| fdo::Error::Failed("No message header provided".to_string()))?;
+        let header = header.ok_or_else(|| fdo::Error::Failed("未提供消息头".to_string()))?;
         let owner = Self::pam_internal_write_owner(&header).await?;
         let sender = Self::pam_internal_sender(&header)?;
         let mut sets = self.pam_internal.lock().await;
@@ -1152,7 +1140,7 @@ impl AuthDaemon {
                 set.insert(normalized);
             }
         }
-        info!(uid = owner, services = ?set, "Updated PAM internal services list");
+        info!(uid = owner, services = ?set, "已更新 PAM 内部服务列表");
         Ok(())
     }
 
@@ -1171,7 +1159,7 @@ impl AuthDaemon {
                 .entry(sender)
                 .or_default()
                 .insert(normalized.clone());
-            info!(uid = owner, service = %normalized, "Added to PAM internal services");
+            info!(uid = owner, service = %normalized, "已添加到 PAM 内部服务");
         }
         Ok(())
     }
@@ -1191,7 +1179,7 @@ impl AuthDaemon {
                 }
                 senders.retain(|_, set| !set.is_empty());
             }
-            info!(uid = owner, service = %normalized, "Removed from PAM internal services");
+            info!(uid = owner, service = %normalized, "已从 PAM 内部服务移除");
         }
         Ok(())
     }
@@ -1199,14 +1187,13 @@ impl AuthDaemon {
     async fn clear_pam_internal(&self, #[zbus(header)] header: Header<'_>) -> fdo::Result<()> {
         let owner = Self::pam_internal_write_owner(&header).await?;
         self.pam_internal.lock().await.remove(&owner);
-        info!(uid = owner, "Cleared PAM internal services");
+        info!(uid = owner, "已清空 PAM 内部服务");
         Ok(())
     }
 
     #[zbus(property(emits_changed_signal = "invalidates"))]
     async fn config(&self, #[zbus(header)] header: Option<Header<'_>>) -> fdo::Result<DbusConfig> {
-        let header =
-            header.ok_or_else(|| fdo::Error::Failed("No message header provided".to_string()))?;
+        let header = header.ok_or_else(|| fdo::Error::Failed("未提供消息头".to_string()))?;
         Self::ensure_config_read_access(&header).await?;
         Ok(self.current_config().await.into())
     }
@@ -1217,8 +1204,7 @@ impl AuthDaemon {
         #[zbus(header)] header: Option<Header<'_>>,
         new_config: DbusConfig,
     ) -> fdo::Result<()> {
-        let header =
-            header.ok_or_else(|| fdo::Error::Failed("No message header provided".to_string()))?;
+        let header = header.ok_or_else(|| fdo::Error::Failed("未提供消息头".to_string()))?;
         Self::ensure_authorized(&header, POLKIT_ACTION_MANAGE_CONFIG).await?;
 
         let mut new_config: Config = new_config.into();
@@ -1233,10 +1219,7 @@ impl AuthDaemon {
             // A legacy client cannot see or clear the flag, so treat it as turning the feature
             // off rather than rejecting every later write with an error it cannot act on.
             if new_config.clamp_keyring() {
-                warn!(
-                    "a legacy config update removed a keyring prerequisite; disabling keyring \
-                     unlock"
-                );
+                warn!("旧版配置更新移除了钥匙环解锁的前置条件；禁用钥匙环解锁");
             }
             Ok(new_config)
         })
@@ -1303,7 +1286,7 @@ impl AuthDaemon {
                 .unwrap_or_else(|| std::path::Path::new(GDM_FACE_OVERRIDE_PATH).exists())
         })
         .await
-        .map_err(|e| fdo::Error::Failed(format!("Failed to read GDM face login: {e}")))
+        .map_err(|e| fdo::Error::Failed(format!("无法读取 GDM 人脸登录设置：{e}")))
     }
 
     async fn set_gdm_face_auth(
@@ -1314,7 +1297,7 @@ impl AuthDaemon {
         Self::ensure_authorized(&header, POLKIT_ACTION_MANAGE_GDM_PROFILE).await?;
         tokio::task::spawn_blocking(move || write_gdm_face_auth(enabled))
             .await
-            .map_err(|e| fdo::Error::Failed(format!("Failed to update GDM face login: {e}")))?
+            .map_err(|e| fdo::Error::Failed(format!("无法更新 GDM 人脸登录设置：{e}")))?
     }
 
     #[zbus(signal)]

@@ -51,7 +51,7 @@ const fn const_index_of(options: &[&str], value: &str) -> u32 {
         }
         i += 1;
     }
-    panic!("option is not present in its own option list")
+    panic!("选项不在其可选列表中")
 }
 
 /// The values the custom security rows should show for a given level: either the
@@ -242,7 +242,7 @@ impl SecurityLevel {
                 _ => "det_500m.onnx",
             },
             other => {
-                tracing::warn!("Invalid security level {other:?}; using medium detector");
+                tracing::warn!("安全级别 {other:?} 无效；使用中等检测器");
                 "det_500m.onnx"
             }
         }
@@ -257,7 +257,7 @@ impl SecurityLevel {
                 _ => "w600k_mbf.onnx",
             },
             other => {
-                tracing::warn!("Invalid security level {other:?}; using medium recognizer");
+                tracing::warn!("安全级别 {other:?} 无效；使用中等识别器");
                 "w600k_mbf.onnx"
             }
         }
@@ -374,7 +374,7 @@ impl SecurityLevel {
                 tracing::warn!(
                     spectrum,
                     threshold = custom_threshold,
-                    "security threshold is out of range; using the medium default"
+                    "安全阈值超出范围；使用中等级别的默认值"
                 );
                 DEFAULT_SECURITY_THRESHOLD as f32
             }

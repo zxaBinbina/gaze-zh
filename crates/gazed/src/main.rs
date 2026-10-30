@@ -33,20 +33,18 @@ fn warn_on_ir_misconfig(cameras: &gaze_core::config::CameraConfig) {
             warn!(
                 node = node,
                 resolved = resolved,
-                "resolved cameras.ir device node does not exist; IR capture will fail until it appears"
+                "cameras.ir 解析出的设备节点不存在；设备出现前红外采集将失败"
             );
         } else {
             warn!(
                 node = node,
-                "could not resolve a physical V4L2 device node for cameras.ir; the IR emitter will not be driven"
+                "无法为 cameras.ir 解析物理 V4L2 设备节点；将不驱动红外发射器"
             );
         }
     } else if !cameras.ir.trim().is_empty() {
         // Resolved and present, or unresolvable with the emitter off: nothing to warn about.
     } else if cameras.emitter_enabled {
-        warn!(
-            "cameras.emitter_enabled is set but cameras.ir is empty; the IR emitter will not be used"
-        );
+        warn!("已设置 cameras.emitter_enabled，但 cameras.ir 为空；将不使用红外发射器");
     }
 }
 
@@ -89,7 +87,7 @@ fn main() -> anyhow::Result<()> {
     let args: Vec<_> = std::env::args_os().skip(1).collect();
     anyhow::ensure!(
         args.is_empty() || (args.len() == 1 && args[0] == "--migrate-legacy-templates"),
-        "unknown argument; supported maintenance option: --migrate-legacy-templates"
+        "未知参数；支持的维护选项为 --migrate-legacy-templates"
     );
     Config::migrate_file(CONFIG_PATH);
     let config = Config::load()?;
@@ -115,7 +113,7 @@ fn main() -> anyhow::Result<()> {
         let migrated = db.migrate_legacy_with(&cipher)?;
         info!(
             migrated,
-            "Migrated templates to owner-bound encryption; restart gazed"
+            "已将模板迁移为绑定所属用户的加密格式；请重启 gazed"
         );
         return Ok(());
     }
@@ -143,7 +141,7 @@ fn storage_blocked(message: impl std::fmt::Display) -> ! {
 async fn run(mut config: Config) -> anyhow::Result<()> {
     gaze_vision::inference::initialize_runtime(&config.inference)?;
 
-    info!("Initializing Gaze Daemon...");
+    info!("正在初始化 Gaze 守护进程…");
 
     let t_load = std::time::Instant::now();
 
@@ -155,12 +153,12 @@ async fn run(mut config: Config) -> anyhow::Result<()> {
         recognizer = security.recognizer(),
         rgb_threshold = security.rgb_threshold(),
         ir_threshold = security.ir_threshold(),
-        "Loaded security config"
+        "已加载安全配置"
     );
     info!(
         execution_provider = config.inference.execution_provider,
         device = config.inference.device,
-        "Loaded inference config"
+        "已加载推理配置"
     );
 
     let (det_path, rec_path) =
@@ -182,7 +180,7 @@ async fn run(mut config: Config) -> anyhow::Result<()> {
         match daemon::load_ir_liveness(&config.inference) {
             Ok(detector) => Some(detector),
             Err(e) => {
-                warn!("The IR anti-spoof model is enabled but failed to load: {e}");
+                warn!("已启用红外防伪模型，但加载失败：{e}");
                 None
             }
         }
@@ -194,7 +192,7 @@ async fn run(mut config: Config) -> anyhow::Result<()> {
         match daemon::load_eye_state(&config.inference) {
             Ok(classifier) => Some(classifier),
             Err(e) => {
-                warn!("Duress detection is enabled but the eye-state model failed to load: {e}");
+                warn!("已启用胁迫检测，但眼部状态模型加载失败：{e}");
                 None
             }
         }
@@ -212,9 +210,7 @@ async fn run(mut config: Config) -> anyhow::Result<()> {
         && !UserDatabase::new(USERS_DIR, config.enrollment.max_templates as usize)?
             .has_encrypted_templates()?
     {
-        warn!(
-            "Template encryption is now on by default, but this machine has no TPM; keeping the existing plaintext templates working with encryption off"
-        );
+        warn!("模板加密现已默认启用，但本机没有 TPM；将保持加密关闭，以继续使用现有明文模板");
         config.storage.encrypt_templates = false;
         config.storage.unlock_gnome_keyring = false;
         config.storage.unlock_kwallet = false;
@@ -223,30 +219,28 @@ async fn run(mut config: Config) -> anyhow::Result<()> {
         if managed {
             record_store_format = false;
         } else if let Err(e) = config.save_to(CONFIG_PATH) {
-            warn!("Could not record encrypt_templates = false in {CONFIG_PATH}: {e}");
+            warn!("无法在 {CONFIG_PATH} 中写入 encrypt_templates = false：{e}");
             record_store_format = false;
         }
     }
 
     if !config.storage.encrypt_templates {
         warn!(
-            "Face-template encryption is disabled: biometrics are stored in plaintext. Enable [storage] encrypt_templates with a usable TPM, and protect state storage with full-disk encryption."
+            "人脸模板加密已禁用：生物特征以明文存储。请在 TPM 可用时启用 [storage] encrypt_templates，并使用全盘加密保护状态数据。"
         );
     }
     let dek = if config.storage.encrypt_templates {
         if !tpm::available() {
             storage_blocked(
-                "template encryption is enabled ([storage] encrypt_templates) but this machine has no TPM, so the daemon is refusing to start rather than write unprotected biometric data. Set encrypt_templates = false to accept plaintext storage",
+                "已启用模板加密（[storage] encrypt_templates），但本机没有 TPM。为避免写入未保护的生物特征，守护进程拒绝启动。如接受明文存储，可设置 encrypt_templates = false",
             );
         }
         let dek = tpm::load_or_create_dek(std::path::Path::new(tpm::STATE_DIR)).map_err(|e| {
             anyhow::anyhow!(
-                "template encryption is enabled ([storage] encrypt_templates) but no usable TPM \
-                 is available, so the daemon is refusing to start rather than write unprotected \
-                 biometric data: {e}"
+                "已启用模板加密（[storage] encrypt_templates），但没有可用的 TPM。为避免写入未保护的生物特征，守护进程拒绝启动：{e}"
             )
         })?;
-        info!("Template encryption enabled (AES-256-GCM under a TPM-sealed key)");
+        info!("模板加密已启用（使用 TPM 密封密钥进行 AES-256-GCM 加密）");
         Some(dek)
     } else {
         None
@@ -264,10 +258,7 @@ async fn run(mut config: Config) -> anyhow::Result<()> {
         if recorded_format != Some(users::StoreFormat::Encrypted) {
             let migrated = db.migrate_legacy_with(&crypto::EmbeddingCipher::new(dek))?;
             if migrated > 0 {
-                info!(
-                    migrated,
-                    "Bound existing templates to owner-checked TPM encryption"
-                );
+                info!(migrated, "已将现有模板绑定到验证所属用户的 TPM 加密格式");
                 db.load_all()?;
             }
         }
@@ -283,16 +274,12 @@ async fn run(mut config: Config) -> anyhow::Result<()> {
             .and_then(|dek| db.decrypt_all_with(&crypto::EmbeddingCipher::new(&dek)))
         {
             Ok(n) => {
-                info!(
-                    decrypted = n,
-                    "Decrypted templates after encryption was disabled"
-                );
+                info!(decrypted = n, "已在禁用加密后解密模板");
                 db.load_all()?;
             }
-            Err(e) => warn!(
-                "template encryption is disabled but encrypted templates remain and could not \
-                 be decrypted, so those faces will not match until they are re-enrolled: {e}"
-            ),
+            Err(e) => {
+                warn!("模板加密已禁用，但仍有加密模板无法解密；这些人脸在重新录入前无法匹配：{e}")
+            }
         }
     }
 
@@ -303,7 +290,7 @@ async fn run(mut config: Config) -> anyhow::Result<()> {
             users::StoreFormat::Plain
         };
         if let Err(e) = UserDatabase::record_format(users_dir, format) {
-            warn!("Could not record the template store format: {e}");
+            warn!("无法记录模板存储格式：{e}");
         }
     }
 
@@ -312,7 +299,7 @@ async fn run(mut config: Config) -> anyhow::Result<()> {
         info!(
             adopted,
             recognizer = security.recognizer(),
-            "Recorded the recognizer for existing templates"
+            "已记录现有模板使用的识别器"
         );
     }
     db.use_recognizer(security.recognizer())?;
@@ -351,7 +338,7 @@ async fn run(mut config: Config) -> anyhow::Result<()> {
         rt_handle: tokio::runtime::Handle::current(),
     };
 
-    info!(elapsed = ?t_load.elapsed(), "Models & user DB loaded");
+    info!(elapsed = ?t_load.elapsed(), "模型和用户数据库已加载");
 
     let conn = Builder::system()
         .serve_at("/com/gundulabs/Gaze", daemon)
@@ -378,14 +365,14 @@ async fn run(mut config: Config) -> anyhow::Result<()> {
 
     conn.request_name("com.gundulabs.Gaze").await?;
 
-    info!("Gaze Daemon listening on System Bus");
+    info!("Gaze 守护进程正在监听系统总线");
     let (watcher, result) = tokio::select! {
-        result = resume_watcher => ("PrepareForSleep watcher", result),
-        result = lock_watcher => ("session LockedHint watcher", result),
-        result = claim_watcher => ("NameOwnerChanged watcher", result),
+        result = resume_watcher => ("PrepareForSleep 监听器", result),
+        result = lock_watcher => ("会话 LockedHint 监听器", result),
+        result = claim_watcher => ("NameOwnerChanged 监听器", result),
     };
     match result {
-        Ok(Ok(())) => anyhow::bail!("{watcher} exited unexpectedly"),
+        Ok(Ok(())) => anyhow::bail!("{watcher} 意外退出"),
         Ok(Err(e)) => anyhow::bail!("{watcher} failed: {e}"),
         Err(e) => anyhow::bail!("{watcher} panicked: {e}"),
     }

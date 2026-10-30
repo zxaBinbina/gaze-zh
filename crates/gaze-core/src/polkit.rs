@@ -29,7 +29,7 @@ impl Subject {
     pub fn for_message_header(header: &zbus::message::Header<'_>) -> zbus::Result<Self> {
         let sender = header
             .sender()
-            .ok_or_else(|| zbus::Error::Failure("message has no sender".to_string()))?;
+            .ok_or_else(|| zbus::Error::Failure("消息没有发送方".to_string()))?;
         Self::system_bus_name(sender.as_str())
     }
 
@@ -42,7 +42,7 @@ impl Subject {
         let start_time: u64 = fields
             .split_whitespace()
             .nth(19)
-            .ok_or_else(|| anyhow::anyhow!("/proc/{pid}/stat has no start time"))?
+            .ok_or_else(|| anyhow::anyhow!("/proc/{pid}/stat 中没有启动时间"))?
             .parse()?;
         let uid = std::fs::metadata(format!("/proc/{pid}"))?.uid() as i32;
         Ok(Self {

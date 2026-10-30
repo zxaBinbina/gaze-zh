@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: 2026 Gundu Labs
 # SPDX-License-Identifier: GPL-3.0-or-later
 
-# GNOME Shell extension for Gaze (mirrors packaging/nfpm/gnome-extension.yaml).
+# Gaze 的 GNOME Shell 扩展 (mirrors packaging/nfpm/gnome-extension.yaml).
 # GDM defaults and the gdm-face PAM service live in the NixOS module.
 {
   lib,
@@ -49,7 +49,7 @@ stdenvNoCC.mkDerivation {
   passthru.extensionUuid = uuid;
 
   meta = {
-    description = "GNOME Shell extension for Gaze facial authentication";
+    description = "Gaze 人脸认证的 GNOME Shell 扩展";
     homepage = "https://gaze.gundulabs.com";
     license = lib.licenses.gpl3Plus;
     platforms = lib.platforms.linux;

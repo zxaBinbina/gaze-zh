@@ -6,8 +6,8 @@ set -e
 
 cat <<'EOF'
 
-Gaze hyprlock PAM service installed at /etc/pam.d/hyprlock-gaze
-To enable face unlock in hyprlock, add to ~/.config/hypr/hyprlock.conf:
+Gaze hyprlock PAM 服务已安装到 /etc/pam.d/hyprlock-gaze
+要在 hyprlock 中启用人脸解锁，请向 ~/.config/hypr/hyprlock.conf 添加：
 
     auth {
         pam {
@@ -15,9 +15,9 @@ To enable face unlock in hyprlock, add to ~/.config/hypr/hyprlock.conf:
         }
     }
 
-For simultaneous face + password mode, use:
+如需同时进行人脸和密码认证，请使用：
 
             module = hyprlock-gaze-simultaneous
 
-Docs: https://gaze.gundulabs.com/guide/hyprland
+文档：https://gaze.gundulabs.com/guide/hyprland
 EOF

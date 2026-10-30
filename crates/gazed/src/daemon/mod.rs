@@ -198,7 +198,7 @@ pub async fn system_bus() -> fdo::Result<zbus::Connection> {
         .get_or_try_init(zbus::Connection::system)
         .await
         .cloned()
-        .map_err(|e| fdo::Error::Failed(format!("Failed to connect to system bus: {e}")))
+        .map_err(|e| fdo::Error::Failed(format!("无法连接系统总线：{e}")))
 }
 
 async fn active_session() -> Option<gaze_core::dbus::ActiveSession> {
@@ -219,7 +219,7 @@ async fn dbus_proxy() -> fdo::Result<&'static fdo::DBusProxy<'static>> {
             let conn = system_bus().await?;
             fdo::DBusProxy::new(&conn)
                 .await
-                .map_err(|e| fdo::Error::Failed(format!("Failed to create DBus proxy: {e}")))
+                .map_err(|e| fdo::Error::Failed(format!("无法创建 D-Bus 代理：{e}")))
         })
         .await
 }
@@ -329,14 +329,12 @@ impl EmitterGuard {
                     refresh_pending = led.needs_stream_refresh();
                     match led.set(true) {
                         Err(e) if refresh_pending => {
-                            info!(
-                                "IR emitter not yet reachable, retrying once the stream starts: {e}"
-                            );
+                            info!("红外发射器暂不可用，将在数据流开始后重试：{e}");
                         }
-                        Err(e) => warn!("IR emitter activate failed: {e}"),
+                        Err(e) => warn!("红外发射器启用失败：{e}"),
                         Ok(()) => {
                             let message = format!(
-                                "IR emitter enabled via {} on {}",
+                                "已通过 {} 在 {} 上启用红外发射器",
                                 led.device_name(),
                                 led.node()
                             );
@@ -347,7 +345,7 @@ impl EmitterGuard {
                     Some(led)
                 }
                 None => {
-                    warn!("No IR emitter profile for {node}; continuing without illumination");
+                    warn!("未找到 {node} 的红外发射器配置；继续运行但不启用补光");
                     None
                 }
             },
@@ -371,10 +369,10 @@ impl EmitterGuard {
         if let Some(led) = &self.led {
             match led.set(true) {
                 Ok(()) => info!(
-                    "IR emitter re-applied via {} after the stream started",
+                    "数据流开始后已通过 {} 重新应用红外发射器设置",
                     led.device_name()
                 ),
-                Err(e) => warn!("IR emitter activate failed after the stream started: {e}"),
+                Err(e) => warn!("数据流开始后红外发射器启用失败：{e}"),
             }
         }
     }
@@ -400,7 +398,7 @@ impl Drop for EmitterGuard {
         if remaining == 0
             && let Err(e) = led.set(false)
         {
-            warn!("IR emitter deactivate failed: {e}");
+            warn!("红外发射器关闭失败：{e}");
         }
     }
 }
@@ -431,12 +429,11 @@ impl CaptureModels {
     ) -> anyhow::Result<Self> {
         Ok(Self {
             detector: Arc::new(std::sync::Mutex::new(
-                FaceDetector::new_with_inference(detector, inference)
-                    .context("Failed to load detector")?,
+                FaceDetector::new_with_inference(detector, inference).context("无法加载检测器")?,
             )),
             recognizer: Arc::new(Mutex::new(
                 FaceRecognizer::new_with_inference(recognizer, inference)
-                    .context("Failed to load recognizer")?,
+                    .context("无法加载识别器")?,
             )),
         })
     }
@@ -460,11 +457,11 @@ impl ModelSessions {
     ) -> anyhow::Result<Self> {
         Ok(Self {
             rgb: CaptureModels::load(detector, recognizer, &config.inference)
-                .context("RGB model loading failed")?,
+                .context("RGB 模型加载失败")?,
             ir: if ir_models_needed(config) {
                 Some(
                     CaptureModels::load(detector, recognizer, &config.inference)
-                        .context("IR model loading failed")?,
+                        .context("红外模型加载失败")?,
                 )
             } else {
                 None
@@ -503,7 +500,7 @@ impl AuthDaemon {
             .clone();
         if ir_models_needed(config) && models.ir.is_none() {
             return Err(fdo::Error::Failed(
-                "IR camera is configured but its models are unavailable".into(),
+                "已配置红外摄像头，但相关模型不可用".into(),
             ));
         }
         Ok(models)

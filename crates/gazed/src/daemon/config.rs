@@ -15,7 +15,7 @@ impl ConfigState {
         if config.clamp_keyring() {
             warn!(
                 path = CONFIG_PATH,
-                "keyring unlock needs encryption and liveness; ignoring the keyring options"
+                "钥匙环解锁需要启用加密和活体检测；忽略钥匙环选项"
             );
         }
         Self {
@@ -35,11 +35,11 @@ impl ConfigState {
     ) -> fdo::Result<OwnedRwLockReadGuard<Config>> {
         let config = tokio::select! {
             biased;
-            _ = &mut *cancel => return Err(fdo::Error::Failed("capture cancelled".into())),
+            _ = &mut *cancel => return Err(fdo::Error::Failed("采集已取消".into())),
             config = self.read() => config,
         };
         if cancel.try_recv() != Err(oneshot::error::TryRecvError::Empty) {
-            return Err(fdo::Error::Failed("capture cancelled".into()));
+            return Err(fdo::Error::Failed("采集已取消".into()));
         }
         Ok(config)
     }
@@ -61,7 +61,7 @@ impl ConfigState {
                 Ok::<_, fdo::Error>((requested, prepared, update))
             })
             .await
-            .map_err(|e| fdo::Error::Failed(format!("Config preparation task failed: {e}")))??;
+            .map_err(|e| fdo::Error::Failed(format!("配置准备任务失败：{e}")))??;
 
         // Queue the writer before cancellation so new runs cannot enter the old snapshot.
         let write = self.current.clone().write_owned();
@@ -86,7 +86,7 @@ impl ConfigState {
                 Ok(())
             })
             .await
-            .map_err(|e| fdo::Error::Failed(format!("Config commit task failed: {e}")))?
+            .map_err(|e| fdo::Error::Failed(format!("配置提交任务失败：{e}")))?
     }
 }
 
@@ -124,40 +124,38 @@ pub(super) fn gdm_override_error(
         std::io::ErrorKind::ReadOnlyFilesystem | std::io::ErrorKind::PermissionDenied
     ) {
         return fdo::Error::Failed(format!(
-            "Failed to {action} {}: {err}. The GDM dconf database is read-only, \
-             so it is managed by your system configuration rather than by Gaze; \
-             on NixOS set `services.gaze.gnome.gdmFaceLogin` instead.",
+            "无法{action} {}：{err}。GDM dconf 数据库为只读，由系统配置管理；在 NixOS 上请设置 `services.gaze.gnome.gdmFaceLogin`。",
             path.display()
         ));
     }
-    fdo::Error::Failed(format!("Failed to {action} {}: {err}", path.display()))
+    fdo::Error::Failed(format!("无法{action} {}：{err}", path.display()))
 }
 
 pub(super) fn write_gdm_face_auth(enabled: bool) -> fdo::Result<bool> {
     let path = std::path::Path::new(GDM_FACE_OVERRIDE_PATH);
     // Already in the requested state elsewhere, so don't write a read-only /etc.
     if !path.exists() && gdm_face_auth_from_dconf() == Some(enabled) {
-        info!(enabled, "GDM face authentication already set outside Gaze");
+        info!(enabled, "GDM 人脸认证已由 Gaze 以外的配置设置");
         return Ok(enabled);
     }
 
     if enabled {
         if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent).map_err(|e| gdm_override_error("create", parent, e))?;
+            std::fs::create_dir_all(parent).map_err(|e| gdm_override_error("创建", parent, e))?;
         }
         std::fs::write(path, GDM_DCONF_OVERRIDE_CONTENT)
-            .map_err(|e| gdm_override_error("write", path, e))?;
+            .map_err(|e| gdm_override_error("写入", path, e))?;
     } else if path.exists() {
-        std::fs::remove_file(path).map_err(|e| gdm_override_error("remove", path, e))?;
+        std::fs::remove_file(path).map_err(|e| gdm_override_error("移除", path, e))?;
     }
 
     let status = std::process::Command::new("dconf")
         .arg("update")
         .status()
-        .map_err(|e| fdo::Error::Failed(format!("Failed to run dconf update: {e}")))?;
+        .map_err(|e| fdo::Error::Failed(format!("无法运行 dconf update：{e}")))?;
     if !status.success() {
         return Err(fdo::Error::Failed(format!(
-            "dconf update exited with status {}",
+            "dconf update 已退出，状态码为 {}",
             status.code().unwrap_or(-1)
         )));
     }
@@ -168,14 +166,13 @@ pub(super) fn write_gdm_face_auth(enabled: bool) -> fdo::Result<bool> {
     {
         let source = gdm_greeter_dconf_source(GDM_DCONF_FACE_AUTH_KEY)
             .map(|p| p.display().to_string())
-            .unwrap_or_else(|| "another dconf system-db".to_string());
+            .unwrap_or_else(|| "其他 dconf 系统数据库".to_string());
         return Err(fdo::Error::Failed(format!(
-            "Updated the Gaze override, but GDM still resolves face login as {effective} \
-             because {source} sets it; clear the key there"
+            "Gaze 覆盖配置已更新，但 {source} 仍将 GDM 人脸登录设为 {effective}；请清除该处的配置项"
         )));
     }
 
-    info!(enabled, "Updated GDM face authentication override");
+    info!(enabled, "已更新 GDM 人脸认证覆盖配置");
     Ok(enabled)
 }
 
@@ -205,7 +202,7 @@ impl PreparedConfig {
             recognizer = security.recognizer(),
             execution_provider = requested.inference.execution_provider,
             device = requested.inference.device,
-            "Preparing model settings"
+            "正在准备模型设置"
         );
         let paths = if reload.detector || reload.recognizer || add_ir {
             Some(
@@ -214,7 +211,7 @@ impl PreparedConfig {
                     security.detector(),
                     security.recognizer(),
                 )
-                .map_err(|e| fdo::Error::Failed(format!("Failed to ensure models: {e}")))?,
+                .map_err(|e| fdo::Error::Failed(format!("无法准备模型：{e}")))?,
             )
         } else {
             None
@@ -226,11 +223,7 @@ impl PreparedConfig {
                 if reload.detector {
                     capture.detector = Arc::new(std::sync::Mutex::new(
                         FaceDetector::new_with_inference(detector, &requested.inference).map_err(
-                            |e| {
-                                fdo::Error::Failed(format!(
-                                    "Failed to load {spectrum} detector: {e}"
-                                ))
-                            },
+                            |e| fdo::Error::Failed(format!("无法加载 {spectrum} 检测器：{e}")),
                         )?,
                     ));
                 }
@@ -238,37 +231,32 @@ impl PreparedConfig {
                     capture.recognizer = Arc::new(Mutex::new(
                         FaceRecognizer::new_with_inference(recognizer, &requested.inference)
                             .map_err(|e| {
-                                fdo::Error::Failed(format!(
-                                    "Failed to load {spectrum} recognizer: {e}"
-                                ))
+                                fdo::Error::Failed(format!("无法加载 {spectrum} 识别器：{e}"))
                             })?,
                     ));
                 }
             }
             if add_ir {
                 models.ir = Some(
-                    CaptureModels::load(detector, recognizer, &requested.inference).map_err(
-                        |e| fdo::Error::Failed(format!("Failed to load IR models: {e:#}")),
-                    )?,
+                    CaptureModels::load(detector, recognizer, &requested.inference)
+                        .map_err(|e| fdo::Error::Failed(format!("无法加载红外模型：{e:#}")))?,
                 );
             }
         }
         let liveness = if reload.liveness && requested.liveness.enabled {
             let path = crate::models::ensure_liveness_model(gaze_core::config::MODELS_DIR)
-                .map_err(|e| fdo::Error::Failed(format!("Failed to ensure liveness model: {e}")))?;
+                .map_err(|e| fdo::Error::Failed(format!("无法准备活体检测模型：{e}")))?;
             Some(
-                LivenessDetector::new_with_inference(&path, &requested.inference).map_err(|e| {
-                    fdo::Error::Failed(format!("Failed to load liveness model: {e}"))
-                })?,
+                LivenessDetector::new_with_inference(&path, &requested.inference)
+                    .map_err(|e| fdo::Error::Failed(format!("无法加载活体检测模型：{e}")))?,
             )
         } else {
             None
         };
         let cipher = if current.storage.encrypt_templates != requested.storage.encrypt_templates {
             let state_dir = std::path::Path::new(crate::tpm::STATE_DIR);
-            let dek = crate::tpm::load_or_create_dek(state_dir).map_err(|e| {
-                fdo::Error::Failed(format!("cannot change template encryption: {e}"))
-            })?;
+            let dek = crate::tpm::load_or_create_dek(state_dir)
+                .map_err(|e| fdo::Error::Failed(format!("无法更改模板加密设置：{e}")))?;
             Some(crate::crypto::EmbeddingCipher::new(&dek))
         } else {
             None
@@ -332,11 +320,7 @@ impl AuthDaemon {
                             requested.enrollment.max_templates as usize,
                             || requested.save_to(CONFIG_PATH),
                         )
-                        .map_err(|e| {
-                            fdo::Error::Failed(format!(
-                                "Failed to apply template storage settings: {e}"
-                            ))
-                        })?;
+                        .map_err(|e| fdo::Error::Failed(format!("无法应用模板存储设置：{e}")))?;
                     if encryption_changed {
                         let format = if requested.storage.encrypt_templates {
                             crate::users::StoreFormat::Encrypted
@@ -344,7 +328,7 @@ impl AuthDaemon {
                             crate::users::StoreFormat::Plain
                         };
                         if let Err(e) = store.record_store_format(format) {
-                            warn!("Could not record the template store format: {e}");
+                            warn!("无法记录模板存储格式：{e}");
                         }
                     }
                     drop(store);
@@ -352,7 +336,7 @@ impl AuthDaemon {
                         info!(
                             migrated,
                             encrypted = requested.storage.encrypt_templates,
-                            "Changed template encryption"
+                            "已更改模板加密设置"
                         );
                     }
 
@@ -365,7 +349,7 @@ impl AuthDaemon {
                         *eye_state.blocking_lock() = None;
                         *ir_liveness.blocking_lock() = None;
                     }
-                    info!("Config reloaded successfully");
+                    info!("配置已重新加载");
                     Ok(())
                 },
             )
@@ -488,7 +472,7 @@ mod tests {
         reader.rewind().unwrap();
         let mut logs = String::new();
         reader.read_to_string(&mut logs).unwrap();
-        assert_eq!(logs.matches("ignoring the keyring options").count(), 1);
+        assert_eq!(logs.matches("忽略钥匙环选项").count(), 1);
     }
 
     #[tokio::test]

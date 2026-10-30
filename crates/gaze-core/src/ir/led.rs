@@ -180,7 +180,7 @@ impl IrLed {
 
         xu_ioctl(fd, step.unit, step.selector, query_code, &mut payload).map_err(|e| {
             anyhow::anyhow!(
-                "UVC {:?} control ioctl on {} failed for unit=0x{:02x} selector=0x{:02x} size={}: {}",
+                "UVC {:?} 控制调用 ioctl 在 {} 上失败，单元=0x{:02x}，选择器=0x{:02x}，大小={}：{}",
                 step.query,
                 self.node,
                 step.unit,
@@ -256,10 +256,7 @@ fn probe_face_auth_profile(node: &str, vid: u16, pid: u16) -> anyhow::Result<Opt
             && looks_like_face_auth_control(&cur)
         {
             return Ok(Some(IrProfile {
-                name: format!(
-                    "USB {:04x}:{:04x} Microsoft Face Authentication UVC control",
-                    vid, pid
-                ),
+                name: format!("USB {:04x}:{:04x} 微软人脸认证 UVC 控制", vid, pid),
                 on_sequence: vec![RuntimeControl::set(
                     unit,
                     FACE_AUTH_SELECTOR,
@@ -270,7 +267,8 @@ fn probe_face_auth_profile(node: &str, vid: u16, pid: u16) -> anyhow::Result<Opt
                     FACE_AUTH_SELECTOR,
                     &FACE_AUTH_OFF_DISABLED,
                 )],
-                source: "runtime probe: selector 0x06 exposes Microsoft Face Authentication-style [1,3,mode,0...] control".to_string(),
+                source: "运行时探测：选择器 0x06 提供微软人脸认证格式的 [1,3,mode,0...] 控制"
+                    .to_string(),
             }));
         }
     }
@@ -508,9 +506,9 @@ mod tests {
         let message = err.to_string();
 
         assert!(message.contains("/dev/null"), "{message}");
-        assert!(message.contains("unit=0x0c"), "{message}");
-        assert!(message.contains("selector=0x06"), "{message}");
-        assert!(message.contains("size=9"), "{message}");
+        assert!(message.contains("单元=0x0c"), "{message}");
+        assert!(message.contains("选择器=0x06"), "{message}");
+        assert!(message.contains("大小=9"), "{message}");
     }
 
     #[test]

@@ -48,7 +48,7 @@ impl Drop for StagingDir {
         if let Err(error) = fs::remove_dir_all(&self.0)
             && error.kind() != std::io::ErrorKind::NotFound
         {
-            tracing::warn!(path = %self.0.display(), %error, "could not clean up private staging directory");
+            tracing::warn!(path = %self.0.display(), %error, "无法清理私有暂存目录");
         }
     }
 }
@@ -76,7 +76,7 @@ fn exchange_dirs(left: &Path, right: &Path) -> std::io::Result<()> {
         let _ = (left, right);
         return Err(std::io::Error::new(
             std::io::ErrorKind::Unsupported,
-            "atomic directory exchange is unavailable",
+            "原子目录交换不可用",
         ));
     };
     if result == 0 {
@@ -98,9 +98,9 @@ pub enum UserDbError {
 impl std::fmt::Display for UserDbError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            UserDbError::UserNotFound(username) => write!(f, "User '{username}' not found"),
-            UserDbError::FaceNotFound(face_name) => write!(f, "Face '{face_name}' not found"),
-            UserDbError::FaceExists(face_name) => write!(f, "Face '{face_name}' already exists"),
+            UserDbError::UserNotFound(username) => write!(f, "未找到用户“{username}”"),
+            UserDbError::FaceNotFound(face_name) => write!(f, "未找到人脸“{face_name}”"),
+            UserDbError::FaceExists(face_name) => write!(f, "人脸“{face_name}”已存在"),
             UserDbError::InvalidName(msg) => write!(f, "{msg}"),
             UserDbError::Io(err) => write!(f, "{err}"),
         }
@@ -139,7 +139,7 @@ impl UserDatabase {
     fn validate_component(kind: &str, value: &str) -> Result<(), UserDbError> {
         if value.is_empty() || value.trim() != value {
             return Err(UserDbError::InvalidName(format!(
-                "{kind} cannot be empty or contain leading/trailing whitespace"
+                "{kind}不能为空，且首尾不能有空白字符"
             )));
         }
         if value == "."
@@ -151,22 +151,22 @@ impl UserDatabase {
             || value.chars().any(char::is_control)
         {
             return Err(UserDbError::InvalidName(format!(
-                "{kind} must be a single safe path component"
+                "{kind}必须是单个安全的路径名称"
             )));
         }
         Ok(())
     }
 
     pub fn validate_username(username: &str) -> Result<(), UserDbError> {
-        Self::validate_component("username", username)
+        Self::validate_component("用户名", username)
     }
 
     pub fn validate_face_name(face_name: &str) -> Result<(), UserDbError> {
-        Self::validate_component("face name", face_name)
+        Self::validate_component("人脸名称", face_name)
     }
 
     fn validate_template_id(template_id: &str) -> Result<(), UserDbError> {
-        Self::validate_component("template id", template_id)
+        Self::validate_component("模板 ID", template_id)
     }
 
     fn ensure_private_dir(path: &Path) -> std::io::Result<()> {
@@ -174,7 +174,7 @@ impl UserDatabase {
         let meta = fs::symlink_metadata(path)?;
         if meta.file_type().is_symlink() || !meta.is_dir() {
             return Err(std::io::Error::other(format!(
-                "{} is not a private directory",
+                "{} 不是私有目录",
                 path.display()
             )));
         }
@@ -186,7 +186,7 @@ impl UserDatabase {
         let meta = fs::symlink_metadata(path)?;
         if meta.file_type().is_symlink() || !meta.is_dir() {
             return Err(std::io::Error::other(format!(
-                "{} is not a private directory",
+                "{} 不是私有目录",
                 path.display()
             )));
         }
@@ -196,17 +196,17 @@ impl UserDatabase {
     fn retire_dir(path: &Path) -> std::io::Result<()> {
         let meta = fs::symlink_metadata(path)?;
         if !meta.is_dir() || meta.file_type().is_symlink() {
-            return Err(std::io::Error::other("refusing to retire a non-directory"));
+            return Err(std::io::Error::other("拒绝停用非目录项"));
         }
         let parent = path
             .parent()
-            .ok_or_else(|| std::io::Error::other("directory has no parent"))?;
+            .ok_or_else(|| std::io::Error::other("目录没有父目录"))?;
         let retired = parent.join(format!(".gaze-deleted-{}", uuid::Uuid::new_v4()));
         fs::rename(path, &retired)?;
         sync_dir(parent)?;
         // The durable rename revoked it. Cleanup is best effort and can resume at startup.
         if let Err(error) = Self::remove_private_dir_all(&retired) {
-            tracing::warn!(path = %retired.display(), %error, "retired templates await cleanup");
+            tracing::warn!(path = %retired.display(), %error, "停用的模板等待清理");
         }
         sync_dir(parent)
     }
@@ -216,7 +216,7 @@ impl UserDatabase {
         use std::os::fd::AsRawFd;
         let parent = base_dir
             .parent()
-            .ok_or_else(|| anyhow::anyhow!("store has no parent"))?;
+            .ok_or_else(|| anyhow::anyhow!("存储目录没有父目录"))?;
         Self::ensure_private_dir(parent)?;
         let file = OpenOptions::new()
             .read(true)
@@ -226,13 +226,10 @@ impl UserDatabase {
             .mode(0o600)
             .custom_flags(libc::O_NOFOLLOW)
             .open(parent.join(".gaze-store.lock"))?;
-        anyhow::ensure!(
-            file.metadata()?.is_file(),
-            "store lock is not a regular file"
-        );
+        anyhow::ensure!(file.metadata()?.is_file(), "存储锁不是普通文件");
         anyhow::ensure!(
             unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } == 0,
-            "template store is already in use; stop gazed before maintenance"
+            "模板存储正在使用中；请先停止 gazed 再维护"
         );
         Ok(file)
     }
@@ -240,7 +237,7 @@ impl UserDatabase {
     fn format_path(base_dir: &Path) -> anyhow::Result<PathBuf> {
         let parent = base_dir
             .parent()
-            .ok_or_else(|| anyhow::anyhow!("store has no parent"))?;
+            .ok_or_else(|| anyhow::anyhow!("存储目录没有父目录"))?;
         Ok(parent.join(FORMAT_FILE))
     }
 
@@ -269,7 +266,7 @@ impl UserDatabase {
         }
         let parent = path
             .parent()
-            .ok_or_else(|| anyhow::anyhow!("store has no parent"))?;
+            .ok_or_else(|| anyhow::anyhow!("存储目录没有父目录"))?;
         let tmp = parent.join(format!("{FORMAT_FILE}.{}.tmp", uuid::Uuid::new_v4()));
         let contents: &[u8] = match format {
             StoreFormat::Plain => b"plain\n",
@@ -389,7 +386,7 @@ impl UserDatabase {
     fn ensure_available(&self) -> std::io::Result<()> {
         if self.unavailable.get() {
             return Err(std::io::Error::other(
-                "template storage needs recovery; restart gazed before matching or modifying templates",
+                "模板存储需要恢复；请重启 gazed 后再匹配或修改模板",
             ));
         }
         Ok(())
@@ -421,12 +418,12 @@ impl UserDatabase {
             .components()
             .next()
             .and_then(|c| c.as_os_str().to_str())
-            .ok_or_else(|| anyhow::anyhow!("embedding has no account"))?;
+            .ok_or_else(|| anyhow::anyhow!("特征向量没有所属账户"))?;
         Self::validate_username(username)?;
         let filename = path
             .file_name()
             .and_then(|n| n.to_str())
-            .ok_or_else(|| anyhow::anyhow!("embedding has no filename"))?;
+            .ok_or_else(|| anyhow::anyhow!("特征向量没有文件名"))?;
         let mut aad = b"gaze-template-v2\0".to_vec();
         aad.extend_from_slice(username.as_bytes());
         aad.push(0);
@@ -437,29 +434,24 @@ impl UserDatabase {
     fn read_embedding(&self, path: &Path) -> anyhow::Result<Array1<f32>> {
         let meta = fs::symlink_metadata(path)?;
         if !meta.file_type().is_file() {
-            anyhow::bail!("embedding path is not a regular file: {}", path.display());
+            anyhow::bail!("特征向量路径不是普通文件：{}", path.display());
         }
         let raw = fs::read(path)?;
         let bytes = if crypto::is_encrypted(&raw) {
-            let cipher = self.cipher.as_ref().ok_or_else(|| {
-                anyhow::anyhow!(
-                    "{} is encrypted but template encryption is disabled",
-                    path.display()
-                )
-            })?;
+            let cipher = self
+                .cipher
+                .as_ref()
+                .ok_or_else(|| anyhow::anyhow!("{} 已加密，但模板加密已禁用", path.display()))?;
             cipher.decrypt(&raw, &self.embedding_aad(path)?)?
         } else if self.cipher.is_some() {
             // Plaintext here would bypass AES-GCM authentication and allow an unauthenticated
             // template into the encrypted store; it must go through explicit migration instead.
-            anyhow::bail!(
-                "{} is not encrypted but template encryption is enabled",
-                path.display()
-            );
+            anyhow::bail!("{} 未加密，但模板加密已启用", path.display());
         } else {
             raw
         };
         if bytes.is_empty() || bytes.len() % std::mem::size_of::<f32>() != 0 {
-            anyhow::bail!("invalid embedding length in {}", path.display());
+            anyhow::bail!("{} 中的特征向量长度无效", path.display());
         }
         let embed_vec = bytes
             .as_chunks::<{ std::mem::size_of::<f32>() }>()
@@ -473,7 +465,7 @@ impl UserDatabase {
     fn encode_embedding(&self, path: &Path, embed: &Array1<f32>) -> anyhow::Result<Vec<u8>> {
         anyhow::ensure!(
             !embed.is_empty() && embed.iter().all(|v| v.is_finite()),
-            "invalid embedding values"
+            "特征向量数值无效"
         );
         // Templates are not portable across architectures with different endianness.
         let plain: Vec<u8> = embed.iter().flat_map(|value| value.to_ne_bytes()).collect();
@@ -572,7 +564,7 @@ impl UserDatabase {
                     let embed = match self.read_embedding(&path) {
                         Ok(embed) => embed,
                         Err(error) => {
-                            tracing::warn!(path = %path.display(), %error, "ignoring an unreadable template; it will not be matched");
+                            tracing::warn!(path = %path.display(), %error, "忽略无法读取的模板；该模板将不参与匹配");
                             continue;
                         }
                     };
@@ -595,7 +587,7 @@ impl UserDatabase {
                 face = face_name,
                 stale = stale_count,
                 recognizer = self.recognizer.as_deref().unwrap_or_default(),
-                "ignoring templates enrolled under a different recognizer; re-enroll this face"
+                "忽略其他识别器录入的模板；请重新录入此人脸"
             );
         }
         Ok(embeddings)
@@ -656,7 +648,7 @@ impl UserDatabase {
             let bytes = fs::read(&path)?;
             anyhow::ensure!(
                 crypto::is_encrypted(&bytes) && !crypto::is_legacy(&bytes),
-                "unbound or plaintext templates require explicit migration: stop gazed, verify template ownership, then run sudo gazed --migrate-legacy-templates, or re-enroll"
+                "未绑定用户或明文模板需要手动迁移：请停止 gazed，核实模板归属后运行 sudo gazed --migrate-legacy-templates，或重新录入"
             );
         }
         Ok(())
@@ -682,9 +674,7 @@ impl UserDatabase {
         Self::validate_face_name(face_name)?;
         Self::validate_template_id(template_id)?;
         if embeddings.is_empty() {
-            return Err(UserDbError::InvalidName(
-                "an enrollment must contain embeddings".into(),
-            ));
+            return Err(UserDbError::InvalidName("录入数据必须包含特征向量".into()));
         }
         self.init_dirs()?;
         let user_dir = self.user_dir(username);
@@ -698,7 +688,7 @@ impl UserDatabase {
             Ok(meta) if meta.is_dir() && !meta.file_type().is_symlink() => true,
             Ok(_) => {
                 return Err(UserDbError::Io(std::io::Error::other(
-                    "template path is not a private directory",
+                    "模板路径不是私有目录",
                 )));
             }
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => false,
@@ -760,7 +750,7 @@ impl UserDatabase {
         let meta = fs::symlink_metadata(&face_dir)?;
         if meta.file_type().is_symlink() || !meta.is_dir() {
             return Err(UserDbError::Io(std::io::Error::other(format!(
-                "{} is not a face directory",
+                "{} 不是人脸目录",
                 face_dir.display()
             ))));
         }
@@ -1236,15 +1226,15 @@ mod tests {
     fn error_display_messages_are_stable() {
         assert_eq!(
             UserDbError::UserNotFound("alice".to_string()).to_string(),
-            "User 'alice' not found"
+            "未找到用户“alice”"
         );
         assert_eq!(
             UserDbError::FaceNotFound("work".to_string()).to_string(),
-            "Face 'work' not found"
+            "未找到人脸“work”"
         );
         assert_eq!(
             UserDbError::FaceExists("home".to_string()).to_string(),
-            "Face 'home' already exists"
+            "人脸“home”已存在"
         );
         assert_eq!(
             UserDbError::InvalidName("bad name".to_string()).to_string(),

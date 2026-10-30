@@ -204,7 +204,7 @@ fn remove_zypper_repo_and_key_cmd() -> String {
     // Match only the RPM key package derived from the Gundu Labs fingerprint.
     let key_id = GUNDULABS_REPO_KEY_FINGERPRINT
         .get(GUNDULABS_REPO_KEY_FINGERPRINT.len() - 8..)
-        .expect("Gundu Labs fingerprint must contain a key ID")
+        .expect("Gundu Labs 密钥指纹必须包含密钥 ID")
         .to_ascii_lowercase();
     format!(
         "sudo rm -f /etc/zypp/repos.d/gundulabs.repo \\

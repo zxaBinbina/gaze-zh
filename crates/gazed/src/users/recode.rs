@@ -9,7 +9,7 @@ impl UserDatabase {
             .base_dir
             .file_name()
             .and_then(|n| n.to_str())
-            .ok_or_else(|| anyhow::anyhow!("store must have a directory name"))?;
+            .ok_or_else(|| anyhow::anyhow!("存储路径必须有目录名"))?;
         Ok(format!(".gaze-recode-{name}-"))
     }
 
@@ -19,7 +19,7 @@ impl UserDatabase {
         let parent = self
             .base_dir
             .parent()
-            .ok_or_else(|| anyhow::anyhow!("store has no parent"))?;
+            .ok_or_else(|| anyhow::anyhow!("存储目录没有父目录"))?;
         let prefix = self.recode_prefix()?;
         for entry in fs::read_dir(parent)? {
             let entry = entry?;
@@ -81,7 +81,7 @@ impl UserDatabase {
         let parent = self
             .base_dir
             .parent()
-            .ok_or_else(|| anyhow::anyhow!("store has no parent"))?;
+            .ok_or_else(|| anyhow::anyhow!("存储目录没有父目录"))?;
         let staged = StagingDir::new(parent, &self.recode_prefix()?)?;
         let mut stack = vec![(self.base_dir.clone(), staged.0.clone())];
         let mut directories = Vec::new();
@@ -96,7 +96,7 @@ impl UserDatabase {
                 }
                 anyhow::ensure!(
                     !name.starts_with(PRIVATE_PREFIX),
-                    "reserved entry in template store: {}; rename or remove it before migration",
+                    "模板存储中存在保留名称项：{}；请在迁移前重命名或移除",
                     entry.path().display()
                 );
                 let path = entry.path();
@@ -118,14 +118,11 @@ impl UserDatabase {
                     file.write_all(&bytes)?;
                     file.sync_all()?;
                 } else {
-                    anyhow::bail!("non-regular entry in template store: {}", path.display());
+                    anyhow::bail!("模板存储中存在非普通文件项：{}", path.display());
                 }
             }
         }
-        anyhow::ensure!(
-            conversions.is_empty(),
-            "template store changed during migration"
-        );
+        anyhow::ensure!(conversions.is_empty(), "模板存储在迁移期间发生变化");
         for dir in directories.iter().rev() {
             sync_dir(dir)?;
         }
@@ -142,7 +139,7 @@ impl UserDatabase {
             {
                 self.unavailable.set(true);
                 tracing::error!(backup = %staged.0.display(), %error,
-                    "config durability is uncertain; preserving both stores and disabling authentication until restart");
+                    "无法确认配置是否持久保存；保留两份存储并禁用认证，直到重启");
                 std::mem::forget(staged);
                 return Err(error);
             }
@@ -152,19 +149,17 @@ impl UserDatabase {
             if let Err(rollback_error) = rollback {
                 self.unavailable.set(true);
                 tracing::error!(backup = %staged.0.display(), %error, %rollback_error,
-                    "storage rollback failed; matching and mutations disabled until restart");
+                    "存储回滚失败；匹配和修改已禁用，直到重启");
                 // Preserve both complete copies. Never delete the backup on rollback failure.
                 std::mem::forget(staged);
-                return Err(error.context(format!(
-                    "storage rollback failed: {rollback_error}; restart gazed"
-                )));
+                return Err(error.context(format!("存储回滚失败：{rollback_error}；请重启 gazed")));
             }
             return Err(error);
         }
         drop(staged);
         // Cleanup cannot turn a durable successful commit into a reported failed conversion.
         if let Err(error) = sync_dir(parent) {
-            tracing::warn!(%error, "could not sync retired-store cleanup; startup will retry");
+            tracing::warn!(%error, "无法同步旧存储的清理结果；启动时将重试");
         }
         Ok(changed)
     }
@@ -206,7 +201,7 @@ impl UserDatabase {
         self.ensure_available()?;
         anyhow::ensure!(
             pending_cipher.is_some() || encrypt == self.is_encrypted(),
-            "encryption change requires a TPM cipher"
+            "更改加密设置需要 TPM 加密器"
         );
         let previous_recognizer = self.recognizer.clone();
         let previous_users = if let Some(recognizer) = recognizer {
@@ -253,7 +248,7 @@ impl UserDatabase {
         if crypto::is_legacy(raw) {
             anyhow::ensure!(
                 allow_legacy,
-                "legacy unbound templates require explicit migration: stop gazed, then run sudo gazed --migrate-legacy-templates, or re-enroll"
+                "旧版未绑定用户的模板需要手动迁移：请停止 gazed，再运行 sudo gazed --migrate-legacy-templates，或重新录入"
             );
             let plain = cipher.decrypt_legacy(raw)?;
             return if encrypt {

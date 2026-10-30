@@ -119,7 +119,7 @@ pub fn show_capture_dialog(
     camera_mode.set_halign(gtk4::Align::Start);
     body.append(&camera_mode);
 
-    let resolved_face = Rc::new(RefCell::new(face_name.unwrap_or("default").to_string()));
+    let resolved_face = Rc::new(RefCell::new(face_name.unwrap_or("默认").to_string()));
     let existing_face_names = Rc::new(RefCell::new(HashSet::<String>::new()));
     let enrollment_completed = Rc::new(Cell::new(false));
     let enrollment_task = Rc::new(RefCell::new(None::<futures::future::AbortHandle>));
@@ -129,7 +129,7 @@ pub fn show_capture_dialog(
     if !is_refine {
         let entry = libadwaita::EntryRow::new();
         entry.set_title("人脸名称");
-        entry.set_text("default");
+        entry.set_text("默认");
         let group = libadwaita::PreferencesGroup::new();
         group.add(&entry);
         body.append(&group);

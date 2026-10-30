@@ -213,6 +213,22 @@ let activeExtensionInstance = null;
 const safeGettext = (str) => {
   if (!str) return str;
   const chinese = {
+    "Face Verified.": "人脸已验证。",
+    "Face Verified. Press Enter to confirm.": "人脸已验证。按回车键确认。",
+    "Face Verified. Press Enter to confirm, Esc to cancel.": "人脸已验证。按回车键确认，Esc 键取消。",
+    "Face Verified. Press Enter to continue.": "人脸已验证。按回车键继续。",
+    "Face Verified. Type 'yes' to confirm.": "人脸已验证。输入 yes 以确认。",
+    "Please look at the camera": "请看向摄像头",
+    "Please look at the camera or enter password": "请看向摄像头或输入密码",
+    "Password incorrect. Please look at the camera": "密码错误。请看向摄像头",
+    "Face not recognized. Enter your password.": "未识别到匹配人脸。请输入密码。",
+    "Face not detected. Enter your password.": "未检测到人脸。请输入密码。",
+    "Too dark for face authentication. Enter your password.": "光线过暗，无法进行人脸认证。请输入密码。",
+    "Face authentication timed out. Enter your password.": "人脸认证超时。请输入密码。",
+    "Face authentication unavailable. Enter your password.": "人脸认证不可用。请输入密码。",
+    "Password:": "密码：",
+    "Password: ": "密码：",
+
     "Sorry, face authentication did not work. Please try again.": "抱歉，人脸认证未成功。请重试。",
     "You reached the maximum face authentication attempts, please try another method": "已达到人脸认证尝试次数上限，请尝试其他方式",
     "Face authentication failed. Please enter your password.": "人脸认证失败。请输入密码。",
@@ -394,7 +410,9 @@ const CONFIRMATION_DIALOG_LABEL =
 const isConfirmationMessage = (text) => {
   const trimmed = text?.trim();
   return (
-    trimmed === GAZE_REQUIRE_CONFIRMATION || trimmed === CONFIRMATION_QUESTION
+    trimmed === GAZE_REQUIRE_CONFIRMATION || trimmed === CONFIRMATION_QUESTION ||
+    trimmed === "人脸已验证。按回车键确认。" ||
+    trimmed === "人脸已验证。按 Enter 确认。"
   );
 };
 
@@ -405,6 +423,12 @@ const isCameraHintMessage = (text) => {
     trimmed === GAZE_MSG_LOOK_CAMERA ||
     trimmed === GAZE_MSG_LOOK_OR_PASSWORD ||
     trimmed === FACE_HINT_TEXT ||
+    trimmed === "（或看向摄像头）" ||
+    trimmed === "请看向摄像头" ||
+    trimmed === "请看向摄像头..." ||
+    trimmed === "请看向摄像头或输入密码" ||
+    trimmed === "Please look at the camera" ||
+    trimmed === "Please look at the camera or enter password" ||
     trimmed === "Please look at the camera..." ||
     trimmed.startsWith("GAZE_MSG_LOOK")
   );
@@ -413,7 +437,8 @@ const isCameraHintMessage = (text) => {
 const isFaceVerifiedMessage = (text) => {
   if (!text) return false;
   const trimmed = text.trim();
-  return trimmed === GAZE_MSG_FACE_VERIFIED;
+  return trimmed === GAZE_MSG_FACE_VERIFIED ||
+    trimmed === "人脸已验证。" || trimmed === "Face Verified.";
 };
 
 const getGenericErrorMessage = (msg) => {
@@ -431,7 +456,7 @@ const translatePamError = (text) => {
   if (trimmed.startsWith("GAZE_MSG_")) {
     return safeGettext("Face authentication failed") || "Face authentication failed";
   }
-  return text;
+  return safeGettext(text);
 };
 
 const cancelDelayedReset = (dialog) => {
@@ -503,7 +528,8 @@ const keepPasswordEntryVisible = (dialog) => {
   cancelDelayedReset(dialog);
 };
 
-const enterConfirmMode = (dialog) => {
+const enterConfirmMode = (dialog, isInternal = true) => {
+  dialog._isInternalConfirm = isInternal;
   cancelDelayedReset(dialog);
   hideFaceHint(dialog);
   dialog._passwordEntry?.set_text("");
@@ -532,7 +558,7 @@ const enterConfirmMode = (dialog) => {
 
 const respondToConfirm = (dialog) => {
   dialog._confirmMode = false;
-  dialog._session.response(GAZE_CONFIRMED);
+  dialog._session.response(dialog._isInternalConfirm !== false ? GAZE_CONFIRMED : "");
   dialog._passwordEntry?.set_text("");
   if (dialog._passwordEntry) dialog._passwordEntry.reactive = false;
   if (dialog._okButton) dialog._okButton.reactive = false;
@@ -685,6 +711,7 @@ const respondToAuthPromptConfirm = (authPrompt) => {
   authPrompt.updateSensitivity(callbackBased ? { sensitive: false } : false);
 
   const serviceName = authPrompt._queryingService;
+  const confirmationAnswer = authPrompt._isInternalConfirm !== false ? GAZE_CONFIRMED : "";
   if (serviceName && authPrompt._userVerifier) {
     const answerHandler = authPrompt._faceConfirmAnswerHandler;
     if (answerHandler) {
@@ -697,10 +724,10 @@ const respondToAuthPromptConfirm = (authPrompt) => {
         )
           return;
         authPrompt._faceConfirmAnswerHandler = null;
-        answerHandler(GAZE_CONFIRMED);
+        answerHandler(confirmationAnswer);
       }).catch((e) => logError(e));
     } else {
-      authPrompt._userVerifier.answerQuery(serviceName, GAZE_CONFIRMED);
+      authPrompt._userVerifier.answerQuery(serviceName, confirmationAnswer);
     }
   }
 
@@ -896,7 +923,7 @@ export default class GazeFaceAuthExtension extends Extension {
 
         if (isConfirmationMessage(trimmed)) {
           hideFaceHint(this);
-          enterConfirmMode(this);
+          enterConfirmMode(this, trimmed === GAZE_REQUIRE_CONFIRMATION);
           return;
         }
 
@@ -928,17 +955,17 @@ export default class GazeFaceAuthExtension extends Extension {
           return;
         }
 
-        if (FACE_STATUS_UPDATES.has(trimmed)) {
+        if (FACE_STATUS_UPDATES.has(safeGettext(trimmed))) {
           showFaceHint(this, trimmed);
           return;
         }
 
         hideFaceHint(this);
         if (origShowInfo) {
-          origShowInfo.call(this, session, text);
+          origShowInfo.call(this, session, safeGettext(text));
         } else {
           this._passwordEntry?.set_text("");
-          this._infoMessageLabel?.set_text(text);
+          this._infoMessageLabel?.set_text(safeGettext(text));
           this._infoMessageLabel?.show();
           this._errorMessageLabel?.hide();
           this._nullMessageLabel?.hide();
@@ -967,14 +994,15 @@ export default class GazeFaceAuthExtension extends Extension {
 
         if (isConfirmationMessage(request)) {
           hideFaceHint(this);
-          enterConfirmMode(this);
+          enterConfirmMode(this, request.trim() === GAZE_REQUIRE_CONFIRMATION);
           return;
         }
 
-        let hintText = "Password";
+        let hintText = safeGettext("Password");
         if (request) {
           const trimmed = request.trim();
           if (
+            trimmed === "密码：" ||
             trimmed === "Password:" ||
             trimmed === "Password: " ||
             trimmed.startsWith("GAZE_MSG_") ||
@@ -1318,7 +1346,7 @@ export default class GazeFaceAuthExtension extends Extension {
                   emitAskQuestion(
                     this,
                     serviceName,
-                    GAZE_REQUIRE_CONFIRMATION,
+                    text,
                     true,
                   );
                   return;
@@ -1355,16 +1383,16 @@ export default class GazeFaceAuthExtension extends Extension {
                   return;
                 }
 
-                if (FACE_STATUS_UPDATES.has(text)) {
+                if (FACE_STATUS_UPDATES.has(safeGettext(text))) {
                   emitFilterMessages(this, serviceName, MESSAGE_TYPE.HINT);
-                  emitQueueMessage(this, serviceName, text, MESSAGE_TYPE.HINT);
+                  emitQueueMessage(this, serviceName, safeGettext(text), MESSAGE_TYPE.HINT);
                   return;
                 }
               }
 
               if (serviceName === FACE_SERVICE_NAME) return;
 
-              return original.call(this, serviceName, info);
+              return original.call(this, serviceName, safeGettext(info));
             };
           },
         );
@@ -1412,7 +1440,7 @@ export default class GazeFaceAuthExtension extends Extension {
                 }
               }
 
-              return original.call(this, serviceName, problem);
+              return original.call(this, serviceName, translatePamError(problem));
             };
           },
         );
@@ -1425,7 +1453,7 @@ export default class GazeFaceAuthExtension extends Extension {
             return function (serviceName, query) {
               if (isConfirmationMessage(query)) {
                 emitFilterMessages(this, serviceName, MESSAGE_TYPE.HINT);
-                emitAskQuestion(this, serviceName, GAZE_REQUIRE_CONFIRMATION, secret);
+                emitAskQuestion(this, serviceName, query.trim(), secret);
                 return;
               }
 
@@ -1722,10 +1750,11 @@ export default class GazeFaceAuthExtension extends Extension {
                 this._filterServiceMessages(serviceName, MESSAGE_TYPE.HINT);
                 this._faceConfirmPending = true;
                 this._faceConfirmService = serviceName;
+                this._faceConfirmResponse = text === GAZE_REQUIRE_CONFIRMATION ? GAZE_CONFIRMED : "";
                 this.emit(
                   "ask-question",
                   serviceName,
-                  GAZE_REQUIRE_CONFIRMATION,
+                  text,
                   true,
                 );
                 return;
@@ -1760,16 +1789,16 @@ export default class GazeFaceAuthExtension extends Extension {
                 return;
               }
 
-              if (FACE_STATUS_UPDATES.has(text)) {
+              if (FACE_STATUS_UPDATES.has(safeGettext(text))) {
                 this._filterServiceMessages(serviceName, MESSAGE_TYPE.HINT);
-                this._queueMessage(serviceName, text, MESSAGE_TYPE.HINT);
+                this._queueMessage(serviceName, safeGettext(text), MESSAGE_TYPE.HINT);
                 return;
               }
             }
 
             if (this.serviceIsBiometric(serviceName)) return;
 
-            original.call(this, client, serviceName, info);
+            original.call(this, client, serviceName, safeGettext(info));
           };
         });
 
@@ -1789,7 +1818,8 @@ export default class GazeFaceAuthExtension extends Extension {
                 // Enter must send confirmation, not the typed answer.
                 this._faceConfirmPending = true;
                 this._faceConfirmService = serviceName;
-                this.emit("ask-question", serviceName, GAZE_REQUIRE_CONFIRMATION, secret);
+                this._faceConfirmResponse = query.trim() === GAZE_REQUIRE_CONFIRMATION ? GAZE_CONFIRMED : "";
+                this.emit("ask-question", serviceName, query.trim(), secret);
                 return;
               }
 
@@ -1803,7 +1833,9 @@ export default class GazeFaceAuthExtension extends Extension {
             if (this._faceConfirmPending && serviceName === this._faceConfirmService) {
               this._faceConfirmPending = false;
               this._faceConfirmService = null;
-              return original.call(this, serviceName, GAZE_CONFIRMED);
+              const response = this._faceConfirmResponse;
+              this._faceConfirmResponse = null;
+              return original.call(this, serviceName, response);
             }
             return original.call(this, serviceName, answer);
           };
@@ -1842,7 +1874,7 @@ export default class GazeFaceAuthExtension extends Extension {
               }
             }
 
-            original.call(this, client, serviceName, problem);
+            original.call(this, client, serviceName, translatePamError(problem));
           };
         });
 
@@ -1991,7 +2023,7 @@ export default class GazeFaceAuthExtension extends Extension {
               );
             }
           }
-          return original.call(this, message, type);
+          return original.call(this, safeGettext(message), type);
         };
       },
     );
@@ -2008,6 +2040,7 @@ export default class GazeFaceAuthExtension extends Extension {
             (this._userVerifier?._faceConfirmPending &&
               serviceName === this._userVerifier?._faceConfirmService)
           ) {
+            this._isInternalConfirm = question?.trim() === GAZE_REQUIRE_CONFIRMATION;
             this._faceConfirmAnswerHandler =
               typeof args[0]?.answerHandler === "function"
                 ? args[0].answerHandler

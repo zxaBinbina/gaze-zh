@@ -30,12 +30,12 @@ fn read_private_file(path: &Path) -> anyhow::Result<Option<Vec<u8>>> {
             && meta.uid() == unsafe { libc::geteuid() }
             && meta.mode() & 0o077 == 0
             && meta.nlink() == 1,
-        "unsafe sealed-key file: {}",
+        "密封密钥文件不安全：{}",
         path.display()
     );
     let mut bytes = Vec::new();
     file.take(16385).read_to_end(&mut bytes)?;
-    ensure!(bytes.len() <= 16384, "sealed-key file is too large");
+    ensure!(bytes.len() <= 16384, "密封密钥文件过大");
     Ok(Some(bytes))
 }
 
@@ -43,13 +43,13 @@ pub(super) fn read_sealed_blobs(dir: &Path) -> anyhow::Result<Option<(Vec<u8>, V
     if let Some(bytes) = read_private_file(&dir.join(BUNDLE_FILE))? {
         ensure!(
             bytes.len() >= 9 && bytes.starts_with(BUNDLE_MAGIC),
-            "invalid sealed-key bundle"
+            "密封密钥包无效"
         );
         let public_len = u32::from_le_bytes(bytes[5..9].try_into()?) as usize;
         let private_len = bytes.len().saturating_sub(9 + public_len);
         ensure!(
             (1..=4096).contains(&public_len) && (1..=4096).contains(&private_len),
-            "invalid sealed-key bundle lengths"
+            "密封密钥包长度无效"
         );
         let public = &bytes[9..9 + public_len];
         let private = &bytes[9 + public_len..];
@@ -63,7 +63,7 @@ pub(super) fn read_sealed_blobs(dir: &Path) -> anyhow::Result<Option<(Vec<u8>, V
         (None, None) => Ok(None),
         (Some(public), Some(private)) => Ok(Some((public, private))),
         _ => Err(anyhow!(
-            "incomplete legacy TPM key pair; restore the missing blob from backup; refusing to generate a replacement key"
+            "旧版 TPM 密钥对不完整；请从备份恢复缺失的数据；拒绝生成替代密钥"
         )),
     }
 }
@@ -73,8 +73,7 @@ fn verify_legacy_blobs(dir: &Path, public: &[u8], private: &[u8]) -> anyhow::Res
         if let Some(bytes) = read_private_file(&dir.join(name))? {
             ensure!(
                 bytes == expected,
-                "conflicting TPM key files: {} does not match the sealed-key bundle; \
-                 preserve all key files and restore a matching key set from backup",
+                "TPM 密钥文件冲突：{} 与密封密钥包不匹配；请保留所有密钥文件，并从备份恢复匹配的密钥组",
                 dir.join(name).display()
             );
         }
@@ -85,7 +84,7 @@ fn verify_legacy_blobs(dir: &Path, public: &[u8], private: &[u8]) -> anyhow::Res
 pub(super) fn persist_bundle(dir: &Path, public: &[u8], private: &[u8]) -> anyhow::Result<()> {
     ensure!(
         (1..=4096).contains(&public.len()) && (1..=4096).contains(&private.len()),
-        "invalid sealed-key lengths"
+        "密封密钥长度无效"
     );
     verify_legacy_blobs(dir, public, private)?;
     let mut bytes = BUNDLE_MAGIC.to_vec();
@@ -93,10 +92,7 @@ pub(super) fn persist_bundle(dir: &Path, public: &[u8], private: &[u8]) -> anyho
     bytes.extend_from_slice(public);
     bytes.extend_from_slice(private);
     match read_private_file(&dir.join(BUNDLE_FILE))? {
-        Some(existing) => ensure!(
-            existing == bytes,
-            "sealed-key bundle changed; refusing to overwrite it"
-        ),
+        Some(existing) => ensure!(existing == bytes, "密封密钥包已改变；拒绝覆盖"),
         None => write_private_file(&dir.join(BUNDLE_FILE), &bytes)?,
     }
     // Sync even an existing bundle before removing either legacy blob: it may have
@@ -118,7 +114,7 @@ pub(super) fn ensure_private_dir(path: &Path) -> std::io::Result<()> {
     let meta = fs::symlink_metadata(path)?;
     if meta.file_type().is_symlink() || !meta.is_dir() {
         return Err(std::io::Error::other(format!(
-            "{} is not a private directory",
+            "{} 不是私有目录",
             path.display()
         )));
     }
@@ -131,9 +127,7 @@ pub(super) fn ensure_private_dir(path: &Path) -> std::io::Result<()> {
 }
 
 pub(super) fn write_private_file(path: &Path, bytes: &[u8]) -> anyhow::Result<()> {
-    let parent = path
-        .parent()
-        .context("sealed key path has no parent directory")?;
+    let parent = path.parent().context("密封密钥路径没有父目录")?;
     let tmp = parent.join(format!(
         ".{}.{}.tmp",
         path.file_name().and_then(|n| n.to_str()).unwrap_or("dek"),
@@ -144,14 +138,14 @@ pub(super) fn write_private_file(path: &Path, bytes: &[u8]) -> anyhow::Result<()
         .create_new(true)
         .mode(0o600)
         .open(&tmp)
-        .with_context(|| format!("failed to create {}", tmp.display()))?;
+        .with_context(|| format!("无法创建 {}", tmp.display()))?;
     if let Err(error) = file.write_all(bytes).and_then(|_| file.sync_all()) {
         let _ = fs::remove_file(&tmp);
-        return Err(error).with_context(|| format!("failed to write {}", tmp.display()));
+        return Err(error).with_context(|| format!("无法写入 {}", tmp.display()));
     }
     if let Err(error) = fs::rename(&tmp, path) {
         let _ = fs::remove_file(&tmp);
-        return Err(error).with_context(|| format!("failed to replace {}", path.display()));
+        return Err(error).with_context(|| format!("无法替换 {}", path.display()));
     }
     File::open(parent)?.sync_all()?;
     Ok(())
@@ -213,7 +207,7 @@ mod tests {
                 read_sealed_blobs(dir.path())
                     .unwrap_err()
                     .to_string()
-                    .contains("conflicting TPM key files")
+                    .contains("TPM 密钥文件冲突")
             );
             assert_eq!(snapshot(), before);
             assert!(persist_bundle(dir.path(), b"public", b"private").is_err());

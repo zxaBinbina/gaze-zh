@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: 2026 Gundu Labs
 # SPDX-License-Identifier: GPL-3.0-or-later
 
-# Cinnamon Spices extension for Gaze (mirrors packaging/nfpm/cinnamon-extension.yaml).
+# Gaze 的 Cinnamon 扩展 (mirrors packaging/nfpm/cinnamon-extension.yaml).
 {
   lib,
   stdenvNoCC,
@@ -33,7 +33,7 @@ stdenvNoCC.mkDerivation {
   passthru.extensionUuid = uuid;
 
   meta = {
-    description = "Cinnamon Spices extension for Gaze facial authentication";
+    description = "Gaze 人脸认证的 Cinnamon 扩展";
     homepage = "https://gaze.gundulabs.com";
     license = lib.licenses.gpl3Plus;
     platforms = lib.platforms.linux;

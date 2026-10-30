@@ -464,11 +464,12 @@ for (const version of versions) {
         }
     }
 
-    test(`${version}: the legacy confirmation question answers with an empty response`, async () => {
+    for (const question of ['Face Verified. Press Enter to confirm.', '人脸已验证。按回车键确认。'])
+    test(`${version}: legacy confirmation ${question} answers with an empty response`, async () => {
         const env = await environment(version);
         try {
             const dialog = beginPolkit(env);
-            dialog._session.emit('request', 'Face Verified. Press Enter to confirm.', false);
+            dialog._session.emit('request', question, false);
             assert.equal(dialog._confirmMode, true);
             dialog._onAuthenticateButtonPressed();
             assert.deepEqual(dialog._session.responses, ['']);
@@ -534,7 +535,7 @@ for (const version of versions) {
         ['show-info', 'GAZE_MSG_FACE_TOO_DARK', '光线过暗，无法进行人脸认证。请输入密码。'],
         ['show-info', 'GAZE_MSG_SOMETHING_NEW', '人脸认证失败。请输入密码。'],
         ['show-error', 'Sorry, that didn’t work. Please try again.', '抱歉，人脸认证未成功。请重试。'],
-        ['show-error', 'Authentication failure', 'Authentication failure'],
+        ['show-error', 'Authentication failure', '认证失败'],
     ]) {
         test(`${version}: ${signal} ${message} shows a readable error`, async () => {
             const env = await environment(version);
@@ -677,7 +678,7 @@ for (const version of versions.filter(version => unlockVersions.has(version))) {
         ['_onAuthInfo', 'GAZE_MSG_FACE_NOT_RECOGNIZED', '_infoLabel', '未识别到匹配人脸。请输入密码。'],
         ['_onAuthInfo', 'GAZE_MSG_SOMETHING_NEW', '_infoLabel', '人脸认证失败。请输入密码。'],
         ['_onAuthError', 'Sorry, that didn’t work. Please try again.', '_messageLabel', '抱歉，人脸认证未成功。请重试。'],
-        ['_onAuthError', 'Authentication failure', '_messageLabel', 'Authentication failure'],
+        ['_onAuthError', 'Authentication failure', '_messageLabel', '认证失败'],
     ]) {
         test(`${version}: unlock ${handler} ${message} shows a readable message`, async () => {
             const env = await environment(version);

@@ -50,9 +50,7 @@ impl LivenessDetector {
         let size = INPUT_SIZE as usize;
         let plane_len = size * size;
         let mut tensor = Array4::<f32>::zeros((1, 3, size, size));
-        let data = tensor
-            .as_slice_mut()
-            .expect("preprocess tensor should be contiguous");
+        let data = tensor.as_slice_mut().expect("预处理张量应连续存储");
 
         for y in 0..size {
             for x in 0..size {
@@ -72,11 +70,7 @@ impl LivenessDetector {
         let outputs = self.session.run(inputs)?;
         let (_shape, data) = outputs[0].try_extract_tensor::<f32>()?;
         let score = Self::live_score_from_output(data)?;
-        tracing::debug!(
-            "Liveness model raw output: {:?}, computed score: {}",
-            data,
-            score
-        );
+        tracing::debug!("活体检测模型原始输出：{:?}，计算得分：{}", data, score);
         Ok(score)
     }
 
@@ -119,7 +113,7 @@ impl IrLivenessDetector {
         let (width, height) = square.dimensions();
         anyhow::ensure!(
             width > 0 && width == height,
-            "IR liveness crop must be a non-empty square, got {width}x{height}"
+            "红外活体检测裁剪区域必须是非空正方形，实际为 {width}x{height}"
         );
         let mut mat = opencv::core::Mat::new_rows_cols_with_default(
             height as i32,
@@ -141,15 +135,13 @@ impl IrLivenessDetector {
         let stride = IR_RESIZE as usize * 3;
         anyhow::ensure!(
             resized.is_continuous() && pixels.len() == stride * IR_RESIZE as usize,
-            "resized IR liveness crop is not a packed {IR_RESIZE}x{IR_RESIZE} buffer"
+            "缩放后的红外活体检测裁剪区域不是紧密排列的 {IR_RESIZE}x{IR_RESIZE} 缓冲区"
         );
 
         let offset = (IR_RESIZE as usize - IR_INPUT_SIZE) / 2;
         let plane_len = IR_INPUT_SIZE * IR_INPUT_SIZE;
         let mut tensor = Array4::<f32>::zeros((1, 3, IR_INPUT_SIZE, IR_INPUT_SIZE));
-        let data = tensor
-            .as_slice_mut()
-            .expect("preprocess tensor should be contiguous");
+        let data = tensor.as_slice_mut().expect("预处理张量应连续存储");
         for y in 0..IR_INPUT_SIZE {
             for x in 0..IR_INPUT_SIZE {
                 let src = (y + offset) * stride + (x + offset) * 3;
@@ -169,23 +161,16 @@ impl IrLivenessDetector {
         let outputs = self.session.run(inputs)?;
         let (_shape, data) = outputs[0].try_extract_tensor::<f32>()?;
         let score = Self::live_score_from_output(data)?;
-        tracing::debug!(
-            "IR liveness model raw output: {:?}, computed score: {}",
-            data,
-            score
-        );
+        tracing::debug!("红外活体检测模型原始输出：{:?}，计算得分：{}", data, score);
         Ok(score)
     }
 
     fn live_score_from_output(data: &[f32]) -> anyhow::Result<f32> {
         if data.len() != 2 {
-            anyhow::bail!(
-                "IR liveness model produced {} scores, expected 2",
-                data.len()
-            );
+            anyhow::bail!("红外活体检测模型输出了 {} 个得分，应为 2 个", data.len());
         }
         if data.iter().any(|logit| !logit.is_finite()) {
-            anyhow::bail!("IR liveness model produced a non-finite score");
+            anyhow::bail!("红外活体检测模型输出了非有限数值");
         }
         let max = data[0].max(data[1]);
         let spoof = (data[0] - max).exp();
@@ -199,13 +184,13 @@ pub fn crop_ir_face(
     bbox: [f32; 4],
 ) -> anyhow::Result<RgbImage> {
     if bbox.iter().any(|value| !value.is_finite()) {
-        anyhow::bail!("invalid IR face crop bounds");
+        anyhow::bail!("红外人脸裁剪边界无效");
     }
     let img_w = i64::from(img.width());
     let img_h = i64::from(img.height());
     let [x1, y1, x2, y2] = bbox.map(|value| value as i64);
     if img_w == 0 || img_h == 0 || x2 <= x1 || y2 <= y1 {
-        anyhow::bail!("invalid IR face crop bounds");
+        anyhow::bail!("红外人脸裁剪边界无效");
     }
 
     let pad_x = (x2 - x1 + 1) * IR_PADDING / 112;
@@ -215,7 +200,7 @@ pub fn crop_ir_face(
     let mut right = (x2 + pad_x).min(img_w - 1);
     let mut bottom = (y2 + pad_y).min(img_h - 1);
     if right < left || bottom < top {
-        anyhow::bail!("IR face crop lies outside the frame");
+        anyhow::bail!("红外人脸裁剪区域超出画面");
     }
 
     let padded_w = right - left + 1;

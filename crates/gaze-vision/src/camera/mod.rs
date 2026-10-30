@@ -123,11 +123,7 @@ fn retry_while_busy<T>(
             Err(err)
                 if attempt < PRIVILEGED_BUSY_ATTEMPTS && device_is_busy(&format!("{err:#}")) =>
             {
-                warn!(
-                    attempt,
-                    ?delay,
-                    "Privileged capture found {node} busy; retrying"
-                );
+                warn!(attempt, ?delay, "特权采集发现 {node} 正忙；正在重试");
                 std::thread::sleep(delay);
                 attempt += 1;
             }
@@ -212,23 +208,15 @@ pub struct Camera {
 
 fn stop_pipeline(pipeline: &gstreamer::Pipeline) {
     if let Err(err) = pipeline.set_state(gstreamer::State::Null) {
-        warn!("Failed to stop camera pipeline: {err}");
+        warn!("无法停止摄像头管线：{err}");
         return;
     }
 
     let (result, current, pending) = pipeline.state(Some(gstreamer::ClockTime::from_seconds(2)));
     if let Err(err) = result {
-        warn!(
-            ?current,
-            ?pending,
-            "Camera pipeline did not stop cleanly: {err}"
-        );
+        warn!(?current, ?pending, "摄像头管线未正常停止：{err}");
     } else if current != gstreamer::State::Null {
-        warn!(
-            ?current,
-            ?pending,
-            "Camera pipeline did not reach the Null state"
-        );
+        warn!(?current, ?pending, "摄像头管线未进入 Null 状态");
     }
 }
 
@@ -243,7 +231,7 @@ impl Drop for Camera {
                 let _ = done_tx.send(());
             });
         if let Err(err) = spawned {
-            warn!("Could not spawn camera stop thread ({err}); stopping inline");
+            warn!("无法创建摄像头停止线程（{err}）；改为就地停止");
             stop_pipeline(&self.pipeline);
             return;
         }
@@ -253,7 +241,7 @@ impl Drop for Camera {
         if done_rx.recv_timeout(PIPELINE_STOP_TIMEOUT).is_err() {
             error!(
                 timeout_ms = PIPELINE_STOP_TIMEOUT.as_millis() as u64,
-                "Camera pipeline is stuck stopping; abandoning it so capture can continue"
+                "摄像头管线停止过程卡住；放弃该管线以继续采集"
             );
             // The stuck pipeline still uses this socket, and pw_core is cached by fd number.
             std::mem::forget(self._pipewire.take());
@@ -265,19 +253,19 @@ pub fn frame_to_bytes(frame: &Mat) -> anyhow::Result<Vec<u8>> {
     let sz = frame.size()?;
     anyhow::ensure!(
         frame.typ() == opencv::core::CV_8UC3,
-        "expected an 8-bit 3-channel Mat, got type {}",
+        "需要 8 位 3 通道 Mat，实际类型为 {}",
         frame.typ()
     );
-    anyhow::ensure!(frame.is_continuous(), "Mat rows are not tightly packed");
+    anyhow::ensure!(frame.is_continuous(), "Mat 各行未紧密排列");
 
     let expected = (sz.width.max(0) as usize)
         .checked_mul(sz.height.max(0) as usize)
         .and_then(|pixels| pixels.checked_mul(3))
-        .ok_or_else(|| anyhow::anyhow!("Mat dimensions overflow a byte count"))?;
+        .ok_or_else(|| anyhow::anyhow!("Mat 尺寸导致字节数溢出"))?;
     let bytes = frame.data_bytes()?;
     anyhow::ensure!(
         bytes.len() == expected,
-        "Mat holds {} bytes, expected {expected}",
+        "Mat 包含 {} 字节，应为 {expected} 字节",
         bytes.len()
     );
 
@@ -296,12 +284,12 @@ fn mirrored_bgr_frame(
 ) -> anyhow::Result<Mat> {
     anyhow::ensure!(
         info.format() == gstreamer_video::VideoFormat::Bgr,
-        "Expected BGR format, got {:?}",
+        "需要 BGR 格式，实际为 {:?}",
         info.format()
     );
     let width = i32::try_from(info.width())?;
     let height = i32::try_from(info.height())?;
-    anyhow::ensure!(width > 0 && height > 0, "Empty video frame");
+    anyhow::ensure!(width > 0 && height > 0, "视频帧为空");
     // VideoMeta can specify padding and an offset different from the negotiated caps.
     let (stride, offset) = if let Some(meta) = buffer.meta::<gstreamer_video::VideoMeta>() {
         anyhow::ensure!(
@@ -309,7 +297,7 @@ fn mirrored_bgr_frame(
                 && meta.width() == info.width()
                 && meta.height() == info.height()
                 && meta.n_planes() == 1,
-            "Video metadata does not match BGR caps"
+            "视频元数据与 BGR 格式参数不匹配"
         );
         (meta.stride()[0], meta.offset()[0])
     } else {
@@ -318,21 +306,18 @@ fn mirrored_bgr_frame(
     let stride = usize::try_from(stride)?;
     let row_bytes = (width as usize)
         .checked_mul(3)
-        .ok_or_else(|| anyhow::anyhow!("Video row size overflow"))?;
-    anyhow::ensure!(
-        stride >= row_bytes,
-        "Video stride is smaller than a BGR row"
-    );
+        .ok_or_else(|| anyhow::anyhow!("视频行大小溢出"))?;
+    anyhow::ensure!(stride >= row_bytes, "视频行跨度小于一行 BGR 数据");
     let end = stride
         .checked_mul(height as usize)
         .and_then(|size| offset.checked_add(size))
-        .ok_or_else(|| anyhow::anyhow!("Video frame size overflow"))?;
+        .ok_or_else(|| anyhow::anyhow!("视频帧大小溢出"))?;
     let map = buffer
         .map_readable()
-        .map_err(|_| anyhow::anyhow!("Buffer is not readable"))?;
+        .map_err(|_| anyhow::anyhow!("缓冲区不可读"))?;
     let pixels = map
         .get(offset..end)
-        .ok_or_else(|| anyhow::anyhow!("Video buffer is smaller than its declared frame"))?;
+        .ok_or_else(|| anyhow::anyhow!("视频缓冲区小于声明的帧大小"))?;
     // Bounds, dimensions and stride are checked before OpenCV borrows this memory.
     // The map stays alive until flip has copied the frame into an owned Mat.
     let frame = unsafe {
@@ -377,8 +362,7 @@ impl Camera {
         match (open(frame_size), frame_size) {
             (Err(err), Some((width, height))) if !device_is_busy(&format!("{err:#}")) => {
                 warn!(
-                    "IR frame size {width}x{height} failed for {camera_source} ({err:#}); \
-                     falling back to auto-negotiation"
+                    "{camera_source} 不支持红外画面尺寸 {width}x{height}（{err:#}）；回退到自动协商"
                 );
                 open(None)
             }
@@ -394,11 +378,10 @@ impl Camera {
         gstreamer::init()?;
         let Some(node) = resolve_privileged_node(camera_source, want_color) else {
             let err = if camera_disconnected(camera_source, want_color) {
-                anyhow::anyhow!("camera {camera_source:?} is not connected")
+                anyhow::anyhow!("摄像头 {camera_source:?} 未连接")
             } else {
                 anyhow::anyhow!(
-                    "refusing privileged capture of {camera_source:?}: no backing /dev/video node \
-                     (PipeWire sessions and custom pipelines are not trusted for authentication)"
+                    "拒绝对 {camera_source:?} 进行特权采集：没有对应的 /dev/video 节点（PipeWire 会话和自定义管线不能作为可信认证来源）"
                 )
             };
             return Self::open_libcamera_fallback(camera_source, want_color, None, err);
@@ -425,14 +408,12 @@ impl Camera {
         let Some(src_element) = libcamera_color_source() else {
             return Err(err);
         };
-        warn!(
-            "Privileged V4L2 capture of {camera_source:?} failed ({err:#}); trying {src_element}"
-        );
+        warn!("{camera_source:?} 的特权 V4L2 采集失败（{err:#}）；尝试 {src_element}");
         Self::open_source_element(&src_element, camera_source, false, None, None).map_err(
             |libcamera_err| {
                 let libcamera_err = format!("{libcamera_err:#}");
                 let hint = libcamera_negotiation_hint(&libcamera_err).unwrap_or_default();
-                anyhow::anyhow!("{err:#}; libcamera fallback also failed: {libcamera_err}{hint}")
+                anyhow::anyhow!("{err:#}；回退到 libcamera 也失败：{libcamera_err}{hint}")
             },
         )
     }
@@ -459,7 +440,7 @@ impl Camera {
             } => {
                 let node = resolve_usb_video_node(vid, pid, want_color).ok_or_else(|| {
                     anyhow::anyhow!(
-                        "no {} camera found for USB {vid:04x}:{pid:04x}",
+                        "未找到 USB {vid:04x}:{pid:04x} 对应的 {} 摄像头",
                         if want_color { "color" } else { "IR" }
                     )
                 })?;
@@ -481,7 +462,7 @@ impl Camera {
                     Err(err) => {
                         // Greeters without a user manager have no socket. Carry on unbound so the
                         // V4L2 fallback below still gets its turn.
-                        warn!("No PipeWire socket for uid {uid} ({err}); capture will use V4L2");
+                        warn!("未找到用户 ID {uid} 的 PipeWire 套接字（{err}）；将使用 V4L2 采集");
                         None
                     }
                 },
@@ -508,18 +489,16 @@ impl Camera {
                 Ok(camera)
             }
             Err(err) if fallback != V4l2Fallback::None => {
-                warn!("Opening the PipeWire camera failed ({err:#}); trying a direct V4L2 device");
+                warn!("打开 PipeWire 摄像头失败（{err:#}）；尝试直接使用 V4L2 设备");
                 let node = match &fallback {
                     V4l2Fallback::AnyDevice => first_v4l2_node(want_color),
                     V4l2Fallback::SameNode(target) => node_from_pipewire_target(target, want_color),
                     V4l2Fallback::None => None,
                 }
                 .ok_or_else(|| {
-                    anyhow::anyhow!(
-                        "PipeWire camera failed and no V4L2 fallback device was found: {err}"
-                    )
+                    anyhow::anyhow!("PipeWire 摄像头失败，且未找到可回退的 V4L2 设备：{err}")
                 })?;
-                info!("Falling back to V4L2 camera node {node}");
+                info!("回退到 V4L2 摄像头节点 {node}");
                 let force_ir_yuy2 = node_requires_forced_ir_yuy2(&node, want_color);
                 let src_element = format!("v4l2src device={node}");
                 Self::open_with_frame_size_fallback(camera_source, frame_size, |size| {
@@ -564,13 +543,11 @@ impl Camera {
         let _ = pipeline.set_state(gstreamer::State::Null);
         if let Some(detail) = detail {
             if device_is_busy(&detail) {
-                anyhow::bail!(
-                    "The camera is already in use by another program ({camera_source}): {detail}"
-                );
+                anyhow::bail!("摄像头已被其他程序占用（{camera_source}）：{detail}");
             }
-            anyhow::bail!("Failed to start pipeline for {camera_source}: {e} ({detail})");
+            anyhow::bail!("无法启动 {camera_source} 的采集管线：{e}（{detail}）");
         }
-        anyhow::bail!("Failed to start pipeline for {camera_source}: {e}");
+        anyhow::bail!("无法启动 {camera_source} 的采集管线：{e}");
     }
 
     fn open_source_element(
@@ -581,18 +558,18 @@ impl Camera {
         frame_size: Option<(u32, u32)>,
     ) -> anyhow::Result<Self> {
         let pipeline_str = camera_pipeline(src_element, force_ir_yuy2, frame_size);
-        info!("Attempting to open GStreamer camera: {}", pipeline_str);
+        info!("正在尝试打开 GStreamer 摄像头：{}", pipeline_str);
 
         let pipeline = gstreamer::parse::launch(&pipeline_str)
-            .map_err(|e| anyhow::anyhow!("Failed to parse pipeline for {camera_source}: {e}"))?
+            .map_err(|e| anyhow::anyhow!("无法解析 {camera_source} 的采集管线：{e}"))?
             .downcast::<gstreamer::Pipeline>()
-            .map_err(|_| anyhow::anyhow!("Pipeline is not a gst::Pipeline"))?;
+            .map_err(|_| anyhow::anyhow!("管线不是 gst::Pipeline 类型"))?;
 
         let appsink = pipeline
             .by_name("gaze_sink")
-            .ok_or_else(|| anyhow::anyhow!("appsink element not found in pipeline"))?
+            .ok_or_else(|| anyhow::anyhow!("管线中未找到 appsink 元素"))?
             .downcast::<gstreamer_app::AppSink>()
-            .map_err(|_| anyhow::anyhow!("gaze_sink is not an AppSink"))?;
+            .map_err(|_| anyhow::anyhow!("gaze_sink 不是 AppSink"))?;
 
         // Pin only height and PAR: adding width squishes 16:9 to 4:3; dropping PAR stretches it.
         let caps = gstreamer::Caps::builder("video/x-raw")
@@ -620,13 +597,13 @@ impl Camera {
     fn sample_to_mat(&self, sample: &gstreamer::Sample) -> anyhow::Result<Mat> {
         let buffer = sample
             .buffer()
-            .ok_or_else(|| anyhow::anyhow!("Sample has no buffer"))?;
+            .ok_or_else(|| anyhow::anyhow!("采样没有缓冲区"))?;
         let caps = sample
             .caps()
-            .ok_or_else(|| anyhow::anyhow!("Sample has no caps"))?;
+            .ok_or_else(|| anyhow::anyhow!("采样没有格式参数"))?;
 
         let video_info = gstreamer_video::VideoInfo::from_caps(caps)
-            .map_err(|e| anyhow::anyhow!("Failed to parse video info: {e}"))?;
+            .map_err(|e| anyhow::anyhow!("无法解析视频信息：{e}"))?;
 
         if let Some(fps_val) = video_info_fps(&video_info)
             && let Ok(mut guard) = self.fps.lock()
@@ -643,7 +620,7 @@ impl Camera {
             return match self.sample_to_mat(&sample) {
                 Ok(mat) => FramePoll::Frame(mat),
                 Err(err) => {
-                    warn!("Dropping camera frame: {err:#}");
+                    warn!("丢弃摄像头画面：{err:#}");
                     FramePoll::Timeout
                 }
             };
@@ -659,27 +636,27 @@ impl Camera {
                             warn!(
                                 source = %src.path_string(),
                                 debug = ?err.debug(),
-                                "Camera pipeline error: {}",
+                                "摄像头管线错误：{}",
                                 err.error()
                             );
                         } else {
                             warn!(
                                 debug = ?err.debug(),
-                                "Camera pipeline error: {}",
+                                "摄像头管线错误：{}",
                                 err.error()
                             );
                         }
                         let detail =
                             format!("{}: {}", err.error(), err.debug().unwrap_or_default());
                         self.stream_error = Some(if device_is_busy(&detail) {
-                            format!("The camera is already in use by another program: {detail}")
+                            format!("摄像头已被其他程序占用：{detail}")
                         } else {
                             detail
                         });
                         return FramePoll::Ended;
                     }
                     gstreamer::MessageView::Eos(_) => {
-                        info!("Camera stream ended (EOS)");
+                        info!("摄像头数据流已结束（EOS）");
                         return FramePoll::Ended;
                     }
                     _ => {}
@@ -687,12 +664,12 @@ impl Camera {
             }
         }
         if self.appsink.is_eos() {
-            info!("Camera stream ended (EOS)");
+            info!("摄像头数据流已结束（EOS）");
             return FramePoll::Ended;
         }
         let (_, current_state, _) = self.pipeline.state(Some(gstreamer::ClockTime::ZERO));
         if current_state != gstreamer::State::Playing && current_state != gstreamer::State::Paused {
-            info!("Camera pipeline stopped: {:?}", current_state);
+            info!("摄像头管线已停止：{:?}", current_state);
             return FramePoll::Ended;
         }
 
@@ -712,7 +689,7 @@ impl Camera {
         }?;
 
         if let Err(err) = self.pipeline.set_state(gstreamer::State::Null) {
-            warn!("Failed to stop the PipeWire pipeline before the V4L2 retry: {err}");
+            warn!("重试 V4L2 前无法停止 PipeWire 管线：{err}");
             return None;
         }
         let _ = self
@@ -732,14 +709,14 @@ impl Camera {
             )
         }) {
             Ok(camera) => {
-                info!("Retrying the dark PipeWire stream on V4L2 camera node {node}");
+                info!("PipeWire 画面过暗，使用 V4L2 摄像头节点 {node} 重试");
                 *self = camera;
                 Some(node)
             }
             Err(err) => {
-                warn!("V4L2 retry for {} failed: {err:#}", retry.camera_source);
+                warn!("{} 的 V4L2 重试失败：{err:#}", retry.camera_source);
                 self.stream_error = Some(format!(
-                    "The camera streamed only dark frames and its V4L2 node could not be opened: {err}"
+                    "摄像头仅输出过暗画面，且无法打开其 V4L2 节点：{err}"
                 ));
                 None
             }
@@ -832,7 +809,7 @@ mod tests {
             .unwrap();
         let buffer = gstreamer::Buffer::from_mut_slice(vec![0u8; 1]);
         let err = mirrored_bgr_frame(&buffer, &info).unwrap_err();
-        assert!(err.to_string().contains("smaller"), "{err}");
+        assert!(err.to_string().contains("小于"), "{err}");
     }
 
     #[test]
@@ -1150,7 +1127,7 @@ mod tests {
             .err()
             .expect("privileged open of a custom pipeline must fail");
         assert!(
-            err.to_string().contains("refusing privileged capture"),
+            err.to_string().contains("进行特权采集"),
             "unexpected error: {err:#}"
         );
         assert!(Camera::open_privileged("").is_err());

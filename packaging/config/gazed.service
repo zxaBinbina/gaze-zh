@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 
 [Unit]
-Description=Daemon for Gaze
+Description=Gaze 守护进程
 After=dbus.service
 Requires=dbus.service
 # Retry offline model downloads without hitting the start limit.

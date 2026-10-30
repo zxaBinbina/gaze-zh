@@ -69,10 +69,10 @@ pub fn encryption_warning(status: DiskEncryption) -> Option<&'static str> {
     match status {
         DiskEncryption::Encrypted => None,
         DiskEncryption::Unencrypted => Some(
-            "Gaze state storage appears unencrypted. TPM sealing has no PCR policy: someone who boots another OS on this machine can unseal accessible keys and recover face templates and enrolled keyring/wallet passwords. Enable full-disk encryption for the storage holding /var/lib/gaze; TPM encryption alone does not prevent this attack.",
+            "Gaze 状态存储似乎未加密。TPM 密封未设置 PCR 策略：在本机启动其他操作系统的人可以解封可访问的密钥，并恢复人脸模板和已录入的钥匙环或钱包密码。请对 /var/lib/gaze 所在存储启用全盘加密；仅使用 TPM 加密无法防止此类攻击。",
         ),
         DiskEncryption::Unknown => Some(
-            "Gaze could not verify encryption of its state storage. TPM sealing has no PCR policy: a live-USB/root attacker on this machine can unseal accessible keys, including enrolled keyring/wallet passwords. Verify that the storage holding /var/lib/gaze is protected by full-disk encryption; do not assume the TPM protects against an alternate boot.",
+            "Gaze 无法确认状态存储是否加密。TPM 密封未设置 PCR 策略：在本机通过启动 U 盘或 root 权限进行攻击的人可以解封可访问的密钥，包括已录入的钥匙环或钱包密码。请确认 /var/lib/gaze 所在存储受全盘加密保护；TPM 不能单独防范从其他系统启动的攻击。",
         ),
     }
 }
@@ -201,8 +201,8 @@ mod tests {
         assert!(encryption_warning(DiskEncryption::Encrypted).is_none());
         for state in [DiskEncryption::Unencrypted, DiskEncryption::Unknown] {
             let warning = encryption_warning(state).unwrap();
-            assert!(warning.contains("no PCR policy"));
-            assert!(warning.contains("passwords"));
+            assert!(warning.contains("未设置 PCR 策略"));
+            assert!(warning.contains("密码"));
         }
     }
 }

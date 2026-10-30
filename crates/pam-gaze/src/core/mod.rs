@@ -93,17 +93,17 @@ pub fn camera_auth_timeout(
     std::time::Duration::from_secs(CAMERA_AUTH_TIMEOUT_SECS)
         + std::time::Duration::from_millis(auth.effective_start_delay_ms(true, surface))
 }
-pub const CONFIRMATION_PROMPT: &str = "Face Verified. Press Enter to confirm, Esc to cancel.";
+pub const CONFIRMATION_PROMPT: &str = "人脸已验证。按回车键确认，Esc 键取消。";
 
-pub const LOOK_PROMPT: &str = "Please look at the camera";
-pub const LOOK_OR_PASSWORD_PROMPT: &str = "Please look at the camera or enter password";
-pub const LOOK_AFTER_PASSWORD_PROMPT: &str = "Password incorrect. Please look at the camera";
-pub const FACE_VERIFIED: &str = "Face Verified.";
-pub const FACE_NOT_RECOGNIZED: &str = "Face not recognized. Enter your password.";
-pub const FACE_NOT_DETECTED: &str = "Face not detected. Enter your password.";
-pub const FACE_TOO_DARK: &str = "Too dark for face authentication. Enter your password.";
-pub const FACE_TIMED_OUT: &str = "Face authentication timed out. Enter your password.";
-pub const FACE_UNAVAILABLE: &str = "Face authentication unavailable. Enter your password.";
+pub const LOOK_PROMPT: &str = "请看向摄像头";
+pub const LOOK_OR_PASSWORD_PROMPT: &str = "请看向摄像头或输入密码";
+pub const LOOK_AFTER_PASSWORD_PROMPT: &str = "密码错误。请看向摄像头";
+pub const FACE_VERIFIED: &str = "人脸已验证。";
+pub const FACE_NOT_RECOGNIZED: &str = "未识别到匹配人脸。请输入密码。";
+pub const FACE_NOT_DETECTED: &str = "未检测到人脸。请输入密码。";
+pub const FACE_TOO_DARK: &str = "光线过暗，无法进行人脸认证。请输入密码。";
+pub const FACE_TIMED_OUT: &str = "人脸认证超时。请输入密码。";
+pub const FACE_UNAVAILABLE: &str = "人脸认证不可用。请输入密码。";
 
 pub use gaze_core::dbus::{
     GAZE_CANCEL, GAZE_CONFIRMED, GAZE_MSG_FACE_NOT_DETECTED, GAZE_MSG_FACE_NOT_RECOGNIZED,
@@ -636,7 +636,7 @@ pub fn has_interactive_tty() -> bool {
 
 /// Fallback confirmation without a controlling terminal.
 /// Empty replies are not consent: some hosts return them without user input.
-pub const TYPED_CONFIRMATION_PROMPT: &str = "Face Verified. Type 'yes' to confirm.";
+pub const TYPED_CONFIRMATION_PROMPT: &str = "人脸已验证。输入 yes 以确认。";
 
 pub fn typed_confirmation_accepted(response: Option<&str>) -> bool {
     response.is_some_and(|resp| resp.trim().eq_ignore_ascii_case("yes"))
@@ -830,7 +830,7 @@ pub unsafe fn confirm_graphical_polkit(
     let prompt = if is_internal {
         GAZE_REQUIRE_CONFIRMATION
     } else {
-        "Face Verified. Press Enter to confirm."
+        "人脸已验证。按回车键确认。"
     };
     unsafe { say(pamh, prompt) };
 
@@ -874,7 +874,7 @@ pub unsafe fn report(pamh: PamHandle, service: Option<&str>, text: &str) {
 }
 
 pub unsafe fn prompt_password(pamh: PamHandle) -> Option<SecretBytes> {
-    unsafe { converse_bytes(pamh, PAM_PROMPT_ECHO_OFF, "Password: ") }
+    unsafe { converse_bytes(pamh, PAM_PROMPT_ECHO_OFF, "密码：") }
 }
 
 pub unsafe fn get_username(pamh: PamHandle) -> Option<String> {
@@ -945,7 +945,7 @@ pub async fn has_enrolled_faces_on(proxy: &GazeProxy<'_>, username: &str) -> any
 pub async fn has_enrolled_faces(username: &str) -> anyhow::Result<bool> {
     let (_config, proxy) = setup_auth_env()
         .await
-        .map_err(|e| anyhow::anyhow!("PAM error: {e}"))?;
+        .map_err(|e| anyhow::anyhow!("PAM 错误：{e}"))?;
     has_enrolled_faces_on(&proxy, username).await
 }
 
@@ -1040,12 +1040,12 @@ async fn request_verify_start(
             return proxy
                 .verify_start_for_kwallet(service)
                 .await
-                .map_err(|e| anyhow::anyhow!("KWallet verification start failed: {e}"));
+                .map_err(|e| anyhow::anyhow!("无法开始 KWallet 验证：{e}"));
         }
         return proxy
             .verify_start_for_keyring()
             .await
-            .map_err(|e| anyhow::anyhow!("Keyring verification start failed: {e}"));
+            .map_err(|e| anyhow::anyhow!("无法开始钥匙环验证：{e}"));
     }
     match proxy
         .verify_start_for("any", service.unwrap_or_default())
@@ -1057,9 +1057,9 @@ async fn request_verify_start(
             proxy
                 .verify_start("any")
                 .await
-                .map_err(|e| anyhow::anyhow!("Verify start failed: {e}"))
+                .map_err(|e| anyhow::anyhow!("无法开始验证：{e}"))
         }
-        other => other.map_err(|e| anyhow::anyhow!("Verify start failed: {e}")),
+        other => other.map_err(|e| anyhow::anyhow!("无法开始验证：{e}")),
     }
 }
 
@@ -1076,7 +1076,7 @@ where
     proxy
         .claim(username)
         .await
-        .map_err(|e| anyhow::anyhow!("Claim failed: {:?}", e))?;
+        .map_err(|e| anyhow::anyhow!("无法申请设备：{:?}", e))?;
 
     let mut guard = ReleaseGuard {
         proxy: proxy.clone(),
@@ -1086,11 +1086,11 @@ where
     let mut verify_stream = proxy
         .receive_verify_status()
         .await
-        .map_err(|e| anyhow::anyhow!("Stream failed: {e}"))?;
+        .map_err(|e| anyhow::anyhow!("无法接收数据流：{e}"))?;
     let mut face_stream = proxy
         .receive_face_status()
         .await
-        .map_err(|e| anyhow::anyhow!("Stream failed: {e}"))?;
+        .map_err(|e| anyhow::anyhow!("无法接收数据流：{e}"))?;
     request_verify_start(proxy, service, require_keyring).await?;
 
     use futures::StreamExt;
@@ -1457,9 +1457,9 @@ mod tests {
 
         assert_eq!(
             String::from_utf8(output).unwrap(),
-            "\x1B[1A\x1B[2K\rFace Verified."
+            "\x1B[1A\x1B[2K\r人脸已验证。"
         );
-        assert!(!FACE_VERIFIED.contains("confirm"));
+        assert!(!FACE_VERIFIED.contains("确认"));
     }
 
     #[test]
@@ -1468,7 +1468,7 @@ mod tests {
 
         replace_previous_line(&mut output, PromptLine::Absent, FACE_VERIFIED).unwrap();
 
-        assert_eq!(String::from_utf8(output).unwrap(), "\rFace Verified.");
+        assert_eq!(String::from_utf8(output).unwrap(), "\r人脸已验证。");
     }
 
     #[test]
@@ -1489,11 +1489,8 @@ mod tests {
             None,
         ] {
             let message = give_up_message(status);
-            assert!(
-                !message.starts_with("Please look at the camera"),
-                "{status:?}"
-            );
-            assert!(message.contains("password"), "{status:?}");
+            assert!(!message.starts_with(LOOK_PROMPT), "{status:?}");
+            assert!(message.contains("密码"), "{status:?}");
         }
     }
 

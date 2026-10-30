@@ -64,7 +64,12 @@ pub fn exit<T>(error: clap::Error) -> T {
         } else {
             error.to_string()
         }
-        .replace("[OPTIONS]", "[选项]");
+        .replace("[OPTIONS]", "[选项]")
+        .replace("[default:", "[默认：")
+        .replace("[possible values:", "[可选值：")
+        .replace("[aliases:", "[别名：")
+        .replace("[short aliases:", "[短别名：")
+        .replace("[long aliases:", "[长别名：");
         if error.use_stderr() {
             eprint!("{text}");
         } else {

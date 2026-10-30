@@ -11,7 +11,7 @@ for gaze_omarchy_home in /home/* /root; do
     gaze_omarchy_link="$gaze_omarchy_home/.config/omarchy/plugins/com.gundulabs.gaze.lock"
     if [ -L "$gaze_omarchy_link" ] &&
         [ "$(readlink "$gaze_omarchy_link")" = /usr/share/gaze/omarchy ]; then
-        printf 'Run gaze-omarchy disable from the unlocked desktop for %s before removing this package.\n' "$gaze_omarchy_home" >&2
+        printf '卸载此软件包前，请在 %s 的已解锁桌面中运行 gaze-omarchy disable。\n' "$gaze_omarchy_home" >&2
         gaze_omarchy_blocked=1
     fi
 done

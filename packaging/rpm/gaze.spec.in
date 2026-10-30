@@ -21,7 +21,7 @@ Conflicts:       gaze
 Obsoletes:       gaze
 Version:        ${VERSION}
 Release:        ${PACKAGE_RELEASE}%{?dist}
-Summary:        Daemon, CLI, and PAM integration for Gaze
+Summary:        Gaze 守护进程、命令行和 PAM 集成
 License:        GPL-3.0-or-later
 URL:            https://gaze.gundulabs.com
 Vendor:         Gundu Labs
@@ -108,13 +108,11 @@ Requires:       pam
 Provides:       bundled(onnxruntime) = %{ort_version}
 
 %description
-Gaze is a face authentication system for Linux. This package contains the
-gazed daemon, the gaze command line client, the PAM modules, and the
-distribution-specific PAM integration used to wire face authentication into
-the system authentication stack.
+Gaze 是 Linux 人脸认证系统。此软件包包含 gazed 守护进程、gaze 命令行客户端、
+PAM 模块和针对发行版的 PAM 集成，用于将人脸认证接入系统认证栈。
 
 %package gui
-Summary:        GTK4/Adwaita GUI for Gaze
+Summary:        Gaze 的 GTK4/Adwaita 图形界面
 Recommends:     %{name}%{?_isa} = %{version}-%{release}
 %if 0%{?suse_version}
 Requires:       gstreamer-plugins-base
@@ -127,55 +125,51 @@ Requires:       pipewire-gstreamer
 %endif
 
 %description gui
-Graphical enrollment and configuration front end for Gaze. It talks to gazed
-over the system bus, so install the gaze package as well.
+Gaze 的图形化人脸录入和配置界面，通过系统总线与 gazed 通信。
+请同时安装核心 gaze 软件包。
 
 %package gnome-extension
-Summary:        GNOME Shell extension for Gaze
+Summary:        Gaze 的 GNOME Shell 扩展
 Requires:       gnome-shell
 Recommends:     %{name}%{?_isa} = %{version}-%{release}
 Recommends:     policycoreutils
 
 %description gnome-extension
-GNOME Shell extension and GDM integration that start face authentication from
-the GNOME lock screen and login screen.
+GNOME Shell 扩展及 GDM 集成，可从 GNOME 锁屏和登录界面启动人脸认证。
 
 %package cinnamon-extension
-Summary:        Cinnamon Spices extension for Gaze
+Summary:        Gaze 的 Cinnamon 扩展
 Requires:       cinnamon
 Recommends:     %{name}%{?_isa} = %{version}-%{release}
 
 %description cinnamon-extension
-Cinnamon Spices extension that provides PolKit elevation confirmation and lock
-screen authentication integration for Gaze.
+为 Gaze 提供 PolKit 提权确认和锁屏认证集成的 Cinnamon 扩展。
 
 %package hyprlock
-Summary:        Hyprlock PAM integration for Gaze
+Summary:        Gaze 的 Hyprlock PAM 集成
 Recommends:     %{name}%{?_isa} = %{version}-%{release}
 
 %description hyprlock
-PAM service files that let hyprlock authenticate with Gaze, either on its own
-or simultaneously with a password.
+让 hyprlock 使用 Gaze 进行独立人脸认证或与密码并行认证的 PAM 服务文件。
 
 %package omarchy
-Summary:        Omarchy Quickshell lock screen integration for Gaze
+Summary:        Gaze 的 Omarchy Quickshell 锁屏集成
 Requires:       %{name}%{?_isa} = %{version}-%{release}
 Requires:       jq
 
 %description omarchy
-A Gaze lock plugin with independent password, fingerprint and face PAM lanes.
-Enable with gaze-omarchy enable from an unlocked Omarchy desktop.
+Gaze 锁屏插件，提供独立的密码、指纹和人脸 PAM 认证。
+在已解锁的 Omarchy 桌面运行 gaze-omarchy enable 即可启用。
 
 %package kde
-Summary:        KDE Plasma lock screen and System Settings integration for Gaze
+Summary:        Gaze 的 KDE Plasma 锁屏及系统设置集成
 Recommends:     %{name}%{?_isa} = %{version}-%{release}
 Requires:       kf6-kirigami
 
 %description kde
-Runs Gaze in the biometric PAM slot KScreenLocker starts before you touch
-anything, so the KDE Plasma lock screen unlocks on a face match with no key
-press, and adds a Gaze page to System Settings. Ships no PAM service
-file of its own: plasma-workspace owns those, so they are edited in place.
+通过 KScreenLocker 预先启动的生物识别 PAM 服务运行 Gaze，
+让 KDE Plasma 锁屏在人脸匹配后无需按键即可解锁，并向系统设置添加 Gaze 页面。
+直接修改 plasma-workspace 提供的 PAM 服务文件。
 
 %prep
 %autosetup

@@ -96,7 +96,7 @@ rustPlatform.buildRustPackage {
   '';
 
   meta = {
-    description = "Daemon, CLI, and PAM integration for Gaze facial authentication";
+    description = "Gaze 人脸认证的守护进程、命令行和 PAM 集成";
     homepage = "https://gaze.gundulabs.com";
     license = lib.licenses.gpl3Plus;
     platforms = [

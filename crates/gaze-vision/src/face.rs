@@ -387,7 +387,7 @@ impl FaceChecker {
             Some(sensor) => sensor.unwrap_or(self.searched_rotation),
         };
         if rotation != self.applied_rotation {
-            tracing::debug!(degrees = rotation.degrees(), "rotating camera frames");
+            tracing::debug!(degrees = rotation.degrees(), "正在旋转摄像头画面");
             self.applied_rotation = rotation;
             self.rotation_changed = true;
         }
@@ -397,7 +397,7 @@ impl FaceChecker {
         match rotation.rotated(&frame) {
             Ok(rotated) => rotated,
             Err(err) => {
-                tracing::warn!("camera frame rotation failed: {err}");
+                tracing::warn!("摄像头画面旋转失败：{err}");
                 frame
             }
         }
@@ -430,7 +430,7 @@ impl FaceChecker {
                     self.missed_faces = 0;
                     tracing::debug!(
                         degrees = self.searched_rotation.degrees(),
-                        "found a face in rotated camera frames"
+                        "在旋转后的摄像头画面中发现人脸"
                     );
                     return Ok(Some((rotated, result)));
                 }
@@ -476,7 +476,7 @@ impl FaceChecker {
 
         if let Some(status) = Self::dark_gate(self.spectrum, self.dark_luma_threshold, frame) {
             tracing::debug!(
-                "frame too dark: luma={} threshold={}",
+                "画面过暗：亮度={}，阈值={}",
                 frame_mean_luma(frame).unwrap_or(0),
                 self.dark_luma_threshold
             );

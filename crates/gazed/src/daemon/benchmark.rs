@@ -64,7 +64,7 @@ pub(super) fn run_inference_benchmark(
             };
             let result = benchmark_component(label, &runtime, || Ok(detector.benchmark_infer()?))
                 .map_err(|e| {
-                fdo::Error::Failed(format!("{spectrum} detector benchmark failed: {e}"))
+                fdo::Error::Failed(format!("{spectrum} 检测器性能测试失败：{e}"))
             })?;
             results.push(result);
         }
@@ -74,9 +74,7 @@ pub(super) fn run_inference_benchmark(
             benchmark_component(&format!("Face recognizer ({spectrum})"), &runtime, || {
                 recognizer.get_embedding(&synthetic_face).map(|_| ())
             })
-            .map_err(|e| {
-                fdo::Error::Failed(format!("{spectrum} recognizer benchmark failed: {e}"))
-            })?;
+            .map_err(|e| fdo::Error::Failed(format!("{spectrum} 识别器性能测试失败：{e}")))?;
         results.push(result);
     }
 
@@ -87,7 +85,7 @@ pub(super) fn run_inference_benchmark(
             let result = benchmark_component("Liveness (MiniFASNet)", &runtime, || {
                 detector.live_score(&synthetic_face).map(|_| ())
             })
-            .map_err(|e| fdo::Error::Failed(format!("liveness benchmark failed: {e}")))?;
+            .map_err(|e| fdo::Error::Failed(format!("活体检测性能测试失败：{e}")))?;
             results.push(result);
         }
     }
@@ -99,7 +97,7 @@ pub(super) fn run_inference_benchmark(
             let result = benchmark_component("Liveness (FLIR, IR)", &runtime, || {
                 detector.live_score(&synthetic_face).map(|_| ())
             })
-            .map_err(|e| fdo::Error::Failed(format!("IR liveness benchmark failed: {e}")))?;
+            .map_err(|e| fdo::Error::Failed(format!("红外活体检测性能测试失败：{e}")))?;
             results.push(result);
         }
     }

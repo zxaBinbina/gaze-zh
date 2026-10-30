@@ -39,11 +39,11 @@ let
 in
 {
   options.services.gaze = {
-    enable = lib.mkEnableOption "Gaze face authentication (gazed daemon, CLI, and PAM modules)";
+    enable = lib.mkEnableOption "Gaze 人脸认证（gazed 守护进程、命令行和 PAM 模块）";
 
     package = lib.mkOption {
       type = lib.types.package;
-      description = "The gaze package providing gazed, the CLI, and the PAM modules.";
+      description = "提供 gazed、命令行和 PAM 模块的 gaze 软件包。";
       defaultText = lib.literalExpression ''gaze.packages.''${system}.gaze'';
     };
 
@@ -57,8 +57,7 @@ in
         }
       '';
       description = ''
-        Options for {file}`/etc/gaze/config.toml`, merged over the upstream
-        defaults. See <https://gaze.gundulabs.com/guide/configuration>.
+        {file}`/etc/gaze/config.toml` 的选项，将覆盖上游默认值。参见 <https://gaze.gundulabs.com/guide/configuration>。
       '';
     };
 
@@ -66,12 +65,7 @@ in
       type = lib.types.bool;
       default = true;
       description = ''
-        If true, {file}`/etc/gaze/config.toml` is seeded from `settings` on
-        first boot but stays editable afterwards (the GUI's settings page
-        writes to it), matching the `noreplace` behaviour of the deb/rpm
-        packages; later changes to `settings` do not overwrite an existing
-        file. If false, the config is a read-only symlink managed entirely
-        by `settings` and edits from the GUI fail.
+        设为 true 时，首次启动从 `settings` 生成 {file}`/etc/gaze/config.toml`，之后仍可编辑（图形设置页面也写入此文件），与 DEB/RPM 的 `noreplace` 行为一致。后续修改 `settings` 不会覆盖已有文件。设为 false 时，配置为完全由 `settings` 管理的只读符号链接，无法通过图形界面修改。
       '';
     };
 
@@ -87,12 +81,7 @@ in
         "login"
       ];
       description = ''
-        PAM services that get face authentication without any further
-        configuration, matching what the deb, rpm, and Arch packages set up on
-        install. Each entry only defaults
-        {option}`security.pam.services.<name>.gaze.enable` to true, so an
-        individual service can still be turned off with
-        `security.pam.services.sudo.gaze.enable = false`.
+        无需额外配置即可使用人脸认证的 PAM 服务，与 DEB、RPM 和 Arch 软件包的安装设置一致。每项仅将 {option}`security.pam.services.<name>.gaze.enable` 默认设为 true；仍可通过 `security.pam.services.sudo.gaze.enable = false` 等设置单独关闭。
       '';
     };
 
@@ -101,35 +90,28 @@ in
       default = null;
       example = "device:/dev/tpm0";
       description = ''
-        TCTI connection string for sealing template keys, exported to the
-        daemon as `TPM2TOOLS_TCTI`. When null, the daemon prefers
-        {file}`/dev/tpmrm0` and falls back to {file}`/dev/tpm0` when the
-        resource-manager node is missing or unreadable. Set this only if
-        neither node is the one you want, for example to reach a TPM through
-        `tabrmd`.
+        密封模板密钥使用的 TCTI 连接字符串，以 `TPM2TOOLS_TCTI` 环境变量传给守护进程。设为 null 时优先使用 {file}`/dev/tpmrm0`，资源管理器节点缺失或不可读时回退到 {file}`/dev/tpm0`。仅在需要其他连接方式（如 `tabrmd`）时设置。
       '';
     };
 
     gui = {
-      enable = lib.mkEnableOption "the Gaze GTK4/Adwaita configuration GUI";
+      enable = lib.mkEnableOption "Gaze GTK4/Adwaita 图形配置界面";
 
       package = lib.mkOption {
         type = lib.types.package;
-        description = "The gaze-gui package.";
+        description = "gaze-gui 软件包。";
         defaultText = lib.literalExpression ''gaze.packages.''${system}.gaze-gui'';
       };
     };
 
     gnome = {
       enable = lib.mkEnableOption ''
-        the Gaze GNOME Shell extension (lock screen face unlock). Turned on for
-        every GNOME session by default, see
-        {option}`services.gaze.gnome.enableForUsers`
+        Gaze GNOME Shell 扩展（锁屏人脸解锁）。默认对每个 GNOME 会话启用，参见 {option}`services.gaze.gnome.enableForUsers`
       '';
 
       extensionPackage = lib.mkOption {
         type = lib.types.package;
-        description = "The gaze-gnome-extension package.";
+        description = "gaze-gnome-extension 软件包。";
         defaultText = lib.literalExpression ''gaze.packages.''${system}.gaze-gnome-extension'';
       };
 
@@ -137,59 +119,30 @@ in
         type = lib.types.bool;
         default = true;
         description = ''
-          Load the extension and turn on lock screen face auth in every GNOME
-          user session, by writing dconf defaults into the `user` profile.
-          Without this the extension is only installed, and each user has to
-          turn it on from the Extensions app before face unlock works.
+        通过向 `user` 配置写入 dconf 默认值，在每个 GNOME 用户会话中加载扩展并启用锁屏人脸认证。关闭此项时仅安装扩展，各用户需在扩展应用中手动启用。
 
-          These are defaults rather than locks, so a user who switches the
-          extension off in the Extensions app, or face auth off in the
-          extension preferences, keeps that choice.
+        这些设置是默认值而非锁定值，用户仍可通过扩展应用或扩展首选项关闭人脸认证。
 
-          Set this to `false` if you manage `org/gnome/shell`
-          `enabled-extensions` yourself, through home-manager or your own
-          {option}`programs.dconf.profiles.user` database. Two system databases
-          that both set the key shadow each other instead of merging, and only
-          the one listed first in the profile takes effect.
-        '';
+        若通过 home-manager 或自定义 {option}`programs.dconf.profiles.user` 数据库管理 `org/gnome/shell` 的 `enabled-extensions`，请将此项设为 false。多个系统数据库设置同一键时不会合并，仅配置列表中首个数据库生效。
+      '';
       };
 
       gdmFaceLogin = lib.mkEnableOption ''
-        face authentication at the GDM login screen itself (not just the lock
-        screen). Keep password login working and read
-        <https://gaze.gundulabs.com/guide/gnome> before enabling
+        GDM 登录界面的人脸认证（除锁屏外）。启用前请确认密码登录正常，并阅读 <https://gaze.gundulabs.com/guide/gnome>
       '';
     };
 
     kde = {
       lockScreen = lib.mkEnableOption ''
-        hands-free face unlock on the KDE Plasma lock screen. KScreenLocker starts
-        two biometric services up front, alongside the password field, so face
-        auth begins with no key press. Gaze takes `kde-fingerprint`, or
-        `kde-smartcard` when {option}`services.fprintd.enable` already owns the
-        first, so face and finger race instead of queueing. The equivalent of the
-        `gaze-kde` package
+        KDE Plasma 锁屏免按键人脸解锁。KScreenLocker 会预先启动两项生物识别服务，与密码框并行。Gaze 使用 `kde-fingerprint`；若 {option}`services.fprintd.enable` 已占用该服务，则改用 `kde-smartcard`，使人脸和指纹并行认证。此功能对应 `gaze-kde` 软件包
       '';
 
       loginScreen = lib.mkEnableOption ''
-        face authentication in the Plasma Login Manager / SDDM login stack. On a
-        greeter without an up-front biometric service this only runs when the
-        login form is submitted, exactly as a fingerprint reader does there, and
-        KWallet will ask for its password unless `kde.unlockKwallet` is enabled
-        and a wallet credential is enrolled. It also
-        writes `plasmalogin-fingerprint`, which a Plasma Login Manager carrying
-        plasma-login-manager!185 runs before you type. Read
-        <https://gaze.gundulabs.com/guide/kde> before enabling
+        Plasma 登录管理器 / SDDM 登录栈的人脸认证。未预先启动生物识别服务的登录界面会在提交表单时开始认证，与指纹行为一致。除非启用 `kde.unlockKwallet` 并录入钱包凭据，否则 KWallet 仍会要求密码。此项也会写入 `plasmalogin-fingerprint`，含 plasma-login-manager!185 的登录管理器可在输入前启动它。启用前请阅读 <https://gaze.gundulabs.com/guide/kde>
       '';
 
       unlockKwallet = lib.mkEnableOption ''
-        KWallet PAM credential handoff after a KDE face login. Requires
-        {option}`services.gaze.kde.loginScreen` and sequential PAM authentication.
-        Also enable `storage.unlock_kwallet`, TPM template encryption, and
-        liveness in Gaze's runtime configuration, then enroll with
-        `gaze keyring --kwallet`. This only wires PAM; it does not enroll a
-        credential or change the runtime security settings. Lock-screen services
-        never receive wallet credentials
+        KDE 人脸登录后通过 PAM 传递 KWallet 凭据。需要 {option}`services.gaze.kde.loginScreen` 和顺序 PAM 认证。还须在 Gaze 运行配置中启用 `storage.unlock_kwallet`、TPM 模板加密和活体检测，再运行 `gaze keyring --kwallet` 录入。此选项仅配置 PAM，不会录入凭据或修改安全设置。锁屏服务不会接收钱包凭据
       '';
     };
   };
@@ -216,39 +169,30 @@ in
                 && lib.elem name config.services.gaze.pam.defaultServices
               '';
               description = ''
-                Whether to attempt face authentication for this PAM service.
-                The rule is inserted ahead of `pam_fprintd` and `pam_unix`, so
-                face auth runs first and the fingerprint reader and password
-                both remain fallbacks.
-              '';
+        是否为此 PAM 服务尝试人脸认证。规则放在 `pam_fprintd` 和 `pam_unix` 前，先进行人脸认证，指纹和密码仍可作为后备方式。
+      '';
             };
 
             control = lib.mkOption {
               type = lib.types.str;
               default = "sufficient";
-              description = "PAM control field for the gaze auth rule.";
+              description = "Gaze 认证规则的 PAM 控制字段。";
             };
 
             simultaneous = lib.mkOption {
               type = lib.types.bool;
               default = false;
               description = ''
-                Pass the simultaneous option to pam_gaze.so, which runs face
-                authentication and the password prompt simultaneously, instead
-                of sequential authentication.
-              '';
+        向 pam_gaze.so 传递 simultaneous 选项，使人脸认证与密码提示同时进行。
+      '';
             };
 
             retry = lib.mkOption {
               type = lib.types.bool;
               default = false;
               description = ''
-                Add a second pam_gaze.so rule below the password module, giving
-                face authentication one more attempt after a rejected password.
-                Composes with either sequential or simultaneous mode. The retry
-                rule stands down without using the camera when the first pass
-                already decided the face was not a match.
-              '';
+        在密码模块下添加第二条 pam_gaze.so 规则，在密码被拒绝后再尝试一次人脸认证。可与顺序或同时模式配合使用。若第一次已确认人脸不匹配，重试规则不会再次使用摄像头。
+      '';
             };
 
             order = lib.mkOption {
@@ -258,13 +202,8 @@ in
                 config.security.pam.services.login.rules.auth.unix.order + 10
               '';
               description = ''
-                Explicit `order` for the gaze auth rule. When null, the rule is
-                placed ahead of both `pam_fprintd` and `pam_unix`. Set this to
-                reorder gaze relative to another rule, offsetting from that
-                rule's `order` rather than from a constant. Note that `rules`
-                is an experimental nixpkgs option whose numbering can change
-                between releases.
-              '';
+        显式指定 Gaze 认证规则的 `order`。为 null 时，规则位于 `pam_fprintd` 和 `pam_unix` 前。调整与其他规则的相对顺序时，应使用该规则 `order` 的偏移值。`rules` 是 nixpkgs 实验选项，其编号可能随版本变化。
+      '';
             };
           };
 
@@ -356,7 +295,7 @@ in
           [
             {
               assertion = cfg.kde.loginScreen;
-              message = "services.gaze.kde.unlockKwallet requires services.gaze.kde.loginScreen.";
+              message = "services.gaze.kde.unlockKwallet 需要启用 services.gaze.kde.loginScreen。";
             }
           ]
           ++ lib.optionals cfg.kde.loginScreen (
@@ -369,7 +308,7 @@ in
                 assertion =
                   !pam.gaze.enable
                   || (!pam.gaze.simultaneous && !pam.gaze.retry && pam.gaze.control == "sufficient");
-                message = "services.gaze.kde.unlockKwallet requires sequential, sufficient Gaze auth without retry for ${name}.";
+                message = "services.gaze.kde.unlockKwallet 要求 ${name} 使用顺序模式、sufficient 控制且不启用重试的 Gaze 认证。";
               }
             ) kdeLoginServices
           )
@@ -384,7 +323,7 @@ in
         security.polkit.enable = true;
 
         systemd.services.gazed = {
-          description = "Daemon for Gaze";
+          description = "Gaze 守护进程";
           # Mirrors packaging/config/gazed.service.
           after = [ "dbus.service" ];
           requires = [ "dbus.service" ];

@@ -15,7 +15,7 @@ pub struct FaceRecognizer {
 
 fn normalize_embedding(row: Array1<f32>) -> anyhow::Result<Array1<f32>> {
     let norm = row.dot(&row).sqrt();
-    tracing::debug!("Face recognizer computed embedding norm: {}", norm);
+    tracing::debug!("人脸识别器计算的特征向量范数：{}", norm);
     if norm == 0.0 || !norm.is_finite() {
         anyhow::bail!("识别器生成了退化的特征向量（范数为零）");
     }
@@ -44,9 +44,7 @@ impl FaceRecognizer {
         let height = height as usize;
         let plane_len = width * height;
         let mut tensor = Array4::<f32>::zeros((1, 3, height, width));
-        let data = tensor
-            .as_slice_mut()
-            .expect("preprocess tensor should be contiguous");
+        let data = tensor.as_slice_mut().expect("预处理张量应连续存储");
 
         for (x, y, pixel) in img.enumerate_pixels() {
             let r = (pixel[0] as f32 - 127.5) / 127.5;

@@ -188,11 +188,33 @@ Item {
     facePam.respond("yes")
   }
 
+  function localizeFaceMessage(message) {
+    var messages = {
+      "Face Verified.": "人脸已验证。",
+      "Face Verified. Press Enter to confirm.": "人脸已验证。按回车键确认。",
+      "Face Verified. Press Enter to confirm, Esc to cancel.": "人脸已验证。按回车键确认，Esc 键取消。",
+      "Face Verified. Press Enter to continue.": "人脸已验证。按回车键继续。",
+      "Face Verified. Type 'yes' to confirm.": "人脸已验证。输入 yes 以确认。",
+      "Please look at the camera": "请看向摄像头",
+      "Please look at the camera or enter password": "请看向摄像头或输入密码",
+      "Password incorrect. Please look at the camera": "密码错误。请看向摄像头",
+      "Face not recognized. Enter your password.": "未识别到匹配人脸。请输入密码。",
+      "Face not detected. Enter your password.": "未检测到人脸。请输入密码。",
+      "Too dark for face authentication. Enter your password.": "光线过暗，无法进行人脸认证。请输入密码。",
+      "Face authentication timed out. Enter your password.": "人脸认证超时。请输入密码。",
+      "Face authentication unavailable. Enter your password.": "人脸认证不可用。请输入密码。",
+      "Password:": "密码：",
+      "Password: ": "密码："
+    }
+    return messages[message] || message
+  }
+
   function handleFaceConversation() {
     if (!faceAuthenticating || !facePam.active) return
 
     if (facePam.responseRequired) {
-      if (facePam.message === faceConfirmationPrompt) {
+      if (facePam.message === faceConfirmationPrompt ||
+          facePam.message === "Face Verified. Type 'yes' to confirm.") {
         faceTimeoutTimer.stop()
         faceConfirming = true
         setFaceMessage("", false)
@@ -205,7 +227,7 @@ Item {
       return
     }
 
-    if (facePam.message.length > 0) setFaceMessage(facePam.message, facePam.messageIsError)
+    if (facePam.message.length > 0) setFaceMessage(localizeFaceMessage(facePam.message), facePam.messageIsError)
   }
 
   function handleFaceFinished(result) {

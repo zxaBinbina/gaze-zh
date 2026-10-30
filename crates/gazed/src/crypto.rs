@@ -33,8 +33,7 @@ impl EmbeddingCipher {
     /// GZE2 authenticates both the embedding and its caller-supplied identity context.
     pub fn encrypt(&self, plaintext: &[u8], aad: &[u8]) -> anyhow::Result<Vec<u8>> {
         let mut nonce_bytes = [0u8; NONCE_LEN];
-        getrandom::fill(&mut nonce_bytes)
-            .map_err(|e| anyhow!("failed to draw a random nonce: {e}"))?;
+        getrandom::fill(&mut nonce_bytes).map_err(|e| anyhow!("无法生成随机数：{e}"))?;
         let nonce = Nonce::from(nonce_bytes);
         let ciphertext = self
             .cipher
@@ -45,7 +44,7 @@ impl EmbeddingCipher {
                     aad,
                 },
             )
-            .map_err(|e| anyhow!("embedding encryption failed: {e}"))?;
+            .map_err(|e| anyhow!("特征向量加密失败：{e}"))?;
 
         let mut out = Vec::with_capacity(MAGIC.len() + NONCE_LEN + ciphertext.len());
         out.extend_from_slice(MAGIC);
@@ -56,9 +55,7 @@ impl EmbeddingCipher {
 
     pub fn decrypt(&self, data: &[u8], aad: &[u8]) -> anyhow::Result<Vec<u8>> {
         if !data.starts_with(MAGIC) {
-            return Err(anyhow!(
-                "not an owner-bound Gaze embedding; legacy data requires migration"
-            ));
+            return Err(anyhow!("此 Gaze 特征向量未绑定所属用户；旧数据需要迁移"));
         }
         self.decrypt_payload(data, aad)
     }
@@ -66,17 +63,17 @@ impl EmbeddingCipher {
     /// Only explicit store migration may accept ciphertext without an owner binding.
     pub fn decrypt_legacy(&self, data: &[u8]) -> anyhow::Result<Vec<u8>> {
         if !is_legacy(data) {
-            return Err(anyhow!("not a legacy Gaze embedding"));
+            return Err(anyhow!("不是旧版 Gaze 特征向量"));
         }
         self.decrypt_payload(data, &[])
     }
 
     fn decrypt_payload(&self, data: &[u8], aad: &[u8]) -> anyhow::Result<Vec<u8>> {
         if data.len() < MAGIC.len() + NONCE_LEN + 16 {
-            return Err(anyhow!("truncated encrypted embedding"));
+            return Err(anyhow!("加密的特征向量不完整"));
         }
         let (nonce_bytes, ciphertext) = data[MAGIC.len()..].split_at(NONCE_LEN);
-        let nonce = Nonce::try_from(nonce_bytes).map_err(|e| anyhow!("invalid nonce: {e}"))?;
+        let nonce = Nonce::try_from(nonce_bytes).map_err(|e| anyhow!("随机数无效：{e}"))?;
         self.cipher
             .decrypt(
                 &nonce,
@@ -85,11 +82,7 @@ impl EmbeddingCipher {
                     aad,
                 },
             )
-            .map_err(|_| {
-                anyhow!(
-                    "embedding authentication failed (wrong owner, metadata, key, or corrupt data)"
-                )
-            })
+            .map_err(|_| anyhow!("特征向量验证失败（所属用户、元数据或密钥不匹配，或数据已损坏）"))
     }
 }
 

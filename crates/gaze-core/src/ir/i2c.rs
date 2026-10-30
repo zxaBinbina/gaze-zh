@@ -52,7 +52,7 @@ impl I2cEmitter {
         match Self::diagnose(node)? {
             Ok(emitter) => Some(emitter),
             Err(reason) => {
-                tracing::warn!("I2C IR emitter profile for {node} does not apply: {reason}");
+                tracing::warn!("{node} 的 I2C 红外发射器配置不适用：{reason}");
                 None
             }
         }
@@ -78,7 +78,7 @@ impl I2cEmitter {
             .read(true)
             .write(true)
             .open(&self.bus)
-            .map_err(|e| anyhow::anyhow!("open I2C emitter bus {}: {e}", self.bus))?;
+            .map_err(|e| anyhow::anyhow!("打开 I2C 发射器总线 {}：{e}", self.bus))?;
         let fd = file.as_raw_fd();
 
         self.ensure_address_claimed(fd)?;
@@ -94,7 +94,7 @@ impl I2cEmitter {
         let readback = self.read_register(fd)?;
         if readback & profile.mask != wanted {
             anyhow::bail!(
-                "I2C emitter register 0x{:04x} at 0x{:02x} on {} reads 0x{readback:02x} after writing 0x{next:02x}",
+                "I2C 发射器寄存器 0x{:04x}（地址 0x{:02x}，总线 {}）写入 0x{next:02x} 后读回 0x{readback:02x}",
                 profile.register,
                 profile.address,
                 self.bus
@@ -108,7 +108,7 @@ impl I2cEmitter {
         let result = unsafe { libc::ioctl(fd, I2C_SLAVE, address as libc::c_ulong) };
         if result == 0 {
             anyhow::bail!(
-                "no driver claims address 0x{address:02x} on {}; refusing to write to an unidentified device",
+                "没有驱动声明使用 {} 上的地址 0x{address:02x}；拒绝向未知设备写入",
                 self.bus
             );
         }
@@ -117,7 +117,7 @@ impl I2cEmitter {
             Ok(())
         } else {
             Err(anyhow::anyhow!(
-                "check I2C address 0x{address:02x} on {}: {err}",
+                "检查 {} 上的 I2C 地址 0x{address:02x}：{err}",
                 self.bus
             ))
         }
@@ -151,7 +151,7 @@ impl I2cEmitter {
         ];
         self.transfer(fd, &mut msgs).map_err(|e| {
             anyhow::anyhow!(
-                "read I2C emitter register 0x{:04x} at 0x{:02x} on {}: {e}",
+                "读取 I2C 发射器寄存器 0x{:04x}（地址 0x{:02x}，总线 {}）：{e}",
                 self.profile.register,
                 self.profile.address,
                 self.bus
@@ -171,7 +171,7 @@ impl I2cEmitter {
         }];
         self.transfer(fd, &mut msgs).map_err(|e| {
             anyhow::anyhow!(
-                "write I2C emitter register 0x{:04x} at 0x{:02x} on {}: {e}",
+                "写入 I2C 发射器寄存器 0x{:04x}（地址 0x{:02x}，总线 {}）：{e}",
                 self.profile.register,
                 self.profile.address,
                 self.bus
@@ -189,7 +189,7 @@ impl I2cEmitter {
             Err(std::io::Error::last_os_error())
         } else if result as usize != msgs.len() {
             Err(std::io::Error::other(format!(
-                "completed {result} of {} I2C messages",
+                "已完成 {} 条 I2C 消息中的 {result} 条",
                 msgs.len()
             )))
         } else {
@@ -201,35 +201,32 @@ impl I2cEmitter {
 fn resolve_bus(profile: &I2cIrProfile) -> Result<String, String> {
     let node = profile.capture_node;
     if !is_char_device(node) {
-        return Err(format!("{node} is not present"));
+        return Err(format!("{node} 不存在"));
     }
 
     let name_path = video_sysfs_path(node, "name");
     let capture_name =
-        std::fs::read_to_string(&name_path).map_err(|e| format!("cannot read {name_path}: {e}"))?;
+        std::fs::read_to_string(&name_path).map_err(|e| format!("无法读取 {name_path}：{e}"))?;
     if capture_name.trim() != profile.capture_name {
         return Err(format!(
-            "{name_path} is {:?}, expected {:?}",
+            "{name_path} 为 {:?}，应为 {:?}",
             capture_name.trim(),
             profile.capture_name
         ));
     }
 
     if let (Some(marker), Some(driver)) = (profile.source_marker, profile.source_driver) {
-        let source = std::fs::read_to_string(marker).map_err(|e| {
-            format!("cannot read bridge marker {marker}: {e}; is the IR bridge running?")
-        })?;
+        let source = std::fs::read_to_string(marker)
+            .map_err(|e| format!("无法读取桥接标记 {marker}：{e}；请检查红外桥接是否正在运行"))?;
         let source = source.trim();
         if !source.starts_with("/dev/video") || !is_char_device(source) {
-            return Err(format!(
-                "bridge marker {marker} names {source:?}, which is not a video device"
-            ));
+            return Err(format!("桥接标记 {marker} 指向的 {source:?} 不是视频设备"));
         }
         let actual = video_driver(source);
         if actual.as_deref() != Some(driver) {
             return Err(format!(
-                "bridge source {source} is bound to {}, expected {driver}",
-                actual.as_deref().unwrap_or("no driver")
+                "桥接来源 {source} 绑定到 {}，应为 {driver}",
+                actual.as_deref().unwrap_or("无驱动")
             ));
         }
     }
@@ -240,31 +237,26 @@ fn resolve_bus(profile: &I2cIrProfile) -> Result<String, String> {
         .and_then(|link| Some(link.file_name()?.to_str()?.to_string()));
     if sensor_driver.as_deref() != Some(profile.sensor_driver) {
         return Err(format!(
-            "I2C device {} is bound to {}, expected {}",
+            "I2C 设备 {} 绑定到 {}，应为 {}",
             profile.sensor_device,
-            sensor_driver.as_deref().unwrap_or("no driver"),
+            sensor_driver.as_deref().unwrap_or("无驱动"),
             profile.sensor_driver
         ));
     }
 
     let canonical = std::fs::canonicalize(&sensor)
-        .map_err(|e| format!("cannot resolve {}: {e}", sensor.display()))?;
+        .map_err(|e| format!("无法解析 {}：{e}", sensor.display()))?;
     let adapter = canonical
         .parent()
         .and_then(|parent| parent.file_name())
         .and_then(|name| name.to_str())
         .and_then(adapter_number)
-        .ok_or_else(|| {
-            format!(
-                "cannot determine the I2C adapter of {}",
-                canonical.display()
-            )
-        })?;
+        .ok_or_else(|| format!("无法确定 {} 的 I2C 适配器", canonical.display()))?;
 
     let bus = format!("/dev/i2c-{adapter}");
     if !is_char_device(&bus) {
         return Err(format!(
-            "{bus} is missing; load the i2c-dev kernel module (modprobe i2c-dev)"
+            "{bus} 不存在；请加载 i2c-dev 内核模块（modprobe i2c-dev）"
         ));
     }
     Ok(bus)

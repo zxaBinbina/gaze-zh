@@ -65,9 +65,7 @@ impl EyeStateClassifier {
         let size = INPUT_SIZE as usize;
         let plane_len = size * size;
         let mut tensor = Array4::<f32>::zeros((1, 3, size, size));
-        let data = tensor
-            .as_slice_mut()
-            .expect("preprocess tensor should be contiguous");
+        let data = tensor.as_slice_mut().expect("预处理张量应连续存储");
 
         for (x, y, p) in crop.enumerate_pixels() {
             let idx = y as usize * size + x as usize;

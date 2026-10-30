@@ -2,7 +2,7 @@
 # SPDX-FileCopyrightText: 2026 Gundu Labs
 # SPDX-License-Identifier: GPL-3.0-or-later
 
-# Gaze installer: https://gaze.gundulabs.com/install.sh
+# Gaze 安装器: https://gaze.gundulabs.com/install.sh
 # Usage: curl -fsSL https://gaze.gundulabs.com/install.sh | sh
 #        curl -fsSL https://gaze.gundulabs.com/install.sh | sh -s -- --yes
 set -e
@@ -32,7 +32,7 @@ say() { printf '%s\n' "$*"; }
 title() { printf '%s\n' "${BOLD}$*${RESET}"; }
 ok() { printf '%s\n' "${GREEN}✓${RESET} $*"; }
 warn() { printf '%s\n' "${YELLOW}!${RESET} $*"; }
-fail() { printf '%s\n' "${RED}error:${RESET} $*" >&2; }
+fail() { printf '%s\n' "${RED}错误：${RESET} $*" >&2; }
 die() {
     fail "$@"
     exit 1
@@ -49,22 +49,20 @@ step() {
 
 usage() {
     cat <<'EOF'
-Gaze installer
+Gaze 安装器
 
-Usage:
-  sh install.sh [options]
+用法：
+  sh install.sh [选项]
 
-Options:
-  -y, --yes                  Use detected defaults without prompting
-      --no-pam               Install without adding Gaze to any PAM stack
-  -h, --help                 Show this help
+选项：
+  -y, --yes                  使用检测到的默认值，不再询问
+      --no-pam               安装时不将 Gaze 添加到 PAM 认证栈
+  -h, --help                 显示此帮助
 
-The GNOME extension package is installed only when a GNOME desktop session is
-detected. On KDE Plasma and other desktops, the installer skips GNOME-specific
-packages so it does not pull in GNOME Shell. When run from GNOME as your normal
-user, it also enables lock screen face unlock for that user. GDM loads the
-extension by default, but GDM login face authentication is not enabled unless you
-explicitly run the docs command for it.
+仅检测到 GNOME 桌面会话时才安装 GNOME 扩展软件包。
+KDE Plasma 等其他桌面会跳过 GNOME 专用软件包。
+以普通用户在 GNOME 中运行时，也会为该用户启用锁屏人脸解锁。
+GDM 默认加载扩展；登录界面的人脸认证需按文档中的命令单独启用。
 EOF
 }
 
@@ -76,13 +74,13 @@ while [ "$#" -gt 0 ]; do
         usage
         exit 0
         ;;
-    *) die "Unknown option: $1" ;;
+    *) die "未知选项：$1" ;;
     esac
     shift
 done
 
 need() {
-    command -v "$1" >/dev/null 2>&1 || die "'$1' is required but not installed."
+    command -v "$1" >/dev/null 2>&1 || die "需要“$1”，但尚未安装。"
 }
 
 prompt_continue() {
@@ -91,18 +89,18 @@ prompt_continue() {
     fi
 
     echo ""
-    printf '%s' "${BOLD}Continue? [y/N]:${RESET} "
+    printf '%s' "${BOLD}是否继续？[y/N]：${RESET} "
     if [ -r /dev/tty ]; then
         read -r answer </dev/tty
     else
-        fail "No interactive terminal available. Re-run with --yes for non-interactive install."
+        fail "没有可用的交互终端。使用 --yes 重新运行可进行非交互安装。"
         exit 1
     fi
 
     case "$answer" in
     y | Y | yes | YES) return 0 ;;
     *)
-        say "Aborted."
+        say "已取消。"
         exit 0
         ;;
     esac
@@ -168,8 +166,8 @@ print_manual_cinnamon_enable() {
 
 configure_hyprlock_conf() {
     if [ "$(id -u)" -eq 0 ]; then
-        warn "Running as root; skipping per-user hyprlock.conf edit."
-        say "As your desktop user, add to ~/.config/hypr/hyprlock.conf:"
+        warn "当前以 root 身份运行；跳过用户的 hyprlock.conf 修改。"
+        say "请以桌面用户身份向 ~/.config/hypr/hyprlock.conf 添加："
         cmd "auth {"
         cmd "    pam {"
         cmd "        module = hyprlock-gaze"
@@ -190,7 +188,7 @@ auth {
     }
 }
 EOF
-        ok "Created $conf with auth.pam.module = hyprlock-gaze."
+        ok "已创建 $conf，并设置 auth.pam.module = hyprlock-gaze。"
         return 0
     fi
 
@@ -198,12 +196,12 @@ EOF
         current_pam="$(grep -E '^\s*module\s*=' "$conf" | head -1 | sed 's/.*=\s*//;s/\s*$//')"
         case "$current_pam" in
         hyprlock-gaze | hyprlock-gaze-simultaneous)
-            ok "hyprlock.conf already uses $current_pam."
+            ok "hyprlock.conf 已使用 $current_pam。"
             return 0
             ;;
         *)
-            warn "hyprlock.conf already sets auth.pam.module = $current_pam; leaving it."
-            say "To use Gaze, change it to: module = hyprlock-gaze"
+            warn "hyprlock.conf 已设置 auth.pam.module = $current_pam；保留此设置。"
+            say "要使用 Gaze，请改为：module = hyprlock-gaze"
             return 0
             ;;
         esac
@@ -222,7 +220,7 @@ EOF
             }
             { print }
         ' "$conf.gaze-backup" >"$conf"
-        ok "Added module = hyprlock-gaze to existing pam {} block in $conf."
+        ok "已将 module = hyprlock-gaze 添加到 $conf 的现有 pam {} 块。"
     elif grep -qE '^\s*auth\s*\{' "$conf"; then
         awk '
             BEGIN { done = 0 }
@@ -236,21 +234,21 @@ EOF
             }
             { print }
         ' "$conf.gaze-backup" >"$conf"
-        ok "Added pam { module = hyprlock-gaze } to existing auth {} block in $conf."
+        ok "已将 pam { module = hyprlock-gaze } 添加到 $conf 的现有 auth {} 块。"
     else
         rm -f "$conf.gaze-backup"
         printf '\nauth {\n    pam {\n        module = hyprlock-gaze\n    }\n}\n' >>"$conf"
-        ok "Appended auth { pam { module = hyprlock-gaze } } to $conf."
+        ok "已向 $conf 追加 auth { pam { module = hyprlock-gaze } }。"
         return 0
     fi
-    say "${DIM}Backup: $conf.gaze-backup${RESET}"
+    say "${DIM}备份：$conf.gaze-backup${RESET}"
 }
 
 enable_hyprlock() {
     if ! want_hyprlock_setup; then
         return 0
     fi
-    say "Hyprland/hyprlock detected; configuring hyprlock to use Gaze face unlock..."
+    say "已检测到 Hyprland/hyprlock；正在配置 Gaze 人脸解锁…"
     configure_hyprlock_conf
 }
 
@@ -287,7 +285,7 @@ arm_gnome_first_login_enable() {
 
     cat >"$GNOME_ENABLE_HELPER" <<'HELPER' || return 1
 #!/bin/sh
-# Written by the Gaze installer. Runs at the first GNOME login after install to
+# Written by the Gaze 安装器. Runs at the first GNOME login after install to
 # finish enabling the Gaze extension, then removes itself. Safe to delete.
 EXT_ID="gaze@gundulabs.com"
 autostart="$1"
@@ -335,8 +333,8 @@ HELPER
     cat >"$GNOME_ENABLE_AUTOSTART" <<EOF || return 1
 [Desktop Entry]
 Type=Application
-Name=Gaze face unlock setup
-Comment=Finishes enabling the Gaze GNOME Shell extension after installation
+Name=Gaze 人脸解锁设置
+Comment=安装后完成 Gaze GNOME Shell 扩展的启用
 Exec="$GNOME_ENABLE_HELPER" "$GNOME_ENABLE_AUTOSTART"
 OnlyShowIn=GNOME;
 X-GNOME-Autostart-enabled=true
@@ -346,15 +344,15 @@ EOF
 
 enable_gnome_extension() {
     if [ "$(id -u)" -eq 0 ]; then
-        warn "Running as root; not changing per-user GNOME extension settings."
-        say "For GNOME lock screen face unlock, reboot, then run as your desktop user:"
+        warn "当前以 root 身份运行；不修改用户的 GNOME 扩展设置。"
+        say "要启用 GNOME 锁屏人脸解锁，请重启后以桌面用户身份运行："
         print_manual_gnome_enable
         return 0
     fi
 
     if ! is_gnome_session; then
-        warn "GNOME desktop session not detected; leaving the extension disabled for this user."
-        say "For GNOME lock screen face unlock, reboot, then from your GNOME session:"
+        warn "未检测到 GNOME 桌面会话；此用户的扩展保持禁用。"
+        say "要启用 GNOME 锁屏人脸解锁，请重启后在 GNOME 会话中运行："
         print_manual_gnome_enable
         return 0
     fi
@@ -364,41 +362,41 @@ enable_gnome_extension() {
     # Shell does not scan newly installed system extensions until it restarts, so
     # `gnome-extensions enable` usually fails here and gsettings writes dconf directly.
     if command -v gnome-extensions >/dev/null 2>&1 && gnome-extensions enable "$EXT_ID" >/dev/null 2>&1 && _gsettings_enable_face_auth; then
-        ok "Enabled GNOME lock screen face unlock for this user."
+        ok "已为此用户启用 GNOME 锁屏人脸解锁。"
     elif _gsettings_add_extension "$EXT_ID" && _gsettings_enable_face_auth; then
-        ok "Registered GNOME lock screen face unlock via dconf; a reboot will activate it."
-        say "${DIM}Note: 'gnome-extensions enable $EXT_ID' before that reboot reports \"Extension does not exist\"; the dconf entry just written makes that step unnecessary.${RESET}"
+        ok "已通过 dconf 注册 GNOME 锁屏人脸解锁；重启后生效。"
+        say "${DIM}提示：首次重启前运行 gnome-extensions enable $EXT_ID 会提示扩展不存在；上述 dconf 设置已完成启用，无需执行该步骤。${RESET}"
     else
-        warn "Could not enable the GNOME extension automatically."
-        say "Reboot, then from your GNOME session run:"
+        warn "无法自动启用 GNOME 扩展。"
+        say "请重启后在 GNOME 会话中运行："
         print_manual_gnome_enable
     fi
 
     if arm_gnome_first_login_enable; then
-        say "${DIM}GNOME Shell forgets extensions it has not scanned yet, so a logout before the${RESET}"
-        say "${DIM}first reboot can undo the step above. A one-shot autostart entry re-applies it${RESET}"
-        say "${DIM}at your next GNOME login and then deletes itself.${RESET}"
+        say "${DIM}GNOME Shell 不会保留尚未扫描的扩展，因此首次重启前注销${RESET}"
+        say "${DIM}可能撤销上述设置。一次性自启动项会在下次 GNOME 登录时${RESET}"
+        say "${DIM}重新应用设置，然后自行删除。${RESET}"
     fi
 }
 
 enable_cinnamon_extension() {
     if [ "$(id -u)" -eq 0 ]; then
-        warn "Running as root; not changing per-user Cinnamon extension settings."
-        say "For Cinnamon lock screen and PolKit elevation confirmation, run as your desktop user:"
+        warn "当前以 root 身份运行；不修改用户的 Cinnamon 扩展设置。"
+        say "要启用 Cinnamon 锁屏及 PolKit 提权确认，请以桌面用户身份运行："
         print_manual_cinnamon_enable
         return 0
     fi
 
     if ! is_cinnamon_session; then
-        warn "Cinnamon desktop session not detected; leaving the extension disabled for this user."
-        say "For Cinnamon lock screen and PolKit elevation confirmation, from your Cinnamon session:"
+        warn "未检测到 Cinnamon 桌面会话；此用户的扩展保持禁用。"
+        say "要启用 Cinnamon 锁屏及 PolKit 提权确认，请在 Cinnamon 会话中运行："
         print_manual_cinnamon_enable
         return 0
     fi
 
     ext_id="gaze@gundulabs.com"
     if ! command -v gsettings >/dev/null 2>&1; then
-        warn "Could not enable the Cinnamon extension automatically (gsettings not found)."
+        warn "无法自动启用 Cinnamon 扩展（未找到 gsettings）。"
         print_manual_cinnamon_enable
         return 0
     fi
@@ -406,22 +404,22 @@ enable_cinnamon_extension() {
     current=$(gsettings get org.cinnamon enabled-extensions 2>/dev/null) || current=""
     case "$current" in
     *"$ext_id"*)
-        ok "Cinnamon extension is already enabled."
+        ok "Cinnamon 扩展已启用。"
         ;;
     "@as []" | "[]" | "")
         if gsettings set org.cinnamon enabled-extensions "['$ext_id']" 2>/dev/null; then
-            ok "Enabled Cinnamon Gaze extension."
+            ok "已启用 Cinnamon Gaze 扩展。"
         else
-            warn "Could not enable the Cinnamon extension automatically."
+            warn "无法自动启用 Cinnamon 扩展。"
             print_manual_cinnamon_enable
         fi
         ;;
     *)
         new_list=$(printf '%s' "$current" | sed "s/]$/, '$ext_id']/")
         if gsettings set org.cinnamon enabled-extensions "$new_list" 2>/dev/null; then
-            ok "Enabled Cinnamon Gaze extension."
+            ok "已启用 Cinnamon Gaze 扩展。"
         else
-            warn "Could not enable the Cinnamon extension automatically."
+            warn "无法自动启用 Cinnamon 扩展。"
             print_manual_cinnamon_enable
         fi
         ;;
@@ -433,9 +431,9 @@ explain_desktop_extension_skipped() {
         return 0
     fi
 
-    say "GNOME or Cinnamon desktop session not detected; skipping desktop extension packages."
-    say "CLI, GUI, and PAM modules are still installed."
-    say "For other desktop/login integration, see:"
+    say "未检测到 GNOME 或 Cinnamon 桌面会话；跳过桌面扩展软件包。"
+    say "仍会安装命令行、图形界面和 PAM 模块。"
+    say "其他桌面和登录界面集成请参见："
     link "$PAM_DOCS_URL"
 }
 
@@ -458,10 +456,10 @@ install_kde_packages() {
     fi
     KDE_PACKAGES_INSTALLED=0
     echo ""
-    warn "Could not install the KDE Plasma packages ($KDE_PKGS)."
-    say "  The rest of Gaze is installed and working; only the KDE lock screen"
-    say "  integration is missing. This is expected if your distribution's Gaze"
-    say "  packages predate the KDE package. Retry once it is available:"
+    warn "无法安装 KDE Plasma 软件包（$KDE_PKGS）。"
+    say "  Gaze 其他组件已安装且可用；仅缺少 KDE 锁屏"
+    say "  集成。如果发行版的 Gaze 软件包早于 KDE 组件发布，"
+    say "  可能出现此情况。软件包可用后请重试："
     link "$KDE_DOCS_URL"
 }
 
@@ -478,14 +476,14 @@ warn_replacing_bare_gaze_package() {
 
     case "$installed_url" in
     *gundulabs*)
-        warn "Gaze is installed under the bare name 'gaze' (from a release artifact)."
-        say "  That name is not safe on Arch: an AUR helper treats the unrelated 'gaze'"
-        say "  package as an upgrade for it. Switching you to gaze-bin, which is."
+        warn "当前安装的 Gaze 使用包名“gaze”（来自发行附件）。"
+        say "  此包名在 Arch 上可能冲突：AUR 助手会把无关的“gaze”"
+        say "  软件包视为其更新。将切换为正确的 gaze-bin。"
         ;;
     *)
-        warn "A package named 'gaze' is already installed and is not Gaze face unlock."
-        say "  That is an unrelated AUR package (a file watcher) using the same name."
-        say "  Installing gaze-bin replaces it. Reinstall it afterwards if you use it."
+        warn "已安装同名“gaze”软件包，但它不是 Gaze 人脸解锁。"
+        say "  它是 AUR 中使用相同名称的文件监视工具。"
+        say "  安装 gaze-bin 会替换它。如需使用该工具，请之后重新安装。"
         ;;
     esac
 }
@@ -494,20 +492,20 @@ enable_kde() {
     if [ "${KDE_PACKAGES_INSTALLED:-0}" -ne 1 ]; then
         return 0
     fi
-    ok "KDE Plasma lock screen face unlock: enabled by gaze-kde"
-    say "  ${DIM}Face auth runs in the slot KScreenLocker starts for biometrics, alongside${RESET}"
-    say "  ${DIM}the password field, so a match unlocks without pressing a key.${RESET}"
-    say "  ${DIM}Lock your screen and look at the camera to try it.${RESET}"
-    say "  ${DIM}Find Gaze in System Settings, or run gaze-gui.${RESET}"
-    say "  ${DIM}The login greeter is off by default: sudo gaze-kde-pam enable-login${RESET}"
+    ok "KDE Plasma 锁屏人脸解锁：已由 gaze-kde 启用"
+    say "  ${DIM}人脸认证通过 KScreenLocker 的生物识别服务运行，与${RESET}"
+    say "  ${DIM}密码框并行，匹配成功即可解锁，无需按键。${RESET}"
+    say "  ${DIM}锁定屏幕后看向摄像头即可尝试。${RESET}"
+    say "  ${DIM}在系统设置中打开 Gaze，或运行 gaze-gui。${RESET}"
+    say "  ${DIM}登录界面默认关闭人脸认证；启用命令：sudo gaze-kde-pam enable-login${RESET}"
     link "$KDE_DOCS_URL"
 }
 
 enable_omarchy() {
     if [ "$(id -u)" -eq 0 ]; then
-        warn "Run gaze-omarchy enable as your desktop user after installation."
+        warn "安装后请以桌面用户身份运行 gaze-omarchy enable。"
     elif ! gaze-omarchy enable; then
-        warn "Omarchy integration needs attention; run gaze-omarchy doctor, then gaze-omarchy enable while unlocked."
+        warn "Omarchy 集成需要处理；请先运行 gaze-omarchy doctor，再在已解锁桌面运行 gaze-omarchy enable。"
     fi
 }
 
@@ -544,25 +542,25 @@ configure_pam_arch() {
     pam_file=/etc/pam.d/sudo
 
     if ! [ -f "$pam_file" ]; then
-        warn "Could not find $pam_file; skipping PAM configuration."
-        say "To enable Gaze for sudo manually, see:"
+        warn "未找到 $pam_file；跳过 PAM 配置。"
+        say "手动为 sudo 启用 Gaze，请参见："
         link "$PAM_DOCS_URL"
         return 0
     fi
 
     if $SUDO test -e "$PAM_SUDO_OPTOUT"; then
-        say "Leaving $pam_file alone ($PAM_SUDO_OPTOUT exists)."
+        say "保留 $pam_file（存在 $PAM_SUDO_OPTOUT）。"
         return 0
     fi
 
     if grep -q "pam_gaze" "$pam_file" 2>/dev/null; then
-        ok "Gaze already configured in $pam_file."
+        ok "$pam_file 已配置 Gaze。"
         return 0
     fi
 
     if $SUDO grep -qxF "$pam_file" /etc/gaze/pam-arch.configured 2>/dev/null; then
-        say "Gaze was removed from $pam_file by hand; leaving it that way."
-        say "Delete $PAM_SUDO_OPTOUT and re-run to undo."
+        say "Gaze 已从 $pam_file 中手动移除；保留此状态。"
+        say "删除 $PAM_SUDO_OPTOUT 并重新运行可恢复。"
         record_pam_sudo_optout
         return 0
     fi
@@ -570,14 +568,14 @@ configure_pam_arch() {
     supports_insert=0
     pam_auth_stack_supports_gaze_insert "$pam_file" || supports_insert=$?
     if [ "$supports_insert" -eq 2 ]; then
-        warn "$pam_file has no supported auth line; leaving it unchanged."
-        say "To enable Gaze for sudo, add a faillock preauth gate and pam_gaze.so manually:"
+        warn "$pam_file 中没有受支持的认证行；保留现有内容。"
+        say "要为 sudo 启用 Gaze，请手动添加 faillock 预认证检查和 pam_gaze.so："
         link "$PAM_DOCS_URL"
         return 0
     elif [ "$supports_insert" -ne 0 ]; then
-        warn "$pam_file has a custom auth rule before its password stack; leaving it unchanged."
-        say "This avoids making a successful face match skip an existing MFA or policy gate."
-        say "To enable Gaze for sudo, review the stack and add it manually:"
+        warn "$pam_file 的密码认证栈前有自定义规则；保留现有内容。"
+        say "这样可避免人脸匹配成功后跳过已有的多因素认证或策略检查。"
+        say "要为 sudo 启用 Gaze，请检查认证栈后手动添加："
         link "$PAM_DOCS_URL"
         return 0
     fi
@@ -596,16 +594,16 @@ configure_pam_arch() {
         { print }
     ' "$pam_file" >"$TMP/pam-sudo" &&
         $SUDO install -m 644 "$TMP/pam-sudo" "$pam_file" && {
-        ok "Configured $pam_file to use Gaze face authentication."
-        say "$pam_file belongs to the sudo package, so pacman will report it as"
-        say "modified and write .pacnew files on later sudo updates."
-        say "Delete the pam_gaze.so and faillock gate lines to opt out; Gaze will not put them back."
+        ok "已配置 $pam_file 使用 Gaze 人脸认证。"
+        say "$pam_file 属于 sudo 软件包，pacman 会将其报告为"
+        say "已修改，并在后续 sudo 更新时生成 .pacnew 文件。"
+        say "删除 pam_gaze.so 和 faillock 检查行即可禁用；Gaze 不会自动加回。"
         $SUDO mkdir -p /etc/gaze
         $SUDO grep -qxF "$pam_file" /etc/gaze/pam-arch.configured 2>/dev/null ||
             printf '%s\n' "$pam_file" | sudo tee -a /etc/gaze/pam-arch.configured >/dev/null
     } || {
-        warn "Could not configure PAM for sudo automatically."
-        say "To enable Gaze for sudo, add before the first auth line in $pam_file:"
+        warn "无法自动配置 sudo 的 PAM。"
+        say "要为 sudo 启用 Gaze，请在 $pam_file 的第一条认证行之前添加："
         cmd "-auth requisite pam_faillock.so preauth"
         cmd "auth    sufficient    pam_gaze.so"
         link "$PAM_DOCS_URL"
@@ -642,7 +640,7 @@ configure_authselect() {
     current_profile="$(printf '%s\n' "$current_authselect" | authselect_profile_id)"
 
     if ! authselect_profile_supports_gaze_select "$current_profile"; then
-        problem "Active authselect profile '$current_profile' is not replaced automatically; configure Gaze PAM manually to preserve the existing authentication backend."
+        problem "不会自动替换当前 authselect 配置“$current_profile”；请手动配置 Gaze PAM，以保留现有认证后端。"
         return 0
     fi
 
@@ -666,25 +664,25 @@ configure_authselect() {
 
     if [ "${OSTREE_PENDING:-0}" -eq 1 ]; then
         if arm_authselect_after_reboot "$preserved_features"; then
-            ok "The Gaze authselect profile will be selected on the next boot."
+            ok "下次启动时将选择 Gaze authselect 配置。"
         else
-            problem "Could not stage the authselect profile; after rebooting run: sudo authselect select gaze with-silent-lastlog --force"
+            problem "无法暂存 authselect 配置；请在重启后运行：sudo authselect select gaze with-silent-lastlog --force"
         fi
     elif $SUDO authselect select gaze with-silent-lastlog --force >/dev/null 2>&1; then
-        ok "Enabled the Gaze PAM authselect profile."
+        ok "已启用 Gaze PAM authselect 配置。"
         for feature in $preserved_features; do
             [ "$feature" = "with-silent-lastlog" ] && continue
             $SUDO authselect enable-feature "$feature" >/dev/null 2>&1 || true
         done
     else
-        problem "Could not enable the Gaze PAM authselect profile; run: sudo authselect select gaze with-silent-lastlog --force"
+        problem "无法启用 Gaze PAM authselect 配置；请运行：sudo authselect select gaze with-silent-lastlog --force"
     fi
 }
 
 configure_pam_opensuse() {
     if ! command -v pam-config >/dev/null 2>&1; then
-        warn "pam-config is not installed; skipping openSUSE PAM configuration."
-        say "Install pam-config and re-run this installer, or configure the Gaze PAM module manually."
+        warn "未安装 pam-config；跳过 openSUSE PAM 配置。"
+        say "请安装 pam-config 后重新运行安装器，或手动配置 Gaze PAM 模块。"
         link "$PAM_DOCS_URL"
         return 0
     fi
@@ -704,11 +702,11 @@ configure_pam_opensuse() {
 
     if [ "$gaze_active" -eq 1 ] || [ "$grosshack_active" -eq 1 ]; then
         if [ "$gaze_active" -eq 1 ] && [ "$grosshack_active" -eq 1 ]; then
-            ok "Gaze PAM sequential and grosshack modules are already enabled through pam-config."
+            ok "已通过 pam-config 启用 Gaze PAM 顺序认证和 grosshack 模块。"
         elif [ "$grosshack_active" -eq 1 ]; then
-            ok "Gaze PAM grosshack module is already enabled through pam-config."
+            ok "已通过 pam-config 启用 Gaze PAM grosshack 模块。"
         else
-            ok "Gaze PAM module is already enabled through pam-config."
+            ok "已通过 pam-config 启用 Gaze PAM 模块。"
         fi
         return 0
     fi
@@ -717,13 +715,13 @@ configure_pam_opensuse() {
     pam_config_error="$TMP/pam-config.err"
     if $SUDO pam-config --add --gaze </dev/null 2>"$pam_config_error" &&
         $SUDO pam-config --update </dev/null 2>>"$pam_config_error"; then
-        ok "Enabled the Gaze PAM module through pam-config."
+        ok "已通过 pam-config 启用 Gaze PAM 模块。"
     else
-        warn "Could not enable the Gaze PAM module through pam-config."
+        warn "无法通过 pam-config 启用 Gaze PAM 模块。"
         while IFS= read -r line; do
             [ -n "$line" ] && say "  $line"
         done <"$pam_config_error"
-        say "After installation, run:"
+        say "安装后请运行："
         cmd "sudo pam-config --add --gaze"
         cmd "sudo pam-config --update"
         link "$PAM_DOCS_URL"
@@ -762,7 +760,7 @@ record_pam_optout() {
     $SUDO test -e "$PAM_OPTOUT" && return 0
     $SUDO mkdir -p /etc/gaze
     printf '%s\n%s\n' \
-        "# Gaze installers and package scripts leave PAM alone while this file exists." \
+        "# Gaze 安装器s and package scripts leave PAM alone while this file exists." \
         "# Delete it and re-run the installer to add Gaze to PAM." |
         $SUDO tee "$PAM_OPTOUT" >/dev/null
     $SUDO chmod 644 "$PAM_OPTOUT" || true
@@ -787,7 +785,7 @@ arm_authselect_after_reboot() {
     } >"$TMP/finish-install.sh"
     cat >"$TMP/gaze-finish-install.service" <<EOF
 [Unit]
-Description=Select the Gaze authselect profile once its layered package is booted
+Description=软件包层启动后选择 Gaze authselect 配置
 ConditionPathExists=/usr/share/authselect/vendor/gaze
 
 [Service]
@@ -806,20 +804,20 @@ EOF
 enable_gazed() {
     if [ "${OSTREE_PENDING:-0}" -eq 1 ]; then
         if stage_systemd_unit /usr/lib/systemd/system/gazed.service; then
-            ok "The Gaze daemon will start with the next boot."
+            ok "Gaze 守护进程将在下次启动时运行。"
         else
-            problem "Could not stage the Gaze daemon; after rebooting run: sudo systemctl enable --now gazed"
+            problem "无法暂存 Gaze 守护进程；请在重启后运行：sudo systemctl enable --now gazed"
         fi
         return 0
     fi
     if [ ! -d /run/systemd/system ]; then
-        problem "systemd is not running here; start the daemon with: sudo systemctl enable --now gazed"
+        problem "当前未运行 systemd；请使用以下命令启动守护进程：sudo systemctl enable --now gazed"
         return 0
     fi
     if enable_output="$($SUDO systemctl enable --now gazed </dev/null 2>&1)"; then
-        ok "Enabled the Gaze daemon."
+        ok "已启用 Gaze 守护进程。"
     else
-        problem "Could not enable the Gaze daemon:"
+        problem "无法启用 Gaze 守护进程："
         printf '%s\n' "$enable_output" | sed 's/^/    /'
     fi
 }
@@ -830,24 +828,24 @@ verify_install() {
         sleep 2
         state="$(systemctl is-active gazed 2>/dev/null || true)"
         if [ "$state" = "active" ]; then
-            ok "The Gaze daemon is running."
+            ok "Gaze 守护进程正在运行。"
         else
-            problem "The Gaze daemon is ${state:-not running}; see: journalctl -u gazed -n 50"
+            problem "Gaze 守护进程状态为 ${state:-未运行}；查看日志：journalctl -u gazed -n 50"
         fi
     fi
     if [ "$NO_PAM" -eq 0 ] && ! grep -rqsE '^[[:space:]]*-?auth[[:space:]].*pam_gaze' /etc/pam.d/; then
-        problem "No PAM service uses pam_gaze yet, so sudo and login will not offer face authentication."
+        problem "尚无 PAM 服务使用 pam_gaze，因此 sudo 和登录界面不会提供人脸认证。"
     fi
 }
 
 fetch_repo_key() {
     key_path="$TMP/gundulabs-repo.asc"
     if ! curl --proto '=https' --tlsv1.2 -fsSL "${PKG_BASE_URL}/keys/gundulabs-repo.asc" -o "$key_path"; then
-        die "Could not download the repository signing key."
+        die "无法下载软件源签名密钥。"
     fi
     key_info="$TMP/gundulabs-repo.key-info"
     if ! gpg --batch --show-keys --with-colons "$key_path" >"$key_info"; then
-        die "Could not read the repository signing key."
+        die "无法读取软件源签名密钥。"
     fi
     # Validate the sole primary key while allowing its subkeys.
     # The `if` preserves the mismatch error under `set -e`.
@@ -861,15 +859,15 @@ fetch_repo_key() {
         actual_fpr=""
     fi
     if [ "$actual_fpr" != "$REPO_KEY_FPR" ]; then
-        fail "Repository signing key fingerprint mismatch."
-        fail "Expected: $REPO_KEY_FPR"
-        fail "Actual:   ${actual_fpr:-unknown}"
+        fail "软件源签名密钥指纹不匹配。"
+        fail "预期：$REPO_KEY_FPR"
+        fail "实际：${actual_fpr:-未知}"
         exit 1
     fi
     printf '%s\n' "$key_path"
 }
 
-title "Gaze installer"
+title "Gaze 安装器"
 echo ""
 
 # ── architecture ──────────────────────────────────────────────────────────────
@@ -878,15 +876,15 @@ ARCH="$(uname -m)"
 case "$ARCH" in
 x86_64) PKG_ARCH="x86_64" ;;
 aarch64) PKG_ARCH="aarch64" ;;
-*) die "Unsupported architecture: $ARCH" ;;
+*) die "不支持的架构：$ARCH" ;;
 esac
 
 # The prebuilt ONNX Runtime gazed links issues AVX2 unconditionally, so a miss is SIGILL
 # on every start rather than a recoverable error. Stop before enabling the service.
 if [ "$ARCH" = "x86_64" ] && ! grep -qw avx2 /proc/cpuinfo 2>/dev/null; then
-    fail "This CPU does not support AVX2, which the gazed daemon requires."
-    say "gazed would crash with an illegal instruction on every start (roughly pre-2013 Intel and pre-2015 AMD)."
-    say "Nothing has been installed."
+    fail "此 CPU 不支持 gazed 守护进程所需的 AVX2。"
+    say "gazed 每次启动都会因非法指令崩溃（大致为 2013 年前的 Intel 和 2015 年前的 AMD CPU）。"
+    say "尚未安装任何内容。"
     link "https://gaze.gundulabs.com/guide/troubleshooting"
     exit 1
 fi
@@ -894,7 +892,7 @@ fi
 # ── distro detection ──────────────────────────────────────────────────────────
 
 if [ ! -f /etc/os-release ]; then
-    die "Cannot detect Linux distribution (missing /etc/os-release)"
+    die "无法识别 Linux 发行版（缺少 /etc/os-release）"
 fi
 # shellcheck disable=SC1091
 . /etc/os-release
@@ -959,8 +957,8 @@ supported_fedora_compatible_version() {
 }
 
 if ! is_rpm && ! is_deb && ! is_arch; then
-    fail "Unsupported distribution: $DISTRO_ID"
-    say "Supported: Ubuntu 24.04/25.10/26.04/26.10, Debian 13 and 14 (forky/testing), Fedora-compatible 42/43/44/45 systems (including rpm-ostree image-based distros like Silverblue, Bazzite, and Kinoite), openSUSE Tumbleweed, Arch Linux, and Arch-compatible AUR distros"
+    fail "不支持的发行版：$DISTRO_ID"
+    say "支持：Ubuntu 24.04/25.10/26.04/26.10、Debian 13 和 14（forky/testing）、Fedora 兼容的 42/43/44/45 系统（含 Silverblue、Bazzite、Kinoite 等 rpm-ostree 镜像系统）、openSUSE Tumbleweed、Arch Linux 及兼容 AUR 的发行版"
     exit 1
 fi
 
@@ -974,26 +972,26 @@ if is_deb && ! supported_deb_suite "$DISTRO_CODENAME"; then
 fi
 
 if is_deb && ! supported_deb_suite "$DISTRO_CODENAME"; then
-    fail "Unsupported Debian/Ubuntu release: ${DISTRO_CODENAME:-unknown}"
-    say "Supported apt suites: noble, questing, resolute, stonking, trixie, forky"
+    fail "不支持的 Debian/Ubuntu 版本：${DISTRO_CODENAME:-未知}"
+    say "支持的 apt 套件：noble、questing、resolute、stonking、trixie、forky"
     exit 1
 fi
 
 if is_rpm && ! is_fedora_compatible && ! is_opensuse_tumbleweed; then
-    fail "Unsupported RPM distribution: ${NAME:-$DISTRO_ID}"
-    say "This installer supports Fedora-compatible RPM distributions and openSUSE Tumbleweed."
+    fail "不支持的 RPM 发行版：${NAME:-$DISTRO_ID}"
+    say "此安装器支持 Fedora 兼容的 RPM 发行版和 openSUSE Tumbleweed。"
     exit 1
 fi
 
 if is_fedora_compatible && ! supported_fedora_compatible_version; then
-    fail "Unsupported ${NAME:-Fedora-compatible distribution} version: ${DISTRO_VERSION_ID:-unknown}"
-    say "Fedora-compatible packages are currently available for versions 42, 43, 44, and 45."
+    fail "不支持的 ${NAME:-Fedora 兼容发行版} 版本：${DISTRO_VERSION_ID:-未知}"
+    say "目前为 Fedora 兼容的 42、43、44、45 版本提供软件包。"
     exit 1
 fi
 
 if is_opensuse_tumbleweed && [ "$ARCH" != "x86_64" ]; then
-    fail "Unsupported openSUSE Tumbleweed architecture: $ARCH"
-    say "openSUSE Tumbleweed packages are currently available for x86_64 only."
+    fail "不支持的 openSUSE Tumbleweed 架构：$ARCH"
+    say "目前仅为 openSUSE Tumbleweed 的 x86_64 架构提供软件包。"
     exit 1
 fi
 
@@ -1018,13 +1016,13 @@ require_published_repository() {
     metadata_status="$(curl --proto '=https' --tlsv1.2 -sS -I -o /dev/null -w '%{http_code}' --max-time 20 "$metadata_url" 2>/dev/null || true)"
     case "$metadata_status" in
     404 | 403)
-        fail "No Gaze package repository has been published for this platform yet."
-        say "Expected repository metadata at:"
+        fail "此平台尚未发布 Gaze 软件源。"
+        say "预期的软件源元数据位置："
         link "$metadata_url"
         say ""
-        say "This platform is supported by the installer, but its packages have not"
-        say "shipped in a release yet. Nothing has been changed on this system."
-        say "Please report it so a release can be cut:"
+        say "安装器支持此平台，但对应软件包尚未"
+        say "随版本发布。系统尚未发生更改。"
+        say "请反馈此问题，以便发布对应软件包："
         link "https://github.com/GunduLabs/gaze/issues"
         exit 1
         ;;
@@ -1034,11 +1032,11 @@ require_published_repository() {
 require_published_repository
 
 if is_arch && [ "$(id -u)" -eq 0 ]; then
-    die "AUR helpers refuse to build as root. Re-run this installer as your normal user."
+    die "AUR 助手不允许以 root 身份构建。请以普通用户身份重新运行安装器。"
 fi
 
 if [ "$NO_PAM" -eq 0 ] && [ -e "$PAM_OPTOUT" ]; then
-    say "Leaving PAM alone: $PAM_OPTOUT exists. Delete it and re-run to add Gaze to PAM."
+    say "保留 PAM 配置：存在 $PAM_OPTOUT。删除此文件并重新运行可将 Gaze 添加到 PAM。"
     NO_PAM=1
 fi
 
@@ -1047,31 +1045,31 @@ fi
 plan() { printf '  %s\n' "• $*"; }
 
 if is_deb; then
-    say "Detected platform: ${BOLD}Debian/Ubuntu ${DISTRO_CODENAME}${RESET} (${PKG_ARCH}), package manager: apt"
+    say "检测到平台： ${BOLD}Debian/Ubuntu ${DISTRO_CODENAME}${RESET} (${PKG_ARCH}), 包管理器： apt"
     STEP_TOTAL=5
     echo ""
-    title "This will:"
-    plan "Configure the apt repository"
+    title "将执行以下操作："
+    plan "配置 apt 软件源"
     if want_gnome_extension_package; then
-        plan "Install gaze, gaze-gui, and gaze-gnome-extension"
-        plan "Enable GNOME lock screen auth for this user when possible"
+        plan "安装 gaze、gaze-gui 和 gaze-gnome-extension"
+        plan "在可用时为此用户启用 GNOME 锁屏认证"
     elif want_cinnamon_extension_package; then
-        plan "Install gaze, gaze-gui, and gaze-cinnamon-extension"
-        plan "Enable Cinnamon extension for this user when possible"
+        plan "安装 gaze、gaze-gui 和 gaze-cinnamon-extension"
+        plan "在可用时为此用户启用 Cinnamon 扩展"
     elif is_kde_session; then
-        plan "Install gaze, gaze-gui, and gaze-kde (hands-free KDE lock screen face unlock)"
+        plan "安装 gaze、gaze-gui 和 gaze-kde（KDE 锁屏免按键人脸解锁）"
     else
-        plan "Install gaze and gaze-gui (skip desktop extension; GNOME/Cinnamon not detected)"
+        plan "安装 gaze 和 gaze-gui（未检测到 GNOME/Cinnamon，跳过桌面扩展）"
     fi
     if want_hyprlock_setup; then
-        plan "Install gaze-hyprlock and configure hyprlock"
+        plan "安装 gaze-hyprlock 并配置 hyprlock"
     fi
     if [ "$NO_PAM" -eq 1 ]; then
-        plan "Leave PAM unchanged (--no-pam)"
+        plan "保留 PAM 配置（--no-pam）"
     else
-        plan "Set up the PAM modules through pam-auth-update if available"
+        plan "在可用时通过 pam-auth-update 配置 PAM 模块"
     fi
-    plan "Enable the Gaze daemon"
+    plan "启用 Gaze 守护进程"
 elif is_rpm; then
     if is_opensuse_tumbleweed; then
         need zypper
@@ -1084,61 +1082,61 @@ elif is_rpm; then
     else
         RPM_TOOL="yum"
     fi
-    say "Detected platform: ${BOLD}${NAME:-RPM-compatible distribution} ${DISTRO_VERSION_ID}${RESET} (${PKG_ARCH}), package manager: ${RPM_TOOL}"
+    say "检测到平台： ${BOLD}${NAME:-RPM 兼容发行版} ${DISTRO_VERSION_ID}${RESET} (${PKG_ARCH}), 包管理器： ${RPM_TOOL}"
     STEP_TOTAL=6
     echo ""
-    title "This will:"
-    plan "Configure the package repository"
+    title "将执行以下操作："
+    plan "配置软件源"
     if want_gnome_extension_package; then
-        plan "Install gaze, gaze-gui, and gaze-gnome-extension"
-        plan "Enable GNOME lock screen auth for this user when possible"
+        plan "安装 gaze、gaze-gui 和 gaze-gnome-extension"
+        plan "在可用时为此用户启用 GNOME 锁屏认证"
     elif want_cinnamon_extension_package; then
-        plan "Install gaze, gaze-gui, and gaze-cinnamon-extension"
-        plan "Enable Cinnamon extension for this user when possible"
+        plan "安装 gaze、gaze-gui 和 gaze-cinnamon-extension"
+        plan "在可用时为此用户启用 Cinnamon 扩展"
     elif is_kde_session; then
-        plan "Install gaze, gaze-gui, and gaze-kde (hands-free KDE lock screen face unlock)"
+        plan "安装 gaze、gaze-gui 和 gaze-kde（KDE 锁屏免按键人脸解锁）"
     else
-        plan "Install gaze and gaze-gui (skip desktop extension; GNOME/Cinnamon not detected)"
+        plan "安装 gaze 和 gaze-gui（未检测到 GNOME/Cinnamon，跳过桌面扩展）"
     fi
     if want_hyprlock_setup; then
-        plan "Install gaze-hyprlock and configure hyprlock"
+        plan "安装 gaze-hyprlock 并配置 hyprlock"
     fi
     if [ "$NO_PAM" -eq 1 ]; then
-        plan "Leave PAM unchanged (--no-pam)"
+        plan "保留 PAM 配置（--no-pam）"
     elif is_opensuse_tumbleweed; then
-        plan "Enable the Gaze PAM module through pam-config if available"
+        plan "在可用时通过 pam-config 启用 Gaze PAM 模块"
     else
-        plan "Enable the Gaze PAM profile through authselect if available"
+        plan "在可用时通过 authselect 启用 Gaze PAM 配置"
     fi
-    plan "Enable the Gaze daemon"
+    plan "启用 Gaze 守护进程"
 elif is_arch; then
-    say "Detected platform: ${BOLD}Arch-compatible${RESET} (${PKG_ARCH}), package manager: AUR helper (yay/paru)"
+    say "检测到平台： ${BOLD}Arch 兼容系统${RESET} (${PKG_ARCH}), 包管理器： AUR 助手（yay/paru）"
     STEP_TOTAL=5
     echo ""
-    title "This will:"
+    title "将执行以下操作："
     if want_gnome_extension_package; then
-        plan "Install gaze-bin, gaze-gui-bin, and gaze-gnome-extension-bin from the AUR"
-        plan "Enable GNOME lock screen auth for this user when possible"
+        plan "从 AUR 安装 gaze-bin、gaze-gui-bin 和 gaze-gnome-extension-bin"
+        plan "在可用时为此用户启用 GNOME 锁屏认证"
     elif want_cinnamon_extension_package; then
-        plan "Install gaze-bin, gaze-gui-bin, and gaze-cinnamon-extension-bin from the AUR"
-        plan "Enable Cinnamon extension for this user when possible"
+        plan "从 AUR 安装 gaze-bin、gaze-gui-bin 和 gaze-cinnamon-extension-bin"
+        plan "在可用时为此用户启用 Cinnamon 扩展"
     elif is_kde_session; then
-        plan "Install gaze-bin, gaze-gui-bin, and gaze-kde-bin from the AUR (hands-free KDE lock screen face unlock)"
+        plan "从 AUR 安装 gaze-bin、gaze-gui-bin 和 gaze-kde-bin（KDE 锁屏免按键人脸解锁）"
     else
-        plan "Install gaze-bin and gaze-gui-bin from the AUR (skip desktop extension; GNOME/Cinnamon not detected)"
+        plan "从 AUR 安装 gaze-bin 和 gaze-gui-bin（未检测到 GNOME/Cinnamon，跳过桌面扩展）"
     fi
     if is_omarchy_session; then
-        plan "Install gaze-omarchy-bin from the AUR and enable it for this user while unlocked"
+        plan "从 AUR 安装 gaze-omarchy-bin，并在已解锁桌面为此用户启用"
     fi
     if want_hyprlock_setup; then
-        plan "Install gaze-hyprlock-bin and configure hyprlock"
+        plan "安装 gaze-hyprlock-bin 并配置 hyprlock"
     fi
     if [ "$NO_PAM" -eq 1 ]; then
-        plan "Leave PAM unchanged (--no-pam)"
+        plan "保留 PAM 配置（--no-pam）"
     else
-        plan "Configure PAM for sudo"
+        plan "配置 sudo 的 PAM"
     fi
-    plan "Enable the Gaze daemon"
+    plan "启用 Gaze 守护进程"
 fi
 
 prompt_continue
@@ -1146,14 +1144,14 @@ prompt_continue
 # ── clean up old repo files ──────────────────────────────────────────────────
 if is_deb; then
     if [ -f /etc/apt/sources.list.d/gundulabs.list ] || [ -f /usr/share/keyrings/gundulabs-archive-keyring.gpg ]; then
-        say "Refreshing repository configuration..."
+        say "正在刷新软件源配置…"
         $SUDO rm -f /etc/apt/sources.list.d/gundulabs.list /usr/share/keyrings/gundulabs-archive-keyring.gpg
     fi
 elif is_rpm; then
     if [ -f /etc/yum.repos.d/gundulabs.repo ] ||
         [ -f /etc/zypp/repos.d/gundulabs.repo ] ||
         [ -f /etc/pki/rpm-gpg/RPM-GPG-KEY-gundulabs ]; then
-        say "Refreshing repository configuration..."
+        say "正在刷新软件源配置…"
         $SUDO rm -f /etc/yum.repos.d/gundulabs.repo /etc/zypp/repos.d/gundulabs.repo /etc/pki/rpm-gpg/RPM-GPG-KEY-gundulabs
     fi
 fi
@@ -1167,7 +1165,7 @@ if [ "$NO_PAM" -eq 1 ]; then
 fi
 
 if is_deb; then
-    step "Configuring apt repository"
+    step "正在配置 apt 软件源"
     KEY_PATH="$(fetch_repo_key)"
     gpg --dearmor --yes --output "$TMP/gundulabs-archive-keyring.gpg" "$KEY_PATH"
     $SUDO mkdir -p -m 0755 /usr/share/keyrings
@@ -1179,10 +1177,10 @@ if is_deb; then
     printf '%s\n' "deb [arch=${DEB_ARCH} signed-by=/usr/share/keyrings/gundulabs-archive-keyring.gpg] ${PKG_BASE_URL}/deb ${DISTRO_CODENAME} main" |
         $SUDO tee /etc/apt/sources.list.d/gundulabs.list >/dev/null
 
-    step "Updating package index"
+    step "正在更新软件包索引"
     $SUDO apt-get update </dev/null
 
-    step "Installing packages"
+    step "正在安装软件包"
     DEB_PKGS="gaze gaze-gui"
     if want_gnome_extension_package; then
         DEB_PKGS="$DEB_PKGS gaze-gnome-extension"
@@ -1200,17 +1198,17 @@ if is_deb; then
     fi
     if [ "$NO_PAM" -eq 1 ] && command -v pam-auth-update >/dev/null 2>&1; then
         $SUDO env DEBIAN_FRONTEND=noninteractive pam-auth-update --remove gaze gaze-simultaneous gaze-retry </dev/null ||
-            problem "Could not remove the Gaze PAM profiles; run: sudo pam-auth-update --remove gaze"
+            problem "无法移除 Gaze PAM 配置；请运行：sudo pam-auth-update --remove gaze"
     fi
 
-    step "Desktop integration"
+    step "桌面集成"
     enable_desktop_integrations
 
-    step "Enabling Gaze daemon"
+    step "正在启用 Gaze 守护进程"
     enable_gazed
 
 elif is_rpm; then
-    step "Configuring repository"
+    step "正在配置软件源"
     # Verify and install the key before configuring the repository.
     KEY_PATH="$(fetch_repo_key)"
     $SUDO mkdir -p /etc/pki/rpm-gpg
@@ -1249,7 +1247,7 @@ gpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-gundulabs
 EOF
     fi
 
-    step "Refreshing repository metadata"
+    step "正在刷新软件源元数据"
     if [ "$RPM_TOOL" = "zypper" ]; then
         $SUDO zypper --non-interactive refresh gundulabs </dev/null
     elif [ "$RPM_TOOL" = "rpm-ostree" ]; then
@@ -1260,7 +1258,7 @@ EOF
         $SUDO yum makecache </dev/null
     fi
 
-    step "Installing packages"
+    step "正在安装软件包"
     RPM_PKGS="gaze gaze-gui"
     if is_opensuse_tumbleweed; then
         # Minimal Tumbleweed installations may not include pam-config.
@@ -1276,12 +1274,12 @@ EOF
         RPM_PKGS="$RPM_PKGS gaze-hyprlock"
     fi
     if [ "$RPM_TOOL" = "rpm-ostree" ]; then
-        ostree_install $RPM_PKGS || die "rpm-ostree could not layer the Gaze packages."
+        ostree_install $RPM_PKGS || die "rpm-ostree 无法添加 Gaze 软件包层。"
         OSTREE_PENDING=$OSTREE_LAST_PENDING
         if [ "$OSTREE_PENDING" -eq 1 ]; then
-            ok "Layered packages via rpm-ostree; they take effect after a reboot."
+            ok "已通过 rpm-ostree 添加软件包层；重启后生效。"
         else
-            ok "Layered and live-applied packages via rpm-ostree."
+            ok "已通过 rpm-ostree 添加软件包层并实时应用。"
         fi
     elif [ "$RPM_TOOL" = "zypper" ]; then
         $SUDO zypper --non-interactive install $RPM_PKGS </dev/null
@@ -1295,7 +1293,7 @@ EOF
         if [ "$RPM_TOOL" = "rpm-ostree" ]; then
             install_kde_packages ostree_install $KDE_PKGS
             if [ "${KDE_PACKAGES_INSTALLED:-0}" -eq 1 ] && [ "$OSTREE_LAST_PENDING" -eq 1 ] && [ "$OSTREE_PENDING" -eq 0 ]; then
-                warn "gaze-kde was layered for the next boot; reboot to get KDE lock screen face unlock."
+                warn "已添加 gaze-kde 软件包层；重启后可使用 KDE 锁屏人脸解锁。"
             fi
         elif [ "$RPM_TOOL" = "zypper" ]; then
             install_kde_packages $SUDO zypper --non-interactive install $KDE_PKGS </dev/null
@@ -1306,23 +1304,23 @@ EOF
         fi
     fi
 
-    step "Configuring PAM"
+    step "正在配置 PAM"
     if [ "$NO_PAM" -eq 1 ]; then
-        say "Leaving PAM unchanged."
+        say "保留 PAM 配置。"
     elif is_opensuse_tumbleweed; then
         configure_pam_opensuse
     else
         configure_authselect
     fi
 
-    step "Desktop integration"
+    step "桌面集成"
     enable_desktop_integrations
 
-    step "Enabling Gaze daemon"
+    step "正在启用 Gaze 守护进程"
     enable_gazed
 
 elif is_arch; then
-    step "Checking for AUR helper"
+    step "正在检查 AUR 助手"
     AUR_HELPER=""
     for helper in yay paru; do
         if command -v "$helper" >/dev/null 2>&1; then
@@ -1332,22 +1330,22 @@ elif is_arch; then
     done
 
     if [ -z "$AUR_HELPER" ]; then
-        fail "No AUR helper found (tried: yay, paru)."
+        fail "未找到 AUR 助手（已尝试 yay、paru）。"
         say ""
-        say "Gaze is distributed via the AUR and requires an AUR helper to install."
-        say "We recommend yay. To install it:"
+        say "Gaze 通过 AUR 分发，需要 AUR 助手安装。"
+        say "推荐使用 yay。安装命令："
         say ""
         cmd "sudo pacman -S --needed base-devel git"
         cmd "git clone https://aur.archlinux.org/yay.git"
         cmd "cd yay && makepkg -si"
         say ""
-        say "Then re-run this installer."
+        say "然后重新运行此安装器。"
         exit 1
     fi
 
-    ok "Found AUR helper: $AUR_HELPER"
+    ok "已找到 AUR 助手：$AUR_HELPER"
 
-    step "Installing packages from AUR"
+    step "正在从 AUR 安装软件包"
     warn_replacing_bare_gaze_package
     AUR_PKGS="gaze-bin gaze-gui-bin"
     if want_gnome_extension_package; then
@@ -1372,17 +1370,17 @@ elif is_arch; then
         install_kde_packages "$AUR_HELPER" -S --needed --noconfirm $KDE_PKGS </dev/null
     fi
 
-    step "Configuring PAM"
+    step "正在配置 PAM"
     if [ "$NO_PAM" -eq 1 ]; then
-        say "Leaving PAM unchanged."
+        say "保留 PAM 配置。"
     else
         configure_pam_arch
     fi
 
-    step "Desktop integration"
+    step "桌面集成"
     enable_desktop_integrations
 
-    step "Enabling Gaze daemon"
+    step "正在启用 Gaze 守护进程"
     enable_gazed
 fi
 
@@ -1391,11 +1389,11 @@ fi
 verify_install
 
 if [ "${OSTREE_PENDING:-0}" -eq 1 ]; then
-    printf '\n%s\n\n' "${YELLOW}${BOLD}! Gaze is staged; reboot to finish installing${RESET}"
+    printf '\n%s\n\n' "${YELLOW}${BOLD}! Gaze 已暂存；请重启以完成安装${RESET}"
 elif [ -z "$PROBLEMS" ]; then
-    printf '\n%s\n\n' "${GREEN}${BOLD}✓ Gaze installed successfully${RESET}"
+    printf '\n%s\n\n' "${GREEN}${BOLD}✓ Gaze 安装成功${RESET}"
 else
-    printf '\n%s\n' "${YELLOW}${BOLD}! Gaze installed, but some steps need attention:${RESET}"
+    printf '\n%s\n' "${YELLOW}${BOLD}! Gaze 已安装，但以下步骤需要处理：${RESET}"
     printf '%s\n' "$PROBLEMS"
 fi
 
@@ -1405,54 +1403,54 @@ next_step() {
     printf '  %s. %s%-22s%s %s%s%s\n' "$NEXT_STEP" "$BOLD" "$1" "$RESET" "$DIM" "$2" "$RESET"
 }
 
-title "Next steps"
+title "后续步骤"
 if [ "${OSTREE_PENDING:-0}" -eq 1 ]; then
-    next_step "Reboot" "rpm-ostree applies the packages; the daemon and PAM finish at boot"
+    next_step "reboot" "rpm-ostree 将应用软件包，并在启动时完成守护进程和 PAM 配置"
 fi
 if [ -n "$PROBLEMS" ]; then
-    next_step "gaze doctor" "diagnose the steps above"
+    next_step "gaze doctor" "诊断上述步骤"
 fi
-next_step "gaze config" "configure your camera and security settings"
-next_step "gaze add-face <name>" "enroll your face"
-next_step "gaze auth" "test it in the terminal"
+next_step "gaze config" "配置摄像头和安全设置"
+next_step "gaze add-face <name>" "录入人脸"
+next_step "gaze auth" "在终端中测试"
 if want_gnome_extension_package && [ "${OSTREE_PENDING:-0}" -eq 0 ]; then
-    next_step "Reboot" "GNOME Shell and GDM only pick up the new extension at startup"
+    next_step "reboot" "GNOME Shell 和 GDM 仅在启动时加载新扩展"
 elif want_cinnamon_extension_package; then
-    next_step "Restart Cinnamon" "Press Alt+F2, type r, and press Enter to reload Cinnamon"
+    next_step "Alt+F2, r" "按 Alt+F2，输入 r 后按回车键重新加载 Cinnamon"
 elif is_omarchy_session; then
-    next_step "gaze-omarchy doctor" "check Omarchy lock integration after enrollment"
+    next_step "gaze-omarchy doctor" "录入后检查 Omarchy 锁屏集成"
 fi
 say ""
-title "Try it"
-say "  ${BOLD}gaze-gui${RESET}               ${DIM}open the settings app${RESET}"
+title "试一试"
+say "  ${BOLD}gaze-gui${RESET}               ${DIM}打开设置应用${RESET}"
 if want_gnome_extension_package || want_cinnamon_extension_package || is_kde_session || is_omarchy_session || want_hyprlock_setup; then
-    say "  ${BOLD}Lock your screen${RESET}       ${DIM}then look at the camera${RESET}"
+    say "  ${BOLD}锁定屏幕${RESET}       ${DIM}然后看向摄像头${RESET}"
 fi
 say ""
-title "Desktop integration"
+title "桌面集成"
 if want_gnome_extension_package; then
-    ok "GNOME lock screen face unlock: enabled after reboot"
-    say "  GDM login face authentication: off"
+    ok "GNOME 锁屏人脸解锁：重启后启用"
+    say "  GDM 登录人脸认证：关闭"
 elif want_cinnamon_extension_package; then
-    ok "Cinnamon extension: enabled for this user"
+    ok "Cinnamon 扩展：已为此用户启用"
 elif is_omarchy_session; then
-    say "  Run gaze-omarchy doctor to check lock integration."
+    say "  运行 gaze-omarchy doctor 检查锁屏集成。"
     link "$OMARCHY_DOCS_URL"
 elif is_kde_session; then
     if [ "${KDE_PACKAGES_INSTALLED:-0}" -eq 1 ]; then
-        ok "KDE Plasma lock screen face unlock: gaze-kde installed"
-        say "  ${DIM}Login greeter stays off until you enable it:${RESET}"
+        ok "KDE Plasma 锁屏人脸解锁：已安装 gaze-kde"
+        say "  ${DIM}登录界面的人脸认证保持关闭，启用命令：${RESET}"
     else
-        warn "KDE Plasma lock screen face unlock: gaze-kde not installed"
-        say "  ${DIM}Install it to get hands-free lock screen face unlock:${RESET}"
+        warn "KDE Plasma 锁屏人脸解锁：未安装 gaze-kde"
+        say "  ${DIM}安装后可获得免按键锁屏人脸解锁：${RESET}"
     fi
     link "$KDE_DOCS_URL"
 else
-    say "  Desktop extension skipped (GNOME/Cinnamon desktop not detected); see the PAM guide:"
+    say "  已跳过桌面扩展（未检测到 GNOME/Cinnamon 桌面）；参见 PAM 指南："
     link "$PAM_DOCS_URL"
 fi
 if want_hyprlock_setup; then
-    ok "hyprlock: configured (auth.pam.module = hyprlock-gaze)"
+    ok "hyprlock：已配置（auth.pam.module = hyprlock-gaze）"
 fi
 say ""
 }

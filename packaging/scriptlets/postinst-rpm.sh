@@ -14,20 +14,20 @@ cpu_lacks_avx2() {
 
 warn_missing_avx2() {
 	cpu_lacks_avx2 || return 0
-	printf '\n\033[1;33m[Gaze Notice]\033[0m This CPU does not support AVX2.\n' >&2
-	printf 'The gazed daemon cannot run here: it would crash with an illegal instruction\n' >&2
-	printf 'on every start. The CLI and PAM modules are installed, but face authentication\n' >&2
-	printf 'will not work. gazed has been left stopped.\n' >&2
-	printf 'See https://gaze.gundulabs.com/guide/troubleshooting\n\n' >&2
+	printf '\n\033[1;33m[Gaze 提示]\033[0m 此 CPU 不支持 AVX2。\n' >&2
+	printf 'gazed 守护进程无法在此设备运行：每次启动都会因非法指令崩溃。\n' >&2
+	printf '命令行和 PAM 模块已安装，但人脸认证\n' >&2
+	printf '无法工作。gazed 已保持停止状态。\n' >&2
+	printf '参见 https://gaze.gundulabs.com/guide/troubleshooting\n\n' >&2
 }
 
 check_deprecated_pam_grosshack() {
 	if [ -d /etc/pam.d ] && grep -rnE '^[[:space:]]*[^#].*pam_gaze_grosshack\.so' /etc/pam.d/ >/dev/null 2>&1; then
-		printf '\n\033[1;33m[Gaze Notice]\033[0m Found legacy pam_gaze_grosshack.so in /etc/pam.d/:\n' >&2
+		printf '\n\033[1;33m[Gaze 提示]\033[0m 在 /etc/pam.d/ 中发现旧版 pam_gaze_grosshack.so：\n' >&2
 		grep -rnE '^[[:space:]]*[^#].*pam_gaze_grosshack\.so' /etc/pam.d/ 2>/dev/null | head -n 5 | sed 's/^/  /' >&2
-		printf 'This module is deprecated and will be removed in a future release.\n' >&2
-		printf 'Please update your PAM configuration to use: pam_gaze.so simultaneous\n' >&2
-		printf 'Run "gaze doctor" for more information.\n\n' >&2
+		printf '此模块已弃用，将在未来版本中移除。\n' >&2
+		printf '请更新 PAM 配置，改用：pam_gaze.so simultaneous\n' >&2
+		printf '运行“gaze doctor”查看详细信息。\n\n' >&2
 	fi
 }
 
@@ -66,10 +66,10 @@ configure_pam_suse() {
 	if ! pam-config -q --gaze 2>/dev/null | grep -q '^auth:' &&
 		! pam-config -q --gaze_grosshack 2>/dev/null | grep -q '^auth:'; then
 		if ! pam_config_error="$(pam-config -a --gaze 2>&1)"; then
-			printf '\n\033[1;33m[Gaze Notice]\033[0m Could not add Gaze to the common PAM stack:\n' >&2
+			printf '\n\033[1;33m[Gaze 提示]\033[0m 无法将 Gaze 添加到公共 PAM 认证栈：\n' >&2
 			printf '%s\n' "$pam_config_error" | sed 's/^/  /' >&2
-			printf 'sudo and polkit will not use face authentication until this succeeds.\n' >&2
-			printf 'Run "sudo pam-config -a --gaze" and then "gaze doctor".\n\n' >&2
+			printf '完成此配置后，sudo 和 polkit 才能使用人脸认证。\n' >&2
+			printf '请运行“sudo pam-config -a --gaze”，再运行“gaze doctor”。\n\n' >&2
 		fi
 	fi
 }

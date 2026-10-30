@@ -56,6 +56,22 @@ const CINNAMON_PAM_SERVICES = ["polkit-1", "cinnamon"];
 const safeGettext = (str) => {
   if (!str) return str;
   const chinese = {
+    "Face Verified.": "人脸已验证。",
+    "Face Verified. Press Enter to confirm.": "人脸已验证。按回车键确认。",
+    "Face Verified. Press Enter to confirm, Esc to cancel.": "人脸已验证。按回车键确认，Esc 键取消。",
+    "Face Verified. Press Enter to continue.": "人脸已验证。按回车键继续。",
+    "Face Verified. Type 'yes' to confirm.": "人脸已验证。输入 yes 以确认。",
+    "Please look at the camera": "请看向摄像头",
+    "Please look at the camera or enter password": "请看向摄像头或输入密码",
+    "Password incorrect. Please look at the camera": "密码错误。请看向摄像头",
+    "Face not recognized. Enter your password.": "未识别到匹配人脸。请输入密码。",
+    "Face not detected. Enter your password.": "未检测到人脸。请输入密码。",
+    "Too dark for face authentication. Enter your password.": "光线过暗，无法进行人脸认证。请输入密码。",
+    "Face authentication timed out. Enter your password.": "人脸认证超时。请输入密码。",
+    "Face authentication unavailable. Enter your password.": "人脸认证不可用。请输入密码。",
+    "Password:": "密码：",
+    "Password: ": "密码：",
+
     "Sorry, face authentication did not work. Please try again.": "抱歉，人脸认证未成功。请重试。",
     "You reached the maximum face authentication attempts, please try another method": "已达到人脸认证尝试次数上限，请尝试其他方式",
     "Face authentication failed. Please enter your password.": "人脸认证失败。请输入密码。",
@@ -92,7 +108,9 @@ const isConfirmationMessage = (text) => {
   const trimmed = text?.trim();
   return (
     trimmed === GAZE_REQUIRE_CONFIRMATION ||
-    trimmed === CONFIRMATION_QUESTION
+    trimmed === CONFIRMATION_QUESTION ||
+    trimmed === "人脸已验证。按回车键确认。" ||
+    trimmed === "人脸已验证。按 Enter 确认。"
   );
 };
 
@@ -103,6 +121,12 @@ const isCameraHintMessage = (text) => {
     trimmed === GAZE_MSG_LOOK_CAMERA ||
     trimmed === GAZE_MSG_LOOK_OR_PASSWORD ||
     trimmed === FACE_HINT_TEXT ||
+    trimmed === "（或看向摄像头）" ||
+    trimmed === "请看向摄像头" ||
+    trimmed === "请看向摄像头..." ||
+    trimmed === "请看向摄像头或输入密码" ||
+    trimmed === "Please look at the camera" ||
+    trimmed === "Please look at the camera or enter password" ||
     trimmed === "Please look at the camera..." ||
     trimmed.startsWith("GAZE_MSG_LOOK")
   );
@@ -111,7 +135,8 @@ const isCameraHintMessage = (text) => {
 const isFaceVerifiedMessage = (text) => {
   if (!text) return false;
   const trimmed = text.trim();
-  return trimmed === GAZE_MSG_FACE_VERIFIED;
+  return trimmed === GAZE_MSG_FACE_VERIFIED ||
+    trimmed === "人脸已验证。" || trimmed === "Face Verified.";
 };
 
 const INTERNAL_ERROR_MAP = new Map([
@@ -167,7 +192,7 @@ const translatePamError = (text) => {
       "Face authentication failed. Please enter your password."
     );
   }
-  return text;
+  return safeGettext(text);
 };
 
 const FACE_STATUS_UPDATES = new Set([
@@ -662,7 +687,7 @@ class GazeCinnamonExtension {
           return;
         }
 
-        if (FACE_STATUS_UPDATES.has(trimmed)) {
+        if (FACE_STATUS_UPDATES.has(safeGettext(trimmed))) {
           showFaceHint(this, trimmed);
           return;
         }
@@ -672,7 +697,7 @@ class GazeCinnamonExtension {
           dialogProto._gazeOriginalShowInfo.call(this, session, text);
         } else {
           this._passwordEntry?.set_text("");
-          this._infoMessageLabel?.set_text(text);
+          this._infoMessageLabel?.set_text(safeGettext(text));
           this._infoMessageLabel?.show();
           this._errorMessageLabel?.hide();
           this._nullMessageLabel?.hide();
@@ -711,14 +736,14 @@ class GazeCinnamonExtension {
             return;
           }
 
-          let hintText = "Password";
+          let hintText = safeGettext("Password");
           if (request) {
             if (
               trimmed?.startsWith("GAZE_MSG_") ||
               isCameraHintMessage(trimmed) ||
               trimmed === "Password:" ||
               trimmed === "Password: " ||
-              /password/i.test(trimmed)
+              (trimmed === "密码：" || /password/i.test(trimmed))
             ) {
               hintText = safeGettext("Password") || "Password";
             } else {
@@ -833,7 +858,7 @@ class GazeCinnamonExtension {
           ) || "Face authentication failed. Please enter your password.";
         return;
       }
-      if (trimmed && FACE_STATUS_UPDATES.has(trimmed)) {
+      if (trimmed && FACE_STATUS_UPDATES.has(safeGettext(trimmed))) {
         this._infoLabel.text = safeGettext(trimmed) || trimmed;
         return;
       }

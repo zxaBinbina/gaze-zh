@@ -5,5 +5,5 @@
 Title=Gundu Labs
 Url=https://packages.gundulabs.com/flatpak/repo/
 Homepage=https://gaze.gundulabs.com
-Description=Flatpak repository for Gaze
+Description=Gaze 的 Flatpak 软件源
 DefaultBranch=stable

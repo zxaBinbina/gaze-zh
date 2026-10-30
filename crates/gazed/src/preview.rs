@@ -69,7 +69,7 @@ impl PreviewStream {
                     Ok(jpeg) => {
                         let _ = tx.try_send(jpeg);
                     }
-                    Err(err) => tracing::debug!(%err, "Skipped an enrollment preview frame"),
+                    Err(err) => tracing::debug!(%err, "已跳过一帧录入预览画面"),
                 }
             }
         });
@@ -88,7 +88,7 @@ impl PreviewStream {
             Ok(copy) => {
                 let _ = frames.try_send(copy);
             }
-            Err(err) => tracing::debug!(%err, "Skipped an enrollment preview frame"),
+            Err(err) => tracing::debug!(%err, "已跳过一帧录入预览画面"),
         }
     }
 }

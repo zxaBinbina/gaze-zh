@@ -898,7 +898,7 @@ async fn run() -> anyhow::Result<()> {
         }
 
         Commands::Doctor { .. } | Commands::Uninstall { .. } | Commands::Keyring { .. } => {
-            unreachable!("handled before DBus connection")
+            unreachable!("应在连接 D-Bus 前处理")
         }
     }
 

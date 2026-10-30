@@ -125,7 +125,7 @@ impl FaceDetector {
 
         let plane_len = h * w;
         let mut input_array = ndarray::Array4::<f32>::zeros((1, 3, h, w));
-        let data = input_array.as_slice_mut().expect("contiguous ndarray");
+        let data = input_array.as_slice_mut().expect("连续存储的 ndarray 数组");
         let mat_data = mat_resized.data_bytes()?;
         let channels = mat_resized.channels() as usize;
         if !matches!(channels, 3 | 4) {
@@ -294,10 +294,7 @@ impl FaceDetector {
             }
         }
 
-        tracing::debug!(
-            "Face detection completed: found {} face(s)",
-            final_bboxes.nrows()
-        );
+        tracing::debug!("人脸检测完成：发现 {} 张人脸", final_bboxes.nrows());
 
         Ok((final_bboxes, final_kpss, mat_rgb))
     }

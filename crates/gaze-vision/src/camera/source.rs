@@ -194,7 +194,7 @@ pub(super) fn classify_source(source: &str, want_color: bool) -> anyhow::Result<
     let source = source.trim();
     if source.is_empty() {
         anyhow::bail!(
-            "camera source cannot be empty; use \"primary\", \"/dev/video<n>\", \"usb:VVVV:PPPP\", or a GStreamer source"
+            "摄像头来源不能为空；请使用 primary、/dev/video<n>、usb:VVVV:PPPP 或 GStreamer 来源"
         );
     }
     if source == DEFAULT_RGB_CAMERA {
@@ -208,14 +208,14 @@ pub(super) fn classify_source(source: &str, want_color: bool) -> anyhow::Result<
         });
     }
     if source.starts_with("usb:") {
-        anyhow::bail!("invalid USB camera spec {source:?}; expected usb:VVVV:PPPP (hex VID:PID)");
+        anyhow::bail!("USB 摄像头标识 {source:?} 无效；应为 usb:VVVV:PPPP（十六进制 VID:PID）");
     }
     if source.starts_with("/dev/video") {
         let is_node = source
             .strip_prefix("/dev/video")
             .is_some_and(|index| !index.is_empty() && index.chars().all(|c| c.is_ascii_digit()));
         if !is_node {
-            anyhow::bail!("invalid V4L2 camera node {source:?}; expected /dev/video<number>");
+            anyhow::bail!("V4L2 摄像头节点 {source:?} 无效；应为 /dev/video<数字>");
         }
         return Ok(SourceElement::Element(format!("v4l2src device={source}")));
     }
@@ -466,9 +466,7 @@ pub(super) fn libcamera_color_source() -> Option<String> {
 /// it offers only raw Bayer, which the pipeline cannot take.
 pub(super) fn libcamera_negotiation_hint(detail: &str) -> Option<&'static str> {
     detail.contains("not-negotiated").then_some(
-        ". libcamera offered no processed format, usually because its software ISP failed to \
-         start; if `journalctl -u gazed` shows `Failed to fork`, update libcamera \
-         (see https://gaze.gundulabs.com/guide/troubleshooting)",
+        "。libcamera 未提供处理后的格式，通常是软件 ISP 启动失败；若 journalctl -u gazed 显示 Failed to fork，请更新 libcamera（参见 https://gaze.gundulabs.com/guide/troubleshooting）",
     )
 }
 

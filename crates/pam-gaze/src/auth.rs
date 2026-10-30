@@ -48,7 +48,7 @@ where
 
 // A typo such as `retyr` would otherwise run a different mode with nothing to explain why.
 fn log_unknown_option(arg: &str) {
-    let Ok(message) = CString::new(format!("pam_gaze: ignoring unknown module option '{arg}'"))
+    let Ok(message) = CString::new(format!("pam_gaze：忽略未知模块选项“{arg}”"))
     else {
         return;
     };
@@ -417,12 +417,12 @@ unsafe fn keyring_token(
 ) -> anyhow::Result<()> {
     anyhow::ensure!(
         unsafe { libc::geteuid() } == 0,
-        "the PAM host is not running as root"
+        "PAM 宿主未以 root 身份运行"
     );
     let mut existing = std::ptr::null();
     anyhow::ensure!(
         unsafe { pam_get_item(pamh, PAM_AUTHTOK, &mut existing) } == PAM_SUCCESS,
-        "PAM_AUTHTOK could not be read"
+        "无法读取 PAM_AUTHTOK"
     );
     // GDM's empty password placeholder must not prevent the keyring hand-off.
     if unsafe { existing_token_has_password(existing.cast()) } {
@@ -436,7 +436,7 @@ unsafe fn keyring_token(
     // Linux-PAM copies the token; our zeroizing buffer is dropped immediately afterwards.
     anyhow::ensure!(
         unsafe { pam_set_item(pamh, PAM_AUTHTOK, secret.as_ptr().cast()) } == PAM_SUCCESS,
-        "PAM_AUTHTOK could not be set"
+        "无法设置 PAM_AUTHTOK"
     );
     Ok(())
 }
@@ -448,7 +448,7 @@ fn log_keyring_failure(
     err: &anyhow::Error,
 ) {
     let Ok(message) = CString::new(format!(
-        "pam_gaze: {} unlock unavailable for {username}: {err:#}",
+        "pam_gaze：无法为 {username} 解锁 {}：{err:#}",
         backend.name()
     )) else {
         return;
@@ -625,7 +625,7 @@ fn host_fails_interrupted_prompt(service: Option<&str>) -> bool {
     matches!(service, Some("sudo" | "sudo-i"))
 }
 
-const FINISH_PROMPT_HINT: &str = "Face Verified. Press Enter to continue.";
+const FINISH_PROMPT_HINT: &str = "人脸已验证。按回车键继续。";
 
 fn retire_prompt(
     state: &SharedAuthState,

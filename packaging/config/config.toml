@@ -1,133 +1,122 @@
 # SPDX-FileCopyrightText: 2026 Gundu Labs
 # SPDX-License-Identifier: GPL-3.0-or-later
 
-# Security level determines which InsightFace models and threshold to use.
+# 安全级别决定使用的 InsightFace 模型和阈值。
 #
-# Preset levels:
-#   low: MobileFaceNet + SCRFD-500M, threshold 0.3  (fastest, least secure)
-#   medium: MobileFaceNet + SCRFD-500M, threshold 0.4  (default)
-#   high: ResNet50 + SCRFD-10G, threshold 0.5        (more accurate)
-#   maximum: ResNet50 + SCRFD-10G, threshold 0.6        (strictest)
+# 预设级别：
+#   low: MobileFaceNet + SCRFD-500M，阈值 0.3（最快，安全性最低）
+#   medium: MobileFaceNet + SCRFD-500M，阈值 0.4（默认）
+#   high: ResNet50 + SCRFD-10G，阈值 0.5（更准确）
+#   maximum: ResNet50 + SCRFD-10G，阈值 0.6（最严格）
 #
-# Models are automatically downloaded from the official InsightFace GitHub
-# releases if not already present in the models directory.
+# 模型目录中不存在所需模型时，会从 InsightFace 官方 GitHub 发行页自动下载。
 
 [inference]
-# Standard builds accept cpu, auto, openvino (Intel), and vitis (AMD Ryzen AI).
-# auto selects the NPU driver/vendor at startup. Register a vendor runtime under
-# /usr/lib/gaze/runtimes, then restart gazed. Failed accelerator setup falls back to CPU.
+# 标准构建支持 cpu、auto、openvino（Intel）和 vitis（AMD Ryzen AI）。
+# auto 在启动时选择 NPU 驱动及厂商。在 /usr/lib/gaze/runtimes 注册厂商运行库后
+# 请重启 gazed。加速器设置失败时会回退到 CPU。
 execution_provider = "cpu"
-# cpu requires cpu; auto and vitis require npu; openvino accepts cpu, gpu, or npu.
+# cpu 要求设备为 cpu；auto 和 vitis 要求 npu；openvino 支持 cpu、gpu 或 npu。
 device = "cpu"
 
 [security]
 level = "medium"
 
-# Custom level example:
+# 自定义级别示例：
 # level = "custom"
-# detector = "accurate"          # "standard" or "accurate"
-# recognizer = "accurate"        # "standard" or "accurate"
+# detector = "accurate"          # standard 或 accurate
+# recognizer = "accurate"        # standard 或 accurate
 # rgb_threshold = 0.45
 # ir_threshold = 0.45
-# hybrid_policy = "fallback_on_dark"  # optional; default, or, fallback_on_dark, and
+# hybrid_policy = "fallback_on_dark"  # 可选值：default、or、fallback_on_dark、and
 
 [cameras]
-# Set rgb = "" to authenticate with the IR camera alone. Leaving the key out
-# keeps "primary". Requires `ir` and IR templates (re-enroll after switching).
+# 设置 rgb = "" 可仅使用红外摄像头认证。省略此键会保留 primary。
+# 需要设置 ir 并具有红外模板（切换后请重新录入）。
 rgb = "primary"
-# Infrared (Windows Hello) camera. Set this to a direct /dev/video* node or the
-# camera's GStreamer source string (e.g. "pipewiresrc target-object=<pipewire-target>").
+# 红外（Windows Hello）摄像头。设为 /dev/video* 节点或摄像头的 GStreamer 来源，
+# 例如 pipewiresrc target-object=<pipewire-target>。
 # ir = "/dev/video2"
-# Drive the camera's IR emitter (turn the IR LED on during auth). Requires `ir`.
+# 控制摄像头的红外发射器（认证时开启红外 LED）。需要设置 ir。
 # emitter_enabled = false
-# Force the IR camera to one resolution when auto-negotiation picks a mode it cannot
-# stream (a green or corrupted feed). Set both or neither, each 1-4096. Requires `ir`.
+# 自动协商的分辨率无法正常采集（画面变绿或损坏）时，可固定红外分辨率。
+# 宽高必须同时设置或同时省略，各为 1–4096。需要设置 ir。
 # ir_frame_width = 340
 # ir_frame_height = 340
-# Reject frames whose mean brightness (0-255) is below this value as too dark.
+# 平均亮度（0–255）低于此值的画面会被判定为过暗。
 dark_luma_threshold = 20
-# Capture RGB and IR at the same time during hybrid auth. "never" (default) captures
-# RGB then IR, which every camera supports; "auto" goes parallel only when the two
-# sensors are separate hardware functions; "always" forces it. Requires `ir`.
+# 混合认证时同时采集 RGB 和红外。never（默认）先 RGB 后红外，兼容所有摄像头；
+# auto 仅在两个传感器为独立硬件功能时并行；always 强制并行。需要设置 ir。
 # parallel_capture = "never"
-# Turn camera frames upright on 2-in-1s held in portrait or upside down, using the
-# auto-rotate sensor (iio-sensor-proxy). Has no effect on machines without one.
+# 使用自动旋转传感器（iio-sensor-proxy）将二合一设备竖持或倒置时的画面转正。
+# 没有传感器的设备不受影响。
 auto_rotate = true
 
 [auth]
 abort_if_ssh = true
 abort_if_lid_closed = true
-# Skip face auth until the machine has suspended and resumed at least once. The first
-# unlock after boot then falls through to the password, which is what unlocks the
-# session keyring on GNOME; every unlock after a suspend uses your face. Reset whenever
-# gazed restarts.
+# 设备至少挂起并恢复一次之前跳过人脸认证。启动后首次解锁使用密码，
+# 从而解锁 GNOME 会话钥匙环；之后每次挂起恢复可使用人脸解锁。
+# gazed 重启后此状态会重置。
 abort_before_first_resume = false
-# Ask for an explicit confirmation after a face match on lock/login screens.
-# Note: the KDE biometric slots (kde-fingerprint, kde-smartcard,
-# plasmalogin-fingerprint) cannot be prompted because nothing routes a response
-# back, so the toggle is silently ignored there by design (asking would hang the slot
-# for the rest of the lock). See `gaze doctor` and the KDE guide.
+# 锁屏或登录界面的人脸匹配成功后要求明确确认。
+# KDE 生物识别服务 kde-fingerprint、kde-smartcard、plasmalogin-fingerprint
+# 无法返回确认回复，因此会忽略此开关，避免认证服务一直等待。
+# 参见 gaze doctor 和 KDE 指南。
 require_confirmation_lock_screen = false
 require_confirmation_elevation = false
-# Delay face auth by this many milliseconds on the first unlock after resuming from
-# suspend, so the display has time to come back instead of unlocking behind a black
-# screen. 0 disables it. Increase (e.g. 3000) if your GPU is slow to repaint.
+# 挂起恢复后的首次解锁延迟指定毫秒数，让显示器有时间恢复，避免黑屏时解锁。
+# 0 表示禁用。显卡恢复较慢时可增加此值，例如 3000。
 resume_grace_ms = 0
-# Wait this many milliseconds before face auth starts. Lockers such as hyprlock
-# begin authenticating the instant they launch, so without a delay Gaze can unlock
-# you again immediately after you lock manually and are still in front of the
-# camera. 0 disables it.
+# 人脸认证开始前等待的毫秒数。hyprlock 等锁屏器启动后立即认证，
+# 设置延迟可避免手动锁屏后因仍在摄像头前而立即再次解锁。0 表示禁用。
 #
-# The wait is measured from the moment the session locked, not from each
-# authentication, so a retry on the same lock screen does not pay it again.
+# 从会话锁定时开始计时，重试认证不会重复等待。
 #
-# When resuming from suspend, whichever of this and resume_grace_ms is longer
-# applies; they do not stack.
+# 挂起恢复时，与 resume_grace_ms 取较大值，不叠加。
 start_delay_ms = 0
-# Which prompts wait for start_delay_ms.
-#   "screen_lock" screen lockers only; sudo, polkit, su and greeters skip it
-#   "all"         every face authentication, sudo and polkit included
-# Gaze reads the PAM service name to tell these apart. A service it does not
-# recognize counts as a screen lock, so an unusual locker still gets the delay.
+# 哪些认证提示应用 start_delay_ms：
+#   screen_lock：仅锁屏；sudo、polkit、su 和登录界面不等待
+#   all：所有人脸认证，包括 sudo 和 polkit
+# Gaze 通过 PAM 服务名称区分。未知服务按锁屏处理，使其他锁屏器也能应用延迟。
 start_delay_scope = "screen_lock"
 
 [enrollment]
 max_templates = 2
-# Smallest accepted face bbox as a fraction of the frame's shorter side.
-# Lower values allow enrollment from farther away; valid range: 0.10-0.75.
+# 接受的人脸框大小占画面较短边的最小比例。
+# 较低值允许从更远处录入；有效范围为 0.10–0.75。
 min_face_size_ratio = 0.25
 
-# Liveness anti-spoofing runs a local MiniFASNet-V2 PAD model on the detected face crop.
-# The model is downloaded into /var/cache/gaze on first use if missing.
+# 活体防伪检测在裁剪出的人脸上运行本地 MiniFASNet-V2 PAD 模型。
+# 首次使用时如缺少模型，会下载到 /var/cache/gaze。
 [liveness]
 enabled = true
 threshold = 0.8
 max_seconds = 2.0
-# Opt-in IR anti-spoof model (FLIR) on top of the IR eye-motion check. Fails closed:
-# if it cannot load, IR face auth errors out to the password prompt. File-only setting.
+# 可选红外防伪模型（FLIR），与红外眼部运动检查配合使用。
+# 模型无法加载时，红外认证会失败并转为密码提示。此设置仅可编辑配置文件。
 ir_model = false
 ir_threshold = 0.5
 
 [storage]
-# Encrypt face templates at rest with a TPM-sealed key (requires TPM 2.0).
-# No usable TPM: gazed fails closed. Set false explicitly to accept plaintext storage.
-# TPM sealing is machine-bound, not boot-bound: protect /var/lib/gaze with disk encryption.
+# 使用 TPM 密封密钥加密存储的人脸模板（需要 TPM 2.0）。
+# 没有可用 TPM 时 gazed 会拒绝启动。如接受明文存储，需明确设为 false。
+# TPM 密封绑定机器而非启动环境；请使用磁盘加密保护 /var/lib/gaze。
 encrypt_templates = true
-# Opt-in GNOME Keyring unlock on gdm-face. Requires TPM encryption and liveness.
-# Enroll each user's keyring password with `gaze keyring`; no secrets go in this file.
+# 可选 gdm-face 登录时解锁 GNOME 钥匙环，需要 TPM 加密和活体检测。
+# 使用 gaze keyring 录入每个用户的钥匙环密码；不要在此文件存放密码。
 unlock_gnome_keyring = false
-# Opt-in KDE KWallet unlock on SDDM / Plasma Login Manager (sequential PAM only).
-# Same TPM/liveness requirements. Run `gaze keyring --kwallet` and
-# `sudo gaze-kde-pam enable-login`; install your distro's KWallet PAM package.
+# 可选 SDDM / Plasma 登录管理器的 KDE KWallet 解锁（仅限顺序 PAM）。
+# 同样需要 TPM 和活体检测。运行 gaze keyring --kwallet 和
+# sudo gaze-kde-pam enable-login，并安装发行版的 KWallet PAM 软件包。
 unlock_kwallet = false
 
-# Duress signal: hold one or both eyes closed while your face is in view and Gaze
-# refuses the match and turns face unlock off for that user until a password
-# login (or `gaze duress --clear`). Uses a small local eye-state model downloaded
-# into /var/cache/gaze. Edit this file and the next face auth picks it up.
+# 胁迫信号：人脸可见时持续闭上一只或双眼，Gaze 会拒绝匹配并关闭该用户的人脸解锁，
+# 直到使用密码登录或运行 gaze duress --clear。使用下载到 /var/cache/gaze 的
+# 小型本地眼部状态模型。修改此文件后，下次人脸认证即生效。
 [duress]
 enabled = false
-# Closed-eye probability (0.5-0.99) that counts an eye as shut.
+# 将眼睛判定为闭合的概率阈值（0.5–0.99）。
 closed_threshold = 0.9
-# How long the eye must stay shut, in milliseconds (0-5000). Blinks are shorter.
+# 眼睛必须持续闭合的毫秒数（0–5000）。正常眨眼通常更短。
 hold_ms = 600
