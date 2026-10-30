@@ -13,14 +13,14 @@ KCM.ScrollViewKCM {
     readonly property bool enrolling: kcm.enrollState === "running"
     readonly property bool testing: kcm.testState === "running"
 
-    title: i18n("Enrolled Faces")
+    title: i18n("已录入的人脸")
     implicitWidth: Kirigami.Units.gridUnit * 36
     implicitHeight: Kirigami.Units.gridUnit * 30
 
     actions: [
         Kirigami.Action {
-            text: i18n("Configure")
-            tooltip: i18n("Configure Gaze")
+            text: i18n("设置")
+            tooltip: i18n("配置 Gaze")
             icon.name: "configure"
             onTriggered: {
                 if (kcm.depth > 1) {
@@ -31,15 +31,15 @@ KCM.ScrollViewKCM {
             }
         },
         Kirigami.Action {
-            text: i18n("Test")
-            tooltip: i18n("Test face authentication")
+            text: i18n("测试")
+            tooltip: i18n("测试人脸认证")
             icon.name: "media-playback-start"
             enabled: list.count > 0 && !root.enrolling && !root.testing
             onTriggered: kcm.testFace()
         },
         Kirigami.Action {
-            text: i18n("Add Face…")
-            tooltip: i18n("Enroll a new face")
+            text: i18n("添加人脸…")
+            tooltip: i18n("录入新人脸")
             icon.name: "list-add"
             enabled: !root.enrolling && !root.testing
             onTriggered: enrollDialog.openFor("")
@@ -52,7 +52,7 @@ KCM.ScrollViewKCM {
         QQC2.Label {
             Layout.fillWidth: true
             horizontalAlignment: Text.AlignHCenter
-            text: i18n("Faces enrolled for %1", kcm.user)
+            text: i18n("%1 已录入的人脸", kcm.user)
             color: Kirigami.Theme.disabledTextColor
             wrapMode: Text.WordWrap
         }
@@ -71,10 +71,10 @@ KCM.ScrollViewKCM {
                 default: return Kirigami.MessageType.Warning;
             }
             text: switch (kcm.testState) {
-                case "running": return i18n("Look at the camera…");
-                case "success": return i18n("Face recognized");
-                case "timeout": return i18n("No face seen before the test timed out");
-                default: return i18n("Face not recognized");
+                case "running": return i18n("请看向摄像头…");
+                case "success": return i18n("人脸识别成功");
+                case "timeout": return i18n("测试超时，未检测到人脸");
+                default: return i18n("未识别人脸");
             }
         }
     }
@@ -89,10 +89,10 @@ KCM.ScrollViewKCM {
             width: parent.width - Kirigami.Units.gridUnit * 4
             visible: list.count === 0 && kcm.error.length === 0
             icon.name: "user-identity"
-            text: i18n("No Faces Enrolled")
-            explanation: i18n("Enroll a face to get started")
+            text: i18n("尚未录入人脸")
+            explanation: i18n("录入人脸即可开始使用")
             helpfulAction: Kirigami.Action {
-                text: i18n("Add Face…")
+                text: i18n("添加人脸…")
                 icon.name: "list-add"
                 enabled: !root.enrolling && !root.testing
                 onTriggered: enrollDialog.openFor("")
@@ -116,7 +116,7 @@ KCM.ScrollViewKCM {
                     Layout.fillWidth: true
                     icon.name: "user-identity"
                     title: row.name
-                    subtitle: i18np("%1 capture", "%1 captures", row.samples)
+                    subtitle: i18n("%1 组采集", row.samples)
                 }
                 Repeater {
                     model: [
@@ -138,7 +138,7 @@ KCM.ScrollViewKCM {
                 }
                 QQC2.ToolButton {
                     icon.name: "edit-rename"
-                    text: i18n("Rename")
+                    text: i18n("重命名")
                     display: QQC2.AbstractButton.IconOnly
                     enabled: !root.enrolling && !root.testing
                     onClicked: {
@@ -150,7 +150,7 @@ KCM.ScrollViewKCM {
                 }
                 QQC2.ToolButton {
                     icon.name: "camera-photo"
-                    text: i18n("Improve this face")
+                    text: i18n("优化此人脸")
                     display: QQC2.AbstractButton.IconOnly
                     enabled: !root.enrolling && !root.testing
                     onClicked: enrollDialog.openFor(row.name)
@@ -159,7 +159,7 @@ KCM.ScrollViewKCM {
                 }
                 QQC2.ToolButton {
                     icon.name: "edit-delete"
-                    text: i18n("Delete")
+                    text: i18n("删除")
                     display: QQC2.AbstractButton.IconOnly
                     enabled: !root.enrolling && !root.testing
                     onClicked: {
@@ -188,7 +188,7 @@ KCM.ScrollViewKCM {
             open();
         }
 
-        title: refining ? i18n("Improve “%1”", refineName) : i18n("Add Face")
+        title: refining ? i18n("优化“%1”", refineName) : i18n("添加人脸")
         preferredWidth: Kirigami.Units.gridUnit * 22
         closePolicy: started && kcm.enrollState === "running" ? QQC2.Popup.NoAutoClose : QQC2.Popup.CloseOnEscape
         standardButtons: Kirigami.Dialog.NoButton
@@ -201,13 +201,13 @@ KCM.ScrollViewKCM {
                 id: nameField
                 Layout.fillWidth: true
                 visible: !enrollDialog.refining && !enrollDialog.started
-                placeholderText: i18n("Face name")
+                placeholderText: i18n("人脸名称")
                 onAccepted: if (enrollDialog.chosenName.length > 0 && !kcm.hasFace(enrollDialog.chosenName)) kcm.startEnroll(enrollDialog.chosenName)
             }
             QQC2.Label {
                 Layout.fillWidth: true
                 visible: nameField.visible && kcm.hasFace(nameField.text.trim())
-                text: i18n("A face with this name already exists")
+                text: i18n("已存在同名人脸")
                 color: Kirigami.Theme.negativeTextColor
                 wrapMode: Text.WordWrap
             }
@@ -215,8 +215,8 @@ KCM.ScrollViewKCM {
                 Layout.fillWidth: true
                 visible: !enrollDialog.started
                 text: enrollDialog.refining
-                    ? i18n("Look at the camera and follow the prompts to add more captures to “%1”.", enrollDialog.refineName)
-                    : i18n("Look at the camera and follow the prompts. Keep your face centered and well lit.")
+                    ? i18n("请看向摄像头，按提示为“%1”补充采集。", enrollDialog.refineName)
+                    : i18n("请看向摄像头并按提示操作。保持人脸居中、光线充足。")
                 wrapMode: Text.WordWrap
             }
 
@@ -285,7 +285,7 @@ KCM.ScrollViewKCM {
                 QQC2.Button {
                     visible: !enrollDialog.started
                     icon.name: "media-record"
-                    text: i18n("Start Capture")
+                    text: i18n("开始采集")
                     highlighted: true
                     enabled: enrollDialog.refining
                         || (enrollDialog.chosenName.length > 0 && !kcm.hasFace(enrollDialog.chosenName))
@@ -294,13 +294,13 @@ KCM.ScrollViewKCM {
                 QQC2.Button {
                     visible: kcm.enrollState === "running"
                     icon.name: "dialog-cancel"
-                    text: i18n("Cancel")
+                    text: i18n("取消")
                     onClicked: enrollDialog.close()
                 }
                 QQC2.Button {
                     visible: kcm.enrollState === "done" || kcm.enrollState === "failed"
                     icon.name: "dialog-ok"
-                    text: i18n("Done")
+                    text: i18n("完成")
                     highlighted: true
                     onClicked: enrollDialog.close()
                 }
@@ -311,12 +311,12 @@ KCM.ScrollViewKCM {
     Kirigami.PromptDialog {
         id: deleteDialog
         property string faceName
-        title: i18n("Delete Face")
-        subtitle: i18n("Delete “%1”? You can add it again later.", faceName)
+        title: i18n("删除人脸")
+        subtitle: i18n("删除“%1”？之后可重新录入。", faceName)
         standardButtons: Kirigami.Dialog.Cancel
         customFooterActions: [
             Kirigami.Action {
-                text: i18n("Delete")
+                text: i18n("删除")
                 icon.name: "edit-delete"
                 onTriggered: {
                     kcm.deleteFace(deleteDialog.faceName);
@@ -330,7 +330,7 @@ KCM.ScrollViewKCM {
         id: renameDialog
         property string faceName
         readonly property string newName: nameEdit.text.trim()
-        title: i18n("Rename Face")
+        title: i18n("重命名人脸")
         standardButtons: Kirigami.Dialog.Cancel | Kirigami.Dialog.Ok
         onAccepted: if (newName.length > 0 && newName !== faceName && !kcm.hasFace(newName)) kcm.renameFace(faceName, newName)
         onOpened: {
@@ -348,7 +348,7 @@ KCM.ScrollViewKCM {
             QQC2.Label {
                 Layout.fillWidth: true
                 visible: renameDialog.newName !== renameDialog.faceName && kcm.hasFace(renameDialog.newName)
-                text: i18n("A face with this name already exists")
+                text: i18n("已存在同名人脸")
                 color: Kirigami.Theme.negativeTextColor
                 wrapMode: Text.WordWrap
             }

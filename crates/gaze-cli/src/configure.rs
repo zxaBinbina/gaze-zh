@@ -2,14 +2,13 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 use console::{Term, style};
-use dialoguer::{Confirm, Input, Select, theme::ColorfulTheme};
+use dialoguer::{Confirm, Input, Select, theme::Theme};
 use gaze_core::config::{
-    AuthConfig, Config, DEFAULT_SECURITY_THRESHOLD, HYBRID_POLICY_OPTIONS,
-    INFERENCE_DEVICE_OPTIONS, INFERENCE_EXECUTION_PROVIDER_OPTIONS, MAX_ENROLLMENT_FACE_SIZE_RATIO,
-    MAX_LIVENESS_MAX_SECONDS, MAX_LIVENESS_THRESHOLD, MAX_SECURITY_THRESHOLD,
-    MIN_ENROLLMENT_FACE_SIZE_RATIO, MIN_LIVENESS_MAX_SECONDS, MIN_LIVENESS_THRESHOLD,
-    MIN_SECURITY_THRESHOLD, MODEL_QUALITY_OPTIONS, SECURITY_LEVEL_OPTIONS,
-    START_DELAY_SCOPE_LABELS, SecurityLevel,
+    AuthConfig, Config, DEFAULT_SECURITY_THRESHOLD, HYBRID_POLICY_LABELS, INFERENCE_DEVICE_LABELS,
+    INFERENCE_EXECUTION_PROVIDER_LABELS, MAX_ENROLLMENT_FACE_SIZE_RATIO, MAX_LIVENESS_MAX_SECONDS,
+    MAX_LIVENESS_THRESHOLD, MAX_SECURITY_THRESHOLD, MIN_ENROLLMENT_FACE_SIZE_RATIO,
+    MIN_LIVENESS_MAX_SECONDS, MIN_LIVENESS_THRESHOLD, MIN_SECURITY_THRESHOLD, MODEL_QUALITY_LABELS,
+    SECURITY_LEVEL_LABELS, START_DELAY_SCOPE_LABELS, SecurityLevel,
 };
 use gaze_core::dbus::{GazeProxy, apply_config_to_daemon, apply_config_with_keyring_to_daemon};
 
@@ -17,7 +16,7 @@ use crate::{get_current_user, keyring};
 
 pub fn config_show_text(config: &Config) -> anyhow::Result<String> {
     Ok(format!(
-        "{}\n# Resolved values\n\
+        "{}\n# 实际生效值\n\
          # security: detector = {}, recognizer = {}, rgb_threshold = {:.2}, ir_threshold = {:.2}, hybrid_policy = {}\n\
          # cameras.parallel_capture = {}\n\
          # auth.start_delay_scope = {}\n",
@@ -37,17 +36,17 @@ fn ensure_configured_source_listed(options: &mut Vec<(String, String)>, configur
     if configured.is_empty() || gaze_vision::camera::is_listed_source(options, configured) {
         return;
     }
-    options.push((format!("{configured} (configured)"), configured.to_string()));
+    options.push((format!("{configured}（当前配置）"), configured.to_string()));
 }
 
 fn prompt_security_threshold(
-    theme: &ColorfulTheme,
+    theme: &dyn Theme,
     spectrum: &str,
     default: f64,
 ) -> anyhow::Result<f64> {
     let value = Input::<String>::with_theme(theme)
         .with_prompt(format!(
-            "Custom {spectrum} threshold ({MIN_SECURITY_THRESHOLD} - {MAX_SECURITY_THRESHOLD})"
+            "自定义 {spectrum} 阈值（{MIN_SECURITY_THRESHOLD} - {MAX_SECURITY_THRESHOLD}）"
         ))
         .default(default.to_string())
         .validate_with(|input: &String| match input.trim().parse::<f64>() {
@@ -58,9 +57,9 @@ fn prompt_security_threshold(
                 Ok(())
             }
             Ok(_) => Err(format!(
-                "must be between {MIN_SECURITY_THRESHOLD} and {MAX_SECURITY_THRESHOLD}"
+                "必须在 {MIN_SECURITY_THRESHOLD} 到 {MAX_SECURITY_THRESHOLD} 之间"
             )),
-            Err(_) => Err("must be a number".to_string()),
+            Err(_) => Err("必须为数字".to_string()),
         })
         .interact_text()?
         .trim()
@@ -75,21 +74,18 @@ pub async fn run_config_wizard(
     mut config: Config,
     keyring_supported: gaze_core::dbus::KeyringSupport,
 ) -> anyhow::Result<()> {
-    let theme = ColorfulTheme::default();
+    let theme = crate::i18n::ChineseTheme::default();
 
-    term.write_line(&format!(
-        "\n{}\n",
-        style("Gaze Config Wizard").cyan().bold()
-    ))?;
+    term.write_line(&format!("\n{}\n", style("Gaze 配置向导").cyan().bold()))?;
 
-    let mut cameras = gaze_vision::camera::rgb_choices()
-        .map_err(|e| anyhow::anyhow!("Could not list cameras: {e}"))?;
+    let mut cameras =
+        gaze_vision::camera::rgb_choices().map_err(|e| anyhow::anyhow!("无法列出摄像头：{e}"))?;
     ensure_configured_source_listed(&mut cameras, &config.cameras.rgb);
     let cam_names: Vec<String> = cameras.iter().map(|(n, _)| n.clone()).collect();
     let default_cam_idx = gaze_vision::camera::source_index(&cameras, &config.cameras.rgb);
 
     let selected_cam_idx = Select::with_theme(&theme)
-        .with_prompt("RGB camera source")
+        .with_prompt("RGB 摄像头来源")
         .items(&cam_names)
         .default(default_cam_idx)
         .interact()?;
@@ -97,7 +93,7 @@ pub async fn run_config_wizard(
     config.cameras.rgb = cameras[selected_cam_idx].1.clone();
 
     config.cameras.dark_luma_threshold = Input::<u8>::with_theme(&theme)
-        .with_prompt("Darkness cutoff: reject frames below this mean brightness (0-255)")
+        .with_prompt("暗光阈值：拒绝平均亮度低于此值的画面（0-255）")
         .default(config.cameras.dark_luma_threshold)
         .interact_text()?;
 
@@ -108,7 +104,7 @@ pub async fn run_config_wizard(
     let default_ir_idx = gaze_vision::camera::source_index(&ir_options, &config.cameras.ir);
 
     let selected_ir_idx = Select::with_theme(&theme)
-        .with_prompt("IR camera source")
+        .with_prompt("红外摄像头来源")
         .items(&ir_names)
         .default(default_ir_idx)
         .interact()?;
@@ -117,7 +113,7 @@ pub async fn run_config_wizard(
 
     if config.cameras.rgb.is_empty() && config.cameras.ir.is_empty() {
         term.write_line(&format!(
-            "{} No IR camera selected, so keeping the primary RGB camera",
+            "{} 未选择红外摄像头，保留主 RGB 摄像头",
             style("!").yellow().bold()
         ))?;
         config.cameras.rgb = gaze_core::config::DEFAULT_RGB_CAMERA.to_string();
@@ -128,7 +124,7 @@ pub async fn run_config_wizard(
         config.cameras.parallel_capture = "never".to_string();
     } else {
         config.cameras.emitter_enabled = Confirm::with_theme(&theme)
-            .with_prompt("Force IR emitter override (only use if emitter stays off automatically)")
+            .with_prompt("强制开启红外发射器（仅在无法自动开启时使用）")
             .default(config.cameras.emitter_enabled)
             .interact()?;
 
@@ -136,9 +132,7 @@ pub async fn run_config_wizard(
             config.cameras.parallel_capture = "never".to_string();
         } else {
             let capture_idx = Select::with_theme(&theme)
-                .with_prompt(
-                    "Capture RGB and IR at the same time (faster, but some webcams cannot)",
-                )
+                .with_prompt("同时采集 RGB 与红外（更快，但部分摄像头不支持）")
                 .items(gaze_core::config::PARALLEL_CAPTURE_LABELS.as_slice())
                 .default(config.cameras.parallel_capture_index() as usize)
                 .interact()?;
@@ -148,8 +142,8 @@ pub async fn run_config_wizard(
     }
 
     let selected = Select::with_theme(&theme)
-        .with_prompt("Security level")
-        .items(SECURITY_LEVEL_OPTIONS)
+        .with_prompt("安全级别")
+        .items(SECURITY_LEVEL_LABELS)
         .default(config.security.level_index() as usize)
         .interact()?;
 
@@ -159,15 +153,15 @@ pub async fn run_config_wizard(
         let seed = config.security.custom_form();
 
         let selected_det_idx = Select::with_theme(&theme)
-            .with_prompt("Custom detector level")
-            .items(MODEL_QUALITY_OPTIONS)
+            .with_prompt("自定义检测器级别")
+            .items(MODEL_QUALITY_LABELS)
             .default(SecurityLevel::model_quality_index(&seed.detector) as usize)
             .interact()?;
         let detector = SecurityLevel::model_quality_from_index(selected_det_idx).to_string();
 
         let selected_rec_idx = Select::with_theme(&theme)
-            .with_prompt("Custom recognizer level")
-            .items(MODEL_QUALITY_OPTIONS)
+            .with_prompt("自定义识别器级别")
+            .items(MODEL_QUALITY_LABELS)
             .default(SecurityLevel::model_quality_index(&seed.recognizer) as usize)
             .interact()?;
         let recognizer = SecurityLevel::model_quality_from_index(selected_rec_idx).to_string();
@@ -176,8 +170,8 @@ pub async fn run_config_wizard(
         let ir_threshold = prompt_security_threshold(&theme, "IR", seed.ir_threshold)?;
 
         let selected_hybrid_idx = Select::with_theme(&theme)
-            .with_prompt("Custom hybrid combining policy")
-            .items(HYBRID_POLICY_OPTIONS)
+            .with_prompt("自定义混合匹配策略")
+            .items(HYBRID_POLICY_LABELS)
             .default(SecurityLevel::hybrid_policy_index_for_value(&seed.hybrid_policy) as usize)
             .interact()?;
         let hybrid_policy = SecurityLevel::hybrid_policy_from_index(selected_hybrid_idx);
@@ -193,8 +187,8 @@ pub async fn run_config_wizard(
 
     if config.inference.is_representable() {
         let selected_execution_provider = Select::with_theme(&theme)
-            .with_prompt("Inference execution provider")
-            .items(INFERENCE_EXECUTION_PROVIDER_OPTIONS)
+            .with_prompt("推理执行后端")
+            .items(INFERENCE_EXECUTION_PROVIDER_LABELS)
             .default(config.inference.execution_provider_index() as usize)
             .interact()?;
         config.inference.execution_provider =
@@ -205,8 +199,8 @@ pub async fn run_config_wizard(
 
         if config.inference.execution_provider == "openvino" {
             let selected_device = Select::with_theme(&theme)
-                .with_prompt("OpenVINO inference device")
-                .items(INFERENCE_DEVICE_OPTIONS)
+                .with_prompt("OpenVINO 推理设备")
+                .items(INFERENCE_DEVICE_LABELS)
                 .default(config.inference.device_index() as usize)
                 .interact()?;
             config.inference.device =
@@ -224,7 +218,7 @@ pub async fn run_config_wizard(
         }
     } else {
         term.write_line(&format!(
-            "{} Keeping inference {}/{}: this build cannot change it",
+            "{} 保留推理配置 {}/{}：此版本无法更改",
             style("!").yellow().bold(),
             config.inference.execution_provider,
             config.inference.device
@@ -232,47 +226,43 @@ pub async fn run_config_wizard(
     }
 
     config.auth.abort_if_ssh = Confirm::with_theme(&theme)
-        .with_prompt("Abort face authentication for SSH sessions")
+        .with_prompt("SSH 会话中禁用人脸认证")
         .default(config.auth.abort_if_ssh)
         .interact()?;
 
     config.auth.abort_if_lid_closed = Confirm::with_theme(&theme)
-        .with_prompt("Abort face authentication when laptop lid is closed")
+        .with_prompt("笔记本合盖时禁用人脸认证")
         .default(config.auth.abort_if_lid_closed)
         .interact()?;
 
     config.auth.abort_before_first_resume = Confirm::with_theme(&theme)
-        .with_prompt("Abort face authentication until the system has suspended and resumed once")
+        .with_prompt("系统完成一次休眠唤醒前禁用人脸认证")
         .default(config.auth.abort_before_first_resume)
         .interact()?;
 
     config.auth.require_confirmation_lock_screen = Confirm::with_theme(&theme)
-        .with_prompt(
-            "Require confirmation (press Enter/Authenticate/OK) on the lock screen after face matches",
-        )
+        .with_prompt("锁屏匹配人脸后需确认（回车/认证/确定）")
         .default(config.auth.require_confirmation_lock_screen)
         .interact()?;
 
     config.auth.require_confirmation_elevation = Confirm::with_theme(&theme)
-        .with_prompt(
-            "Require confirmation (press Enter/Authenticate/OK) for elevated auth (sudo, polkit, etc.) after face matches",
-        )
+        .with_prompt("提权认证（sudo、polkit 等）匹配人脸后需确认（回车/认证/确定）")
         .default(config.auth.require_confirmation_elevation)
         .interact()?;
 
     config.auth.resume_grace_ms = Input::with_theme(&theme)
-        .with_prompt("Resume grace period in milliseconds (delay auth after suspend)")
+        .with_prompt("唤醒等待时间，单位毫秒（休眠后延迟认证）")
         .default(config.auth.resume_grace_ms)
         .interact_text()?;
 
     config.auth.start_delay_ms = Input::with_theme(&theme)
-        .with_prompt("Start delay in milliseconds (0 disables)")
+        .with_prompt("启动延迟，单位毫秒（0 表示禁用）")
         .default(config.auth.start_delay_ms)
         .interact_text()?;
 
     if config.auth.start_delay_ms > 0 {
         let scope_index = Select::with_theme(&theme)
-            .with_prompt("Apply the start delay to")
+            .with_prompt("启动延迟适用于")
             .items(START_DELAY_SCOPE_LABELS)
             .default(
                 AuthConfig::start_delay_scope_index_for_value(config.auth.start_delay_scope())
@@ -283,12 +273,12 @@ pub async fn run_config_wizard(
     }
 
     config.enrollment.max_templates = Input::with_theme(&theme)
-        .with_prompt("Max templates (sets of captures)")
+        .with_prompt("模板上限（采集组数）")
         .default(config.enrollment.max_templates)
         .interact_text()?;
 
     let min_face_size_ratio: f64 = Input::with_theme(&theme)
-        .with_prompt("Minimum enrollment face size ratio (0.10 - 0.75; lower allows more distance)")
+        .with_prompt("录入时最小人脸占比（0.10 - 0.75；调低可在更远处录入）")
         .default(config.enrollment.min_face_size_ratio)
         .interact_text()?;
     config.enrollment.min_face_size_ratio = if min_face_size_ratio.is_finite() {
@@ -301,13 +291,13 @@ pub async fn run_config_wizard(
     };
 
     config.liveness.enabled = Confirm::with_theme(&theme)
-        .with_prompt("Enable liveness anti-spoofing")
+        .with_prompt("启用活体防伪")
         .default(config.liveness.enabled)
         .interact()?;
     if config.liveness.enabled {
         config.liveness.threshold = Input::<String>::with_theme(&theme)
             .with_prompt(format!(
-                "Liveness threshold ({} - {})",
+                "活体检测阈值（{} - {}）",
                 MIN_LIVENESS_THRESHOLD, MAX_LIVENESS_THRESHOLD
             ))
             .default(config.liveness.threshold.to_string())
@@ -319,9 +309,9 @@ pub async fn run_config_wizard(
                     Ok(())
                 }
                 Ok(_) => Err(format!(
-                    "must be between {MIN_LIVENESS_THRESHOLD} and {MAX_LIVENESS_THRESHOLD}"
+                    "必须在 {MIN_LIVENESS_THRESHOLD} 到 {MAX_LIVENESS_THRESHOLD} 之间"
                 )),
-                Err(_) => Err("must be a number".to_string()),
+                Err(_) => Err("必须为数字".to_string()),
             })
             .interact_text()?
             .trim()
@@ -329,7 +319,7 @@ pub async fn run_config_wizard(
             .unwrap_or(0.8);
         config.liveness.max_seconds = Input::with_theme(&theme)
             .with_prompt(format!(
-                "Liveness max seconds ({MIN_LIVENESS_MAX_SECONDS}..={MAX_LIVENESS_MAX_SECONDS})"
+                "活体检测最长秒数（{MIN_LIVENESS_MAX_SECONDS}..={MAX_LIVENESS_MAX_SECONDS}）"
             ))
             .default(config.liveness.max_seconds)
             .validate_with(|value: &f64| {
@@ -337,7 +327,7 @@ pub async fn run_config_wizard(
                     Ok(())
                 } else {
                     Err(format!(
-                        "must be between {MIN_LIVENESS_MAX_SECONDS} and {MAX_LIVENESS_MAX_SECONDS}"
+                        "必须在 {MIN_LIVENESS_MAX_SECONDS} 到 {MAX_LIVENESS_MAX_SECONDS} 之间"
                     ))
                 }
             })
@@ -345,14 +335,14 @@ pub async fn run_config_wizard(
     }
 
     config.storage.encrypt_templates = Confirm::with_theme(&theme)
-        .with_prompt("Encrypt face templates at rest using TPM 2.0")
+        .with_prompt("使用 TPM 2.0 加密存储人脸模板")
         .default(config.storage.encrypt_templates)
         .interact()?;
 
     config.storage.unlock_gnome_keyring =
         if keyring_supported.gnome && config.storage.encrypt_templates && config.liveness.enabled {
             Confirm::with_theme(&theme)
-                .with_prompt("Enable TPM-backed GNOME Keyring unlock for GDM or greetd face logins")
+                .with_prompt("GDM 或 greetd 人脸登录时启用 TPM 保护的 GNOME 密钥环解锁")
                 .default(config.storage.unlock_gnome_keyring)
                 .interact()?
         } else {
@@ -363,7 +353,7 @@ pub async fn run_config_wizard(
         if keyring_supported.kwallet && config.storage.encrypt_templates && config.liveness.enabled
         {
             Confirm::with_theme(&theme)
-                .with_prompt("Enable TPM-backed KWallet unlock for KDE face logins")
+                .with_prompt("KDE 人脸登录时启用 TPM 保护的 KWallet 解锁")
                 .default(config.storage.unlock_kwallet)
                 .interact()?
         } else {
@@ -375,15 +365,12 @@ pub async fn run_config_wizard(
     } else {
         apply_config_to_daemon(proxy, &config).await
     };
-    saved.map_err(|e| anyhow::anyhow!("Failed to save configuration: {e}"))?;
-    term.write_line(&format!(
-        "{} Configuration saved and applied.",
-        style("✓").green().bold()
-    ))?;
+    saved.map_err(|e| anyhow::anyhow!("保存配置失败：{e}"))?;
+    term.write_line(&format!("{} 配置已保存并应用。", style("✓").green().bold()))?;
 
     if config.storage.unlock_gnome_keyring
         && Confirm::with_theme(&theme)
-            .with_prompt("Enroll the login keyring password now")
+            .with_prompt("立即录入登录密钥环密码")
             .default(false)
             .interact()?
     {
@@ -396,7 +383,7 @@ pub async fn run_config_wizard(
 
     if config.storage.unlock_kwallet
         && Confirm::with_theme(&theme)
-            .with_prompt("Enroll the KWallet password now")
+            .with_prompt("立即录入 KWallet 密码")
             .default(false)
             .interact()?
     {
@@ -424,7 +411,7 @@ mod tests {
         assert_eq!(
             options[1],
             (
-                "/dev/video9 (configured)".to_string(),
+                "/dev/video9（当前配置）".to_string(),
                 "/dev/video9".to_string()
             ),
             "a camera that is unplugged right now must not silently change"

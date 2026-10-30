@@ -1,9 +1,9 @@
 {
     "KPlugin": {
-        "Description": "Facial authentication",
+        "Description": "人脸认证",
         "Icon": "com.gundulabs.Gaze.Settings",
         "Name": "Gaze"
     },
-    "X-KDE-Keywords": "face,facial,authentication,recognition,unlock,gaze,camera,login,biometric",
+    "X-KDE-Keywords": "人脸,认证,解锁,face,facial,authentication,recognition,unlock,gaze,camera,login,biometric",
     "X-KDE-System-Settings-Parent-Category": "system-administration"
 }

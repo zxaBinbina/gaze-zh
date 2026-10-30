@@ -46,9 +46,9 @@ pub enum CameraKind {
     Ir { source: String, node: String },
 }
 
-const PRIMARY_CAMERA_DISPLAY_NAME: &str = "Primary camera";
-pub const IR_NONE_DISPLAY_NAME: &str = "None";
-pub const RGB_NONE_DISPLAY_NAME: &str = "None (IR only)";
+const PRIMARY_CAMERA_DISPLAY_NAME: &str = "主摄像头";
+pub const IR_NONE_DISPLAY_NAME: &str = "无";
+pub const RGB_NONE_DISPLAY_NAME: &str = "无（仅红外）";
 const DEVICE_SETTLE_TIMEOUT_MS: u64 = 100;
 const INTERRUPTIBLE_POLL_TIMEOUT_MS: u64 = 100;
 /// Gives a busy device time to reject the stream without making us wait indefinitely for a

@@ -62,12 +62,12 @@ fn add_dbus_error_toast(window: &libadwaita::ApplicationWindow, prefix: &str, er
 
 async fn confirm_face_removal(window: &libadwaita::ApplicationWindow, face_name: &str) -> bool {
     let dialog = libadwaita::MessageDialog::builder()
-        .heading(format!("Remove \u{201c}{face_name}\u{201d}?"))
-        .body("Gaze will stop recognizing this face. You can enroll it again later.")
+        .heading(format!("删除“{face_name}”？"))
+        .body("Gaze 将不再识别此人脸，之后可重新录入。")
         .transient_for(window)
         .build();
-    dialog.add_response("cancel", "Cancel");
-    dialog.add_response("remove", "Remove");
+    dialog.add_response("cancel", "取消");
+    dialog.add_response("remove", "删除");
     dialog.set_response_appearance("remove", libadwaita::ResponseAppearance::Destructive);
     dialog.set_default_response(Some("cancel"));
     dialog.set_close_response("cancel");
@@ -77,35 +77,35 @@ async fn confirm_face_removal(window: &libadwaita::ApplicationWindow, face_name:
 fn daemon_state_text(state: Option<DaemonState>) -> (&'static str, &'static str, Duration) {
     match state {
         Some(DaemonState::Failed) => (
-            "Daemon Failed",
-            "The Gaze daemon stopped with an error. Check `journalctl -u gazed -n 50`, then run `sudo systemctl restart gazed`.",
+            "后台服务异常",
+            "Gaze 后台服务因错误停止。请查看 `journalctl -u gazed -n 50`，再运行 `sudo systemctl restart gazed`。",
             Duration::from_secs(10),
         ),
         Some(DaemonState::Disabled) => (
-            "Daemon Disabled",
-            "The Gaze daemon is turned off. Turn it on with `sudo systemctl enable --now gazed`.",
+            "后台服务已禁用",
+            "Gaze 后台服务已关闭。运行 `sudo systemctl enable --now gazed` 即可启用。",
             Duration::from_secs(10),
         ),
         Some(DaemonState::Stopped) => (
-            "Daemon Stopped",
-            "The Gaze daemon is not running. Start it with `sudo systemctl start gazed`.",
+            "后台服务已停止",
+            "Gaze 后台服务未运行。运行 `sudo systemctl start gazed` 即可启动。",
             Duration::from_secs(10),
         ),
         Some(DaemonState::NotInstalled) => (
-            "Daemon Not Installed",
-            "The gazed service is missing. Install the gaze package for your distribution.",
+            "未安装后台服务",
+            "未找到 gazed 服务，请安装适用于当前发行版的 gaze 软件包。",
             Duration::from_secs(10),
         ),
         Some(DaemonState::Starting) | None => (
-            "Daemon Starting",
-            "The Gaze daemon is starting up. Its first start downloads face models, which can take a few minutes.",
+            "后台服务启动中",
+            "Gaze 后台服务正在启动。首次启动会下载人脸模型，可能需要几分钟。",
             Duration::from_secs(3),
         ),
     }
 }
 
 fn show_daemon_pending_toast(window: &libadwaita::ApplicationWindow) {
-    add_toast(window, "Connecting to the Gaze daemon…");
+    add_toast(window, "正在连接 Gaze 后台服务…");
 }
 
 async fn begin_face_capture(
@@ -126,7 +126,7 @@ async fn begin_face_capture(
     {
         futures::future::Either::Left((Ok(()), _)) => true,
         futures::future::Either::Left((Err(err), _)) => {
-            add_toast(window, format!("Face enrollment: {err}"));
+            add_toast(window, format!("人脸录入：{err}"));
             return;
         }
         futures::future::Either::Right(_) => false,
@@ -139,14 +139,14 @@ async fn begin_face_capture(
     let feed = match capture::prepare_camera_feed(&camera) {
         Ok(feed) => feed,
         Err(err) => {
-            add_toast(window, format!("Failed to start camera: {err}"));
+            add_toast(window, format!("摄像头启动失败：{err}"));
             return;
         }
     };
 
     if !authorization_done && let Err(err) = authorization.await {
         feed.stop();
-        add_toast(window, format!("Face enrollment: {err}"));
+        add_toast(window, format!("人脸录入：{err}"));
         return;
     }
     capture::show_capture_dialog(
@@ -193,17 +193,17 @@ pub fn build_window(app: &libadwaita::Application, username: &str) {
     let main_box = gtk4::Box::new(gtk4::Orientation::Vertical, 0);
 
     let header = libadwaita::HeaderBar::new();
-    let title = libadwaita::WindowTitle::new("Gaze", &format!("User: {username}"));
+    let title = libadwaita::WindowTitle::new("Gaze", &format!("用户：{username}"));
     header.set_title_widget(Some(&title));
 
     let add_btn = gtk4::Button::from_icon_name("list-add-symbolic");
-    add_btn.set_tooltip_text(Some("Enroll a new face"));
+    add_btn.set_tooltip_text(Some("录入新人脸"));
 
     let test_btn = gtk4::Button::from_icon_name("media-playback-start-symbolic");
-    test_btn.set_tooltip_text(Some("Test face authentication"));
+    test_btn.set_tooltip_text(Some("测试人脸认证"));
 
     let config_btn = gtk4::Button::from_icon_name("emblem-system-symbolic");
-    config_btn.set_tooltip_text(Some("Configure Gaze"));
+    config_btn.set_tooltip_text(Some("配置 Gaze"));
 
     header.pack_end(&add_btn);
     header.pack_end(&test_btn);
@@ -224,8 +224,8 @@ pub fn build_window(app: &libadwaita::Application, username: &str) {
     content.set_margin_bottom(16);
 
     let face_group = libadwaita::PreferencesGroup::new();
-    face_group.set_title("Enrolled Faces");
-    face_group.set_description(Some(&format!("Faces enrolled for {username}")));
+    face_group.set_title("已录入的人脸");
+    face_group.set_description(Some(&format!("{username} 已录入的人脸")));
 
     let face_list = gtk4::ListBox::new();
     face_list.add_css_class("boxed-list");
@@ -236,8 +236,8 @@ pub fn build_window(app: &libadwaita::Application, username: &str) {
 
     let status_page = libadwaita::StatusPage::new();
     status_page.set_icon_name(Some("contact-new-symbolic"));
-    status_page.set_title("No Faces Enrolled");
-    status_page.set_description(Some("Loading from the Gaze daemon…"));
+    status_page.set_title("尚未录入人脸");
+    status_page.set_description(Some("正在从 Gaze 后台服务加载…"));
     status_page.set_visible(true);
     face_list.set_visible(false);
     content.append(&status_page);
@@ -305,14 +305,14 @@ pub fn build_window(app: &libadwaita::Application, username: &str) {
                     use futures::StreamExt;
 
                     if proxy.claim(&username).await.is_err() {
-                        add_toast(&window, "Failed to claim device");
+                        add_toast(&window, "获取设备失败");
                         btn.set_sensitive(true);
                         return;
                     }
                     let mut stream = match proxy.receive_verify_status().await {
                         Ok(stream) => stream,
                         Err(_) => {
-                            add_toast(&window, "Daemon error starting verification");
+                            add_toast(&window, "后台服务启动认证失败");
                             let _ = proxy.release().await;
                             btn.set_sensitive(true);
                             return;
@@ -320,13 +320,13 @@ pub fn build_window(app: &libadwaita::Application, username: &str) {
                     };
 
                     if proxy.verify_start("any").await.is_err() {
-                        add_toast(&window, "Daemon error starting verification");
+                        add_toast(&window, "后台服务启动认证失败");
                         let _ = proxy.release().await;
                         btn.set_sensitive(true);
                         return;
                     }
 
-                    let mut text = "Face not recognized".to_string();
+                    let mut text = "未识别人脸".to_string();
                     let mut matched_face: Option<String> = None;
 
                     // Without a deadline of its own the button stays stuck for as long as the
@@ -339,21 +339,21 @@ pub fn build_window(app: &libadwaita::Application, username: &str) {
                                 let Ok(args) = signal.args() else { continue };
                                 let res = *args.result();
                                 if res == gaze_core::dbus::VerifyResult::VerifyMatch {
-                                    text = "Face recognized".to_string();
+                                    text = "人脸识别成功".to_string();
                                     let faces = args.faces();
                                     matched_face = faces
                                         .iter()
                                         .find(|(_, _, _, rgb_p, _, _, ir_p)| *rgb_p || *ir_p)
                                         .map(|(n, _, _, _, _, _, _)| n.clone());
                                 } else {
-                                    text = "Face not recognized".to_string();
+                                    text = "未识别人脸".to_string();
                                 }
                                 break;
                             }
                             futures::future::Either::Left((None, _)) => break,
                             futures::future::Either::Right(_) => {
                                 let _ = proxy.verify_stop().await;
-                                text = "No face seen before the test timed out".to_string();
+                                text = "测试超时，未检测到人脸".to_string();
                                 break;
                             }
                         }
@@ -437,8 +437,8 @@ pub fn build_window(app: &libadwaita::Application, username: &str) {
         refresh,
         async move {
             let Ok(proxy) = connect_gaze().await else {
-                tracing::error!("Failed to connect to Gaze daemon");
-                status_page.set_description(Some("Failed to connect to Gaze daemon"));
+                tracing::error!("连接 Gaze 后台服务失败");
+                status_page.set_description(Some("连接 Gaze 后台服务失败"));
                 return;
             };
 
@@ -483,7 +483,7 @@ pub fn build_window(app: &libadwaita::Application, username: &str) {
                                     {
                                         // This CPU cannot run `gazed`, so retrying the request will not
                                         // help.
-                                        status_page.set_title("Unsupported CPU");
+                                        status_page.set_title("CPU 不受支持");
                                         status_page.set_description(Some(
                                             gaze_core::cpu::UNSUPPORTED_CPU_MESSAGE,
                                         ));
@@ -513,7 +513,7 @@ pub fn build_window(app: &libadwaita::Application, username: &str) {
                                         );
                                         return;
                                     } else {
-                                        add_dbus_error_toast(&window, "Failed to load faces", &err);
+                                        add_dbus_error_toast(&window, "加载人脸失败", &err);
                                         Vec::new()
                                     }
                                 }
@@ -524,8 +524,8 @@ pub fn build_window(app: &libadwaita::Application, username: &str) {
                             }
 
                             if faces.is_empty() {
-                                status_page.set_title("No Faces Enrolled");
-                                status_page.set_description(Some("Enroll a face to get started"));
+                                status_page.set_title("尚未录入人脸");
+                                status_page.set_description(Some("录入人脸即可开始使用"));
                                 status_page.set_visible(true);
                                 face_list.set_visible(false);
                             } else {
@@ -556,11 +556,7 @@ pub fn build_window(app: &libadwaita::Application, username: &str) {
                                 for (face_name, count, has_rgb, has_ir) in faces {
                                     let row = libadwaita::ActionRow::new();
                                     row.set_title(&face_name);
-                                    row.set_subtitle(&format!(
-                                        "{} capture{}",
-                                        count,
-                                        if count == 1 { "" } else { "s" }
-                                    ));
+                                    row.set_subtitle(&format!("{} 组采集", count));
 
                                     let rgb_badge = gtk4::Label::new(Some("RGB"));
                                     rgb_badge.set_valign(gtk4::Align::Center);
@@ -586,15 +582,15 @@ pub fn build_window(app: &libadwaita::Application, username: &str) {
                                     let rename_btn =
                                         gtk4::Button::from_icon_name("document-edit-symbolic");
                                     rename_btn.add_css_class("flat");
-                                    rename_btn.set_tooltip_text(Some("Rename"));
+                                    rename_btn.set_tooltip_text(Some("重命名"));
                                     let refine_btn =
                                         gtk4::Button::from_icon_name("camera-photo-symbolic");
                                     refine_btn.add_css_class("flat");
-                                    refine_btn.set_tooltip_text(Some("Improve this face"));
+                                    refine_btn.set_tooltip_text(Some("优化此人脸"));
                                     let delete_btn =
                                         gtk4::Button::from_icon_name("user-trash-symbolic");
                                     delete_btn.add_css_class("flat");
-                                    delete_btn.set_tooltip_text(Some("Delete"));
+                                    delete_btn.set_tooltip_text(Some("删除"));
 
                                     btn_box.append(&rename_btn);
                                     btn_box.append(&refine_btn);
@@ -631,7 +627,7 @@ pub fn build_window(app: &libadwaita::Application, username: &str) {
                                             body.set_margin_bottom(10);
 
                                             let entry = gtk4::Entry::new();
-                                            entry.set_placeholder_text(Some("New face name"));
+                                            entry.set_placeholder_text(Some("新人脸名称"));
                                             entry.set_text(&face_name);
                                             body.append(&entry);
 
@@ -639,9 +635,9 @@ pub fn build_window(app: &libadwaita::Application, username: &str) {
                                                 gtk4::Box::new(gtk4::Orientation::Horizontal, 8);
                                             button_row.set_halign(gtk4::Align::End);
 
-                                            let cancel_btn = gtk4::Button::with_label("Cancel");
+                                            let cancel_btn = gtk4::Button::with_label("取消");
                                             let rename_confirm_btn =
-                                                gtk4::Button::with_label("Rename");
+                                                gtk4::Button::with_label("重命名");
                                             rename_confirm_btn.add_css_class("suggested-action");
                                             rename_confirm_btn.set_sensitive(false);
 
@@ -720,7 +716,7 @@ pub fn build_window(app: &libadwaita::Application, username: &str) {
                                                                 {
                                                                     add_dbus_error_toast(
                                                                         &window,
-                                                                        "Failed to rename face",
+                                                                        "人脸重命名失败",
                                                                         &err,
                                                                     );
                                                                 } else {
@@ -731,7 +727,7 @@ pub fn build_window(app: &libadwaita::Application, username: &str) {
                                                                     }
 
                                                                     let text = format!(
-                                                                        "Renamed '{}' to '{}'",
+                                                                        "已将“{}”重命名为“{}”",
                                                                         face_name, new_name
                                                                     );
                                                                     add_toast(&window, text);
@@ -819,7 +815,7 @@ pub fn build_window(app: &libadwaita::Application, username: &str) {
                                                     {
                                                         add_dbus_error_toast(
                                                             &window,
-                                                            "Failed to remove face",
+                                                            "删除人脸失败",
                                                             &err,
                                                         );
                                                     }

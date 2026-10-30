@@ -3,11 +3,11 @@
 
 [Desktop Entry]
 Type=Application
-Name=Gaze Settings
-Comment=Enroll faces and configure facial authentication
+Name=Gaze 设置
+Comment=录入人脸并配置人脸认证
 Exec=kcmshell6 kcm_gaze
 Icon=com.gundulabs.Gaze.Settings
 Terminal=false
 Categories=Qt;KDE;Settings;Security;
-Keywords=face;facial;authentication;recognition;unlock;gaze;camera;login;biometric;
+Keywords=人脸;认证;解锁;摄像头;face;facial;authentication;recognition;unlock;gaze;camera;login;biometric;
 OnlyShowIn=KDE;

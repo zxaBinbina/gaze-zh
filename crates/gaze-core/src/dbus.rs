@@ -466,21 +466,18 @@ impl DaemonState {
     pub fn problem_and_fix(self) -> (&'static str, &'static str) {
         match self {
             Self::Starting => (
-                "gazed is starting but is not on the bus yet (its first start downloads face models)",
-                "Wait a minute and try again; `journalctl -u gazed -f` shows its progress.",
+                "gazed 正在启动，尚未连接总线（首次启动会下载人脸模型）",
+                "请稍后重试；运行 `journalctl -u gazed -f` 查看进度。",
             ),
             Self::Failed => (
-                "gazed stopped with an error",
-                "Run `journalctl -u gazed -n 50` to see why, then `sudo systemctl restart gazed`.",
+                "gazed 因错误停止",
+                "运行 `journalctl -u gazed -n 50` 查看原因，再运行 `sudo systemctl restart gazed`。",
             ),
-            Self::Disabled => (
-                "gazed is disabled",
-                "Run `sudo systemctl enable --now gazed`.",
-            ),
-            Self::Stopped => ("gazed is not running", "Run `sudo systemctl start gazed`."),
+            Self::Disabled => ("gazed 已禁用", "运行 `sudo systemctl enable --now gazed`。"),
+            Self::Stopped => ("gazed 未运行", "运行 `sudo systemctl start gazed`。"),
             Self::NotInstalled => (
-                "the gazed service is not installed",
-                "Install the gaze package for your distribution.",
+                "尚未安装 gazed 服务",
+                "安装适用于当前发行版的 gaze 软件包。",
             ),
         }
     }
@@ -499,8 +496,8 @@ pub async fn daemon_unavailable_hint(connection: &zbus::Connection) -> (String, 
             (problem.to_string(), fix.to_string())
         }
         Err(_) => (
-            "gazed is not on the system bus".to_string(),
-            "Run `sudo systemctl start gazed`, then `gaze doctor`.".to_string(),
+            "gazed 未连接系统总线".to_string(),
+            "运行 `sudo systemctl start gazed`，再运行 `gaze doctor`。".to_string(),
         ),
     }
 }
@@ -550,7 +547,7 @@ async fn trusted_gaze_proxy_on(connection: &zbus::Connection) -> zbus::Result<Ga
     let owner = bus.get_name_owner("com.gundulabs.Gaze".try_into()?).await?;
     let uid = bus.get_connection_unix_user(owner.clone().into()).await?;
     if uid != 0 {
-        return Err(zbus::fdo::Error::AccessDenied("gazed must be owned by uid 0".into()).into());
+        return Err(zbus::fdo::Error::AccessDenied("gazed 必须由 uid 0 用户运行".into()).into());
     }
     // Pin the checked owner so a subsequent name takeover cannot redirect PAM requests.
     GazeProxy::builder(connection)
@@ -635,8 +632,7 @@ pub fn config_update_from_property(
     raw: OwnedVariant,
     unlock_gnome_keyring: bool,
 ) -> anyhow::Result<Config> {
-    let mut config = config_from_property(raw)?
-        .ok_or_else(|| anyhow::anyhow!("incompatible configuration layout"))?;
+    let mut config = config_from_property(raw)?.ok_or_else(|| anyhow::anyhow!("配置格式不兼容"))?;
     config.storage.unlock_gnome_keyring = unlock_gnome_keyring;
     config.storage.validate_keyring(&config.liveness)?;
     Ok(config)

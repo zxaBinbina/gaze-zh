@@ -23,28 +23,28 @@ constexpr int TestResultMs = 4000;
 
 QString enrollPrompt(const QString &id)
 {
-    if (id == QLatin1String("look-straight")) return i18n("Face the camera");
-    if (id == QLatin1String("look-up")) return i18n("Tilt your face slightly up");
-    if (id == QLatin1String("look-down")) return i18n("Tilt your face slightly down");
-    if (id == QLatin1String("look-left")) return i18n("Turn your face slightly left");
-    if (id == QLatin1String("look-right")) return i18n("Turn your face slightly right");
-    if (id == QLatin1String("captured")) return i18n("Captured");
-    if (id == QLatin1String("completed")) return i18n("Enrollment complete");
-    if (id == QLatin1String("cancelled")) return i18n("Enrollment cancelled");
-    if (id == QLatin1String("db-failed")) return i18n("Database error during enrollment");
-    if (id == QLatin1String("camera-failed")) return i18n("Camera error during enrollment");
+    if (id == QLatin1String("look-straight")) return i18n("请正对摄像头");
+    if (id == QLatin1String("look-up")) return i18n("请稍微抬头");
+    if (id == QLatin1String("look-down")) return i18n("请稍微低头");
+    if (id == QLatin1String("look-left")) return i18n("请稍微向左转头");
+    if (id == QLatin1String("look-right")) return i18n("请稍微向右转头");
+    if (id == QLatin1String("captured")) return i18n("已采集");
+    if (id == QLatin1String("completed")) return i18n("录入完成");
+    if (id == QLatin1String("cancelled")) return i18n("录入已取消");
+    if (id == QLatin1String("db-failed")) return i18n("录入时发生数据库错误");
+    if (id == QLatin1String("camera-failed")) return i18n("录入时发生摄像头错误");
     return id;
 }
 
 QString hintText(const QString &id)
 {
-    if (id == QLatin1String("no-face")) return i18n("Please look at the camera...");
-    if (id == QLatin1String("too-dark")) return i18n("Need more light...");
-    if (id == QLatin1String("clipped")) return i18n("Face is clipped. Please move back...");
-    if (id == QLatin1String("not-centered")) return i18n("Please center your face...");
-    if (id == QLatin1String("too-far")) return i18n("Please come closer...");
-    if (id == QLatin1String("too-close")) return i18n("Please back up...");
-    if (id == QLatin1String("ready") || id == QLatin1String("usable")) return i18n("Hold still...");
+    if (id == QLatin1String("no-face")) return i18n("请看向摄像头…");
+    if (id == QLatin1String("too-dark")) return i18n("光线不足…");
+    if (id == QLatin1String("clipped")) return i18n("人脸超出画面，请后退一点…");
+    if (id == QLatin1String("not-centered")) return i18n("请将人脸居中…");
+    if (id == QLatin1String("too-far")) return i18n("请靠近一点…");
+    if (id == QLatin1String("too-close")) return i18n("请后退一点…");
+    if (id == QLatin1String("ready") || id == QLatin1String("usable")) return i18n("请保持不动…");
     return {};
 }
 }
@@ -215,7 +215,7 @@ void GazeKcm::startEnroll(const QString &name)
         return;
     }
     m_enrollState = QStringLiteral("running");
-    m_prompt = i18n("Starting enrollment…");
+    m_prompt = i18n("正在开始录入…");
     m_faceHint.clear();
     m_progress = 0;
     m_steps = 0;
@@ -256,7 +256,7 @@ void GazeKcm::onEnrollStatus(const QDBusMessage &message)
         finishEnroll(QStringLiteral("failed"), enrollPrompt(id));
     } else if (done) {
         const bool saved = id == QLatin1String("completed");
-        finishEnroll(saved ? QStringLiteral("done") : QStringLiteral("failed"), saved ? enrollPrompt(id) : i18n("Enrollment finished without saving."));
+        finishEnroll(saved ? QStringLiteral("done") : QStringLiteral("failed"), saved ? enrollPrompt(id) : i18n("录入已结束，未保存。"));
     } else {
         m_prompt = enrollPrompt(id);
         Q_EMIT enrollChanged();

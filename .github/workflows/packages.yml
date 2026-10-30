@@ -17,7 +17,7 @@ on:
         default: main
         type: string
       release_tag:
-        description: Optional release tag, for example v0.4.1-zh.2 (package revision 2). Also applies when publish is false.
+        description: Optional release tag, for example v0.5.0. Also applies when publish is false.
         required: false
         type: string
       publish:
@@ -189,7 +189,12 @@ jobs:
             tag="$INPUT_TAG"
           fi
           [[ "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-zh(\.[1-9][0-9]*)?)?$ ]] || {
-            echo "Release tag must look like v0.4.1-zh.2 (got: $tag)" >&2
+            echo "Release tag must look like v0.5.0 (got: $tag)" >&2
+            exit 1
+          }
+          notes="docs/releases/$tag.md"
+          [ -s "$notes" ] || {
+            echo "Write Chinese release notes in $notes before publishing" >&2
             exit 1
           }
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
@@ -215,7 +220,10 @@ jobs:
         with:
           tag_name: ${{ steps.tag.outputs.tag }}
           target_commitish: ${{ inputs.ref || github.sha }}
-          generate_release_notes: true
+          name: Gaze 中文版 ${{ steps.tag.outputs.tag }}
+          body_path: docs/releases/${{ steps.tag.outputs.tag }}.md
+          generate_release_notes: false
+          make_latest: true
           files: |
             dist/release/*.tar.gz
             dist/release/SHA256SUMS

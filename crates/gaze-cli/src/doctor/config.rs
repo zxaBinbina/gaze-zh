@@ -231,10 +231,10 @@ pub(super) fn config_findings(config: &Config) -> Vec<Check> {
         {
             error(
                 format!(
-                    "liveness.ir_threshold must be between {MIN_LIVENESS_THRESHOLD} and {MAX_LIVENESS_THRESHOLD}, got {}",
+                    "liveness.ir_threshold 必须在 {MIN_LIVENESS_THRESHOLD} 到 {MAX_LIVENESS_THRESHOLD} 之间，当前为 {}",
                     config.liveness.ir_threshold
                 ),
-                "Set liveness.ir_threshold to a value between 0.10 and 1.0 (the default is 0.5).",
+                "将 liveness.ir_threshold 设为 0.10 到 1.0 之间的值（默认为 0.5）。",
             );
         }
     }
@@ -279,18 +279,16 @@ pub(super) fn config_findings(config: &Config) -> Vec<Check> {
     if config.liveness.ir_model && !config.liveness.enabled {
         findings.push(Check {
             level: Level::Warning,
-            name: "IR anti-spoof model",
-            message: "liveness.ir_model is true but liveness is disabled, so it never runs"
-                .to_string(),
-            fix: Some("Enable [liveness] or remove ir_model.".to_string()),
+            name: "红外防伪模型",
+            message: "liveness.ir_model 为 true，但活体检测已禁用，因此不会运行".to_string(),
+            fix: Some("启用 [liveness] 或移除 ir_model。".to_string()),
         });
     } else if config.liveness.ir_model && ir.is_empty() {
         findings.push(Check {
             level: Level::Warning,
-            name: "IR anti-spoof model",
-            message: "liveness.ir_model is true but cameras.ir is empty, so it never runs"
-                .to_string(),
-            fix: Some("Configure cameras.ir or remove ir_model.".to_string()),
+            name: "红外防伪模型",
+            message: "liveness.ir_model 为 true，但 cameras.ir 为空，因此不会运行".to_string(),
+            fix: Some("配置 cameras.ir 或移除 ir_model。".to_string()),
         });
     }
     if config.enrollment.max_templates == 0 {
@@ -328,18 +326,14 @@ mod tests {
         assert!(
             findings
                 .iter()
-                .any(|check| check.name == "IR anti-spoof model"
-                    && check.message.contains("cameras.ir is empty"))
+                .any(|check| check.name == "红外防伪模型"
+                    && check.message.contains("cameras.ir 为空"))
         );
 
         config.liveness.ir_threshold = 0.5;
         config.cameras.ir = "/dev/video2".to_string();
         let findings = config_findings(&config);
-        assert!(
-            !findings
-                .iter()
-                .any(|check| check.name == "IR anti-spoof model")
-        );
+        assert!(!findings.iter().any(|check| check.name == "红外防伪模型"));
         assert!(!findings.iter().any(|check| check.level == Level::Error));
     }
 

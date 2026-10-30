@@ -15,15 +15,15 @@ members = [
 resolver = "3"
 
 [workspace.package]
-version = "0.4.1"
+version = "0.5.0"
 edition = "2024"
 categories = ["authentication"]
-homepage = "https://gaze.gundulabs.com"
+homepage = "https://zxabinbina.cc.cd/projects/gaze"
 keywords = ["authentication", "biometrics", "face-recognition", "linux", "pam"]
 license = "GPL-3.0-or-later"
 publish = false
 readme = "README.md"
-repository = "https://github.com/GunduLabs/gaze"
+repository = "https://github.com/zxaBinbina/gaze-zh"
 
 [workspace.dependencies]
 gaze-core = { path = "crates/gaze-core" }

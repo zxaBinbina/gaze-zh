@@ -287,7 +287,7 @@ impl SecurityLevel {
             errors.push(SecurityValidationError {
                 field: SecurityField::Level,
                 message: format!(
-                    "invalid security level {:?}: expected one of {:?}",
+                    "安全级别 {:?} 无效：应为 {:?} 之一",
                     self.level, SECURITY_LEVEL_OPTIONS
                 ),
             });
@@ -305,7 +305,7 @@ impl SecurityLevel {
                 errors.push(SecurityValidationError {
                     field: SecurityField::ModelQuality,
                     message: format!(
-                        "invalid {name} level {quality:?}: expected \"standard\" or \"accurate\""
+                        "{name} 级别 {quality:?} 无效：应为 \"standard\" 或 \"accurate\""
                     ),
                 });
             }
@@ -318,7 +318,7 @@ impl SecurityLevel {
                 errors.push(SecurityValidationError {
                     field: SecurityField::Threshold,
                     message: format!(
-                        "security.{name} must be between {MIN_SECURITY_THRESHOLD} and {MAX_SECURITY_THRESHOLD}, got {threshold}"
+                        "security.{name} 必须在 {MIN_SECURITY_THRESHOLD} 到 {MAX_SECURITY_THRESHOLD} 之间，当前为 {threshold}"
                     ),
                 });
             }
@@ -329,7 +329,7 @@ impl SecurityLevel {
             errors.push(SecurityValidationError {
                 field: SecurityField::HybridPolicy,
                 message: format!(
-                    "invalid security.hybrid_policy {:?}: expected one of {:?}",
+                    "security.hybrid_policy 的值 {:?} 无效：应为 {:?} 之一",
                     self.hybrid_policy, HYBRID_POLICY_OPTIONS
                 ),
             });

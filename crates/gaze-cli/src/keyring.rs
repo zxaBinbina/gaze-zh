@@ -31,15 +31,15 @@ pub fn enroll(username: &str, config: &Config, backend: Backend) -> anyhow::Resu
     if let Some(warning) = gaze_security::storage::encryption_warning(
         gaze_security::storage::disk_encryption(std::path::Path::new(backend.store_dir())),
     ) {
-        eprintln!("Warning: {warning}");
+        eprintln!("警告：{warning}");
     }
     // Check the account before prompting. Enrollment checks again in case it changes meanwhile.
     gaze_security::keyring::Account::lookup(username)?;
     println!("请输入 {username} 的 {} 密码。", backend.name());
     let password = Zeroizing::new(
-        dialoguer::Password::new()
+        dialoguer::Password::with_theme(&crate::i18n::ChineseTheme::default())
             .with_prompt(format!("{} 密码", backend.name()))
-            .with_confirmation("确认钥匙环密码", "两次输入的密码不一致")
+            .with_confirmation("再次输入密码", "两次输入的密码不一致")
             .interact()?,
     );
     gaze_security::keyring::enroll_for(backend, username, password.as_bytes())?;

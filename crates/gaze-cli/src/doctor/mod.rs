@@ -169,7 +169,7 @@ impl Report {
     }
 
     fn render(&self) -> String {
-        let mut out = format!("\n{}\n\n", style("Gaze doctor").cyan().bold());
+        let mut out = format!("\n{}\n\n", style("Gaze 诊断").cyan().bold());
 
         for check in &self.checks {
             let (symbol, label) = match check.level {
@@ -194,16 +194,13 @@ impl Report {
         let warnings = self.count(Level::Warning);
         let errors = self.count(Level::Error);
         out.push_str(&format!(
-            "\n{} {passed} passed, {off} off, {warnings} warning{}, {errors} error{}\n",
-            style("Summary:").bold(),
-            if warnings == 1 { "" } else { "s" },
-            if errors == 1 { "" } else { "s" }
+            "\n{} {passed} 项通过，{off} 项关闭，{warnings} 项警告，{errors} 项错误\n",
+            style("汇总：").bold()
         ));
         if off > 0 {
             out.push_str(&format!(
                 "{}\n",
-                style("○ marks a working feature you have switched off; the line under it turns it on.")
-                    .dim()
+                style("○ 表示功能正常但已由您关闭；下方列出了启用方法。").dim()
             ));
         }
         out.push('\n');
@@ -293,7 +290,7 @@ pub async fn run(username: &str, benchmark: bool, output: Output) -> anyhow::Res
             report.print()?;
             let path = report::write(&report, username)?;
             println!(
-                "Wrote {}. Check it, then attach it to a new issue: https://github.com/GunduLabs/gaze/issues/new/choose",
+                "已写入 {}。请检查后附加到新问题中：https://github.com/GunduLabs/gaze/issues/new/choose",
                 path.display()
             );
         }
@@ -304,9 +301,9 @@ pub async fn run(username: &str, benchmark: bool, output: Output) -> anyhow::Res
 fn check_platform(report: &mut Report) {
     if std::env::consts::OS != "linux" {
         report.error(
-            "Platform",
-            format!("{} is not supported", std::env::consts::OS),
-            "Run Gaze on Linux.",
+            "平台",
+            format!("不支持 {}", std::env::consts::OS),
+            "请在 Linux 上运行 Gaze。",
         );
         return;
     }
@@ -314,7 +311,7 @@ fn check_platform(report: &mut Report) {
     #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
     {
         if gaze_core::cpu::supports_inference() {
-            report.pass("CPU", "AVX2 is available");
+            report.pass("CPU", "支持 AVX2");
         } else {
             report.error(
                 "CPU",
@@ -327,10 +324,7 @@ fn check_platform(report: &mut Report) {
     #[cfg(not(any(target_arch = "x86", target_arch = "x86_64")))]
     report.pass(
         "CPU",
-        format!(
-            "{} does not require the x86 AVX2 check",
-            std::env::consts::ARCH
-        ),
+        format!("{} 无需检查 x86 AVX2", std::env::consts::ARCH),
     );
 }
 
@@ -378,11 +372,7 @@ mod tests {
     #[test]
     fn a_feature_switched_off_is_not_a_checkmark_and_still_says_how_to_turn_it_on() {
         let mut report = Report::default();
-        report.off(
-            "GDM login face authentication",
-            "off",
-            "Turn it on: flip the switch.",
-        );
+        report.off("GDM 登录人脸认证", "off", "Turn it on: flip the switch.");
 
         let check = &report.checks[0];
         assert_eq!(check.level, Level::Off);
@@ -404,11 +394,11 @@ mod tests {
     #[test]
     fn json_output_carries_every_check_and_the_verdict() {
         let mut report = Report::default();
-        report.pass("CPU", "AVX2 is available");
+        report.pass("CPU", "支持 AVX2");
         report.error("DBus", "gazed \"down\"", "Run it");
         assert_eq!(
             report.to_json(),
-            r#"{"healthy":false,"checks":[{"level":"pass","name":"CPU","message":"AVX2 is available","fix":null},{"level":"error","name":"DBus","message":"gazed \"down\"","fix":"Run it"}]}"#
+            r#"{"healthy":false,"checks":[{"level":"pass","name":"CPU","message":"支持 AVX2","fix":null},{"level":"error","name":"DBus","message":"gazed \"down\"","fix":"Run it"}]}"#
         );
     }
 

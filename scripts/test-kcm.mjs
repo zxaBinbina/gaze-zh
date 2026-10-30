@@ -9,7 +9,7 @@ import vm from 'node:vm';
 
 const source = await readFile(new URL('../integrations/kde/kcm/ui/main.qml', import.meta.url), 'utf8');
 const action = source.match(/Kirigami.Action \{([\s\S]*?)\n        \}/)?.[1];
-assert.ok(action?.includes('text: i18n("Configure")'), 'find the Configure action');
+assert.ok(action?.includes('text: i18n("设置")'), 'find the Configure action');
 const handler = action.match(/onTriggered:\s*(\{[\s\S]*\}|[^\n]+)/)?.[1];
 assert.ok(handler, 'find the Configure handler');
 const enabled = action.match(/^\s*enabled:\s*(.+)$/m)?.[1] ?? 'true';

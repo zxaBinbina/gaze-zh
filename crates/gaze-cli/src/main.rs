@@ -4,13 +4,14 @@
 mod configure;
 mod doctor;
 mod faces;
+mod i18n;
 mod keyring;
 mod polkit;
 mod selinux;
 mod tui;
 mod uninstall;
 
-use clap::{CommandFactory, Parser, Subcommand};
+use clap::{CommandFactory, FromArgMatches, Parser, Subcommand};
 use clap_complete::CompleteEnv;
 use clap_complete::engine::{ArgValueCompleter, CompletionCandidate};
 use configure::{config_show_text, run_config_wizard};
@@ -114,10 +115,10 @@ const ESCALATION_PRESERVED_ENV: [&str; 1] = ["XDG_RUNTIME_DIR"];
 
 fn reexec_as_root(name: &str) -> anyhow::Result<()> {
     if std::env::var_os(ESCALATION_MARKER).is_some() {
-        anyhow::bail!("gaze {name} re-ran itself but did not gain root privileges");
+        anyhow::bail!("gaze {name} 重新启动后仍未获得 root 权限");
     }
     if !which("sudo") {
-        anyhow::bail!("gaze {name} needs root privileges, but sudo was not found");
+        anyhow::bail!("gaze {name} 需要 root 权限，但未找到 sudo");
     }
 
     let mut cmd = std::process::Command::new("sudo");
@@ -209,7 +210,7 @@ where
         })?;
         if let Some(TuiAction::Cancel) = tui::poll_action()? {
             drop(terminal);
-            anyhow::bail!("cancelled");
+            anyhow::bail!("已取消");
         }
 
         tokio::select! {
@@ -225,7 +226,7 @@ where
 }
 
 #[derive(Parser)]
-#[command(name = "gaze", version, about = "CLI for Gaze")]
+#[command(name = "gaze", version, about = "Gaze 命令行工具")]
 struct Cli {
     #[command(subcommand)]
     command: Commands,
@@ -233,125 +234,112 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
-    /// Test face authentication for a user
+    /// 测试用户的人脸认证
     Auth {
-        #[arg(short, long)]
+        #[arg(short, long, help = "指定用户（默认为当前用户）")]
         user: Option<String>,
-        #[arg(
-            short,
-            long,
-            conflicts_with = "silent",
-            help = "Show detailed authentication metrics"
-        )]
+        #[arg(short, long, conflicts_with = "silent", help = "显示详细认证指标")]
         verbose: bool,
-        #[arg(
-            short,
-            long,
-            help = "Suppress the terminal UI and all output; report the result via exit code"
-        )]
+        #[arg(short, long, help = "隐藏终端界面和所有输出；通过退出码报告结果")]
         silent: bool,
     },
-    /// Enroll a face with guided, multi-angle capture
+    /// 按引导从多个角度录入人脸
     AddFace {
-        #[arg(short, long)]
+        #[arg(short, long, help = "指定用户（默认为当前用户）")]
         user: Option<String>,
-        #[arg(help = "The name of the face to enroll")]
+        #[arg(help = "要录入的人脸名称")]
         face: String,
     },
-    /// Add captures to improve recognition of an enrolled face
+    /// 补充采集，优化已录入人脸的识别效果
     RefineFace {
-        #[arg(short, long)]
+        #[arg(short, long, help = "指定用户（默认为当前用户）")]
         user: Option<String>,
-        #[arg(help = "The name of the face to refine", add = ArgValueCompleter::new(face_completer))]
+        #[arg(help = "要优化的人脸名称", add = ArgValueCompleter::new(face_completer))]
         face: String,
     },
-    /// List the faces enrolled for a user
+    /// 列出用户已录入的人脸
     ListFaces {
-        #[arg(short, long)]
+        #[arg(short, long, help = "指定用户（默认为当前用户）")]
         user: Option<String>,
-        #[arg(long, help = "Print the faces as JSON")]
+        #[arg(long, help = "以 JSON 格式输出人脸列表")]
         json: bool,
     },
-    /// Remove an enrolled face
+    /// 删除已录入的人脸
     RemoveFace {
-        #[arg(short, long)]
+        #[arg(short, long, help = "指定用户（默认为当前用户）")]
         user: Option<String>,
-        #[arg(help = "The name of the face to remove", add = ArgValueCompleter::new(face_completer))]
+        #[arg(help = "要删除的人脸名称", add = ArgValueCompleter::new(face_completer))]
         face: String,
     },
-    /// Rename an enrolled face
+    /// 重命名已录入的人脸
     RenameFace {
-        #[arg(short, long)]
+        #[arg(short, long, help = "指定用户（默认为当前用户）")]
         user: Option<String>,
-        #[arg(help = "Current face name", add = ArgValueCompleter::new(face_completer))]
+        #[arg(help = "当前人脸名称", add = ArgValueCompleter::new(face_completer))]
         from: String,
-        #[arg(help = "New face name")]
+        #[arg(help = "新人脸名称")]
         to: String,
     },
-    /// Remove all Gaze data for a user
+    /// 删除用户的所有 Gaze 数据
     ClearUser {
-        #[arg(short, long)]
+        #[arg(short, long, help = "指定用户（默认为当前用户）")]
         user: Option<String>,
-        #[arg(short = 'y', long, help = "Skip the confirmation prompt")]
+        #[arg(short = 'y', long, help = "跳过确认提示")]
         yes: bool,
     },
-    /// Show or clear the face authentication lockout set by a duress signal
+    /// 查看或解除胁迫信号触发的人脸认证锁定
     Duress {
-        #[arg(long, help = "Re-enable face authentication after a duress lockout")]
+        #[arg(long, help = "解除胁迫锁定，重新启用人脸认证")]
         clear: bool,
-        #[arg(short, long)]
+        #[arg(short, long, help = "指定用户（默认为当前用户）")]
         user: Option<String>,
     },
-    /// Configure daemon and GDM settings interactively, or read and change one setting
+    /// 交互配置后台服务与 GDM，或读取、修改单项设置
     #[command(args_conflicts_with_subcommands = true)]
     Config {
-        #[arg(long, help = "Print every setting as TOML and exit")]
+        #[arg(long, help = "以 TOML 格式输出所有设置后退出")]
         show: bool,
         #[command(subcommand)]
         action: Option<ConfigAction>,
     },
-    /// Enroll or replace a TPM-protected GNOME Keyring or KWallet credential (root only)
+    /// 录入或替换 TPM 保护的 GNOME 密钥环或 KWallet 凭据（需 root）
     Keyring {
-        /// Use KDE KWallet for the credential instead of GNOME Keyring
+        /// 使用 KDE KWallet 凭据
         #[arg(long)]
         kwallet: bool,
-        /// Remove the stored credential instead of enrolling one
+        /// 删除已保存的凭据
         #[arg(long)]
         forget: bool,
-        #[arg(short, long, help = "Act on this user instead of the current one")]
+        #[arg(short, long, help = "操作指定用户，而非当前用户")]
         user: Option<String>,
     },
-    /// Check the Gaze installation for configuration and runtime issues
+    /// 检查 Gaze 的安装、配置和运行问题
     Doctor {
-        #[arg(short, long, help = "Check enrollments for this user")]
+        #[arg(short, long, help = "检查指定用户的人脸录入情况")]
         user: Option<String>,
-        #[arg(
-            short,
-            long,
-            help = "Benchmark detector, recognizer, and liveness model inference speed"
-        )]
+        #[arg(short, long, help = "测试检测器、识别器和活体模型的推理速度")]
         benchmark: bool,
-        #[arg(long, conflicts_with = "report", help = "Print the results as JSON")]
+        #[arg(long, conflicts_with = "report", help = "以 JSON 格式输出结果")]
         json: bool,
-        #[arg(long, help = "Write a redacted bug report file to attach to an issue")]
+        #[arg(long, help = "生成已隐去身份信息的故障报告文件，用于提交问题")]
         report: bool,
     },
-    /// Remove Gaze packages, PAM integration, configuration, models, and user data
+    /// 卸载 Gaze 软件包、PAM 集成、配置、模型和用户数据
     Uninstall {
-        #[arg(short = 'y', long, help = "Skip the confirmation prompt")]
+        #[arg(short = 'y', long, help = "跳过确认提示")]
         yes: bool,
-        #[arg(long, help = "Preserve /var/lib/gaze (enrolled face data)")]
+        #[arg(long, help = "保留 /var/lib/gaze（已录入的人脸数据）")]
         keep_data: bool,
-        #[arg(long, help = "Print the planned commands without executing them")]
+        #[arg(long, help = "显示计划执行的命令，不实际执行")]
         dry_run: bool,
     },
 }
 
 #[derive(Subcommand)]
 enum ConfigAction {
-    /// Print one setting, such as `security.level`
+    /// 读取单项设置，例如 `security.level`
     Get { key: String },
-    /// Change one setting, such as `liveness.enabled true`
+    /// 修改单项设置，例如 `liveness.enabled true`
     Set { key: String, value: String },
 }
 
@@ -364,7 +352,7 @@ async fn handle_enroll(
     let term = Term::stdout();
 
     if let Err(err) = proxy.claim(user).await {
-        exit_with_error(&describe_dbus_error(proxy, "Failed to claim device", &err).await);
+        exit_with_error(&describe_dbus_error(proxy, "获取设备失败", &err).await);
     }
 
     let mut enroll_stream = proxy.receive_enroll_status().await?;
@@ -379,11 +367,11 @@ async fn handle_enroll(
     if let Err(err) = proxy.enroll_start(face).await {
         drop(terminal);
         let _ = proxy.release().await;
-        exit_with_error(&describe_dbus_error(proxy, "Failed to start enrollment", &err).await);
+        exit_with_error(&describe_dbus_error(proxy, "开始录入失败", &err).await);
     }
 
-    let mut current_enroll_msg = "Waiting for capture prompt".to_string();
-    let mut current_capture_msg = "Waiting for face...".to_string();
+    let mut current_enroll_msg = "正在等待采集提示".to_string();
+    let mut current_capture_msg = "正在等待人脸…".to_string();
     let mut current_capture_tone = Tone::Info;
     let mut current_progress = 0_u32;
     let mut current_max = 100_u32;
@@ -471,22 +459,19 @@ async fn handle_enroll(
     }
     let _ = proxy.release().await;
     if is_cancelled {
-        Term::stderr().write_line(&format!(
-            "\n{} Enrollment cancelled",
-            style("✗").red().bold()
-        ))?;
+        Term::stderr().write_line(&format!("\n{} 已取消录入", style("✗").red().bold()))?;
         std::process::exit(130);
     }
     if is_completed {
         term.write_line(&format!(
-            "  {} Captures saved for {}/{}!\n",
+            "  {} 已保存 {}/{} 的采集数据！\n",
             style("✓").green().bold(),
             style(user).green(),
             style(face).green()
         ))?;
     } else if is_failed {
         Term::stderr().write_line(&format!(
-            "{} Enrollment failed: {}",
+            "{} 录入失败：{}",
             style("✗").red().bold(),
             current_enroll_msg
         ))?;
@@ -507,14 +492,12 @@ async fn handle_auth(
         Ok(faces) => !faces.is_empty(),
         Err(ref e) if gaze_core::dbus::dbus_is_file_not_found(e) => false,
         Err(_) if silent => std::process::exit(1),
-        Err(e) => {
-            exit_with_error(&describe_dbus_error(proxy, "Failed to read enrolled faces", &e).await)
-        }
+        Err(e) => exit_with_error(&describe_dbus_error(proxy, "读取已录入人脸失败", &e).await),
     };
     if !has_faces {
         if !silent {
             term.write_line(&format!(
-                "{} No faces enrolled for {}. Run {} to enroll a face.",
+                "{} {} 尚未录入人脸。运行 {} 即可录入。",
                 style("i").cyan().bold(),
                 style(user).bold(),
                 style("gaze add-face <name>").bold()
@@ -529,7 +512,7 @@ async fn handle_auth(
         if silent {
             std::process::exit(1);
         }
-        exit_with_error(&describe_dbus_error(proxy, "Failed to claim device", &err).await);
+        exit_with_error(&describe_dbus_error(proxy, "获取设备失败", &err).await);
     }
 
     let mut status_stream = proxy.receive_verify_status().await?;
@@ -553,10 +536,10 @@ async fn handle_auth(
         if silent {
             std::process::exit(1);
         }
-        exit_with_error(&describe_dbus_error(proxy, "Could not start the face scan", &e).await);
+        exit_with_error(&describe_dbus_error(proxy, "无法开始人脸扫描", &e).await);
     }
 
-    let mut status_msg = format!("Scanning face for {user}...");
+    let mut status_msg = format!("正在扫描 {user} 的人脸…");
     let mut status_tone = Tone::Info;
     let mut tick = 0_u64;
     let mut cancelled = false;
@@ -595,7 +578,7 @@ async fn handle_auth(
                     let status = *args.status();
                     status_tone = capture_tone(status);
                     status_msg = match status {
-                        CaptureStatus::Ready | CaptureStatus::Usable => format!("Scanning face for {user}..."),
+                        CaptureStatus::Ready | CaptureStatus::Usable => format!("正在扫描 {user} 的人脸…"),
                         _ => status.to_string(),
                     };
                 }
@@ -640,7 +623,7 @@ async fn handle_auth(
         let _ = proxy.release().await;
         if !silent {
             Term::stderr().write_line(&format!(
-                "{} Timed out waiting for the daemon to decide ({}ms)",
+                "{} 等待后台服务结果超时（{}毫秒）",
                 style("✗").red().bold(),
                 start.elapsed().as_millis()
             ))?;
@@ -658,14 +641,14 @@ async fn handle_auth(
                 println!();
             }
             println!(
-                "\n{:<20} {:>10} {:>8} {:>8} {:>10} {:>8} {:>8}",
-                style("Face").bold(),
-                style("RGB Sim").bold(),
-                style("RGB %").bold(),
-                style("RGB Pass").bold(),
-                style("IR Sim").bold(),
-                style("IR %").bold(),
-                style("IR Pass").bold()
+                "\n{} {} {} {} {} {} {}",
+                style(i18n::cell("人脸", 20, true)).bold(),
+                style(i18n::cell("RGB 相似度", 10, false)).bold(),
+                style(i18n::cell("RGB %", 8, false)).bold(),
+                style(i18n::cell("RGB 通过", 8, false)).bold(),
+                style(i18n::cell("IR 相似度", 10, false)).bold(),
+                style(i18n::cell("IR %", 8, false)).bold(),
+                style(i18n::cell("IR 通过", 8, false)).bold()
             );
             println!("{}", style("-".repeat(78)).dim());
             for (name, rgb_sim, rgb_pct, rgb_passed, ir_sim, ir_pct, ir_passed) in &faces {
@@ -680,8 +663,8 @@ async fn handle_auth(
                     style("✗").red()
                 };
                 println!(
-                    "{:<20} {:>10.4} {:>7.1}% {:>8} {:>10.4} {:>7.1}% {:>8}",
-                    style(name).cyan(),
+                    "{} {:>10.4} {:>7.1}% {:>8} {:>10.4} {:>7.1}% {:>8}",
+                    style(i18n::cell(name, 20, true)).cyan(),
                     rgb_sim,
                     rgb_pct,
                     rgb_check,
@@ -694,9 +677,9 @@ async fn handle_auth(
 
             println!(
                 "{} RGB: {} | IR: {}",
-                style("Status:").bold(),
-                style(format!("{:?}", rgb_status)).cyan(),
-                style(format!("{:?}", ir_status)).cyan()
+                style("状态：").bold(),
+                style(rgb_status.to_string()).cyan(),
+                style(ir_status.to_string()).cyan()
             );
             println!();
         }
@@ -719,7 +702,7 @@ async fn handle_auth(
                     });
                 if let Some((face, pct)) = matched {
                     term.write_line(&format!(
-                        "{} Authenticated as: {} ({:.1}%, {}ms)",
+                        "{} 认证通过：{}（{:.1}%，{}毫秒）",
                         style("✓").green().bold(),
                         style(&face).green().bold(),
                         pct,
@@ -727,7 +710,7 @@ async fn handle_auth(
                     ))?;
                 } else {
                     term.write_line(&format!(
-                        "{} Authenticated as: {} ({}ms)",
+                        "{} 认证通过：{}（{}毫秒）",
                         style("✓").green().bold(),
                         style(user).green().bold(),
                         start.elapsed().as_millis()
@@ -740,7 +723,7 @@ async fn handle_auth(
     if !authenticated && !silent {
         let err_term = Term::stderr();
         err_term.write_line(&format!(
-            "{} Authentication failed ({}ms)",
+            "{} 认证失败（{}毫秒）",
             style("✗").red().bold(),
             start.elapsed().as_millis()
         ))?;
@@ -758,8 +741,15 @@ async fn handle_auth(
     Ok(())
 }
 
-fn main() -> anyhow::Result<()> {
-    CompleteEnv::with_factory(Cli::command).complete();
+fn main() {
+    if let Err(error) = execute() {
+        eprintln!("错误：{error:#}");
+        std::process::exit(1);
+    }
+}
+
+fn execute() -> anyhow::Result<()> {
+    CompleteEnv::with_factory(|| i18n::command(Cli::command())).complete();
 
     tokio::runtime::Builder::new_multi_thread()
         .enable_all()
@@ -768,7 +758,10 @@ fn main() -> anyhow::Result<()> {
 }
 
 async fn run() -> anyhow::Result<()> {
-    let cli = Cli::parse();
+    let matches = i18n::command(Cli::command())
+        .try_get_matches()
+        .unwrap_or_else(i18n::exit);
+    let cli = Cli::from_arg_matches(&matches).unwrap_or_else(i18n::exit);
 
     if let Some(name) = command_requires_root(&cli.command)
         && !is_root()
@@ -795,10 +788,7 @@ async fn run() -> anyhow::Result<()> {
             let username = user.clone().unwrap_or_else(get_current_user);
             if *forget {
                 gaze_security::keyring::forget_for(backend, &username)?;
-                println!(
-                    "Stored {} credential removed for {username}.",
-                    backend.name()
-                );
+                println!("已删除 {username} 保存的 {} 凭据。", backend.name());
             } else {
                 keyring::enroll(&username, &Config::load()?, backend)?;
             }
@@ -883,8 +873,7 @@ async fn run() -> anyhow::Result<()> {
                     Ok(loaded) => loaded,
                     Err(err) => match err.downcast_ref::<zbus::Error>() {
                         Some(dbus) => exit_with_error(
-                            &describe_dbus_error(&proxy, "Failed to read the configuration", dbus)
-                                .await,
+                            &describe_dbus_error(&proxy, "读取配置失败", dbus).await,
                         ),
                         None => return Err(err),
                     },
@@ -898,7 +887,7 @@ async fn run() -> anyhow::Result<()> {
                     } else {
                         apply_config_to_daemon(&proxy, &updated).await
                     };
-                    saved.map_err(|e| anyhow::anyhow!("Failed to save configuration: {e}"))?;
+                    saved.map_err(|e| anyhow::anyhow!("保存配置失败：{e}"))?;
                     println!("{key} = {}", updated.get_key(&key)?);
                 }
                 None if show => print!("{}", config_show_text(&config)?),
@@ -1235,6 +1224,6 @@ mod tests {
             return;
         }
         let err = reexec_as_root("add-face").expect_err("a second escalation would loop forever");
-        assert!(err.to_string().contains("did not gain root privileges"));
+        assert!(err.to_string().contains("未获得 root 权限"));
     }
 }

@@ -5,17 +5,20 @@
 <component type="desktop-application">
   <id>com.gundulabs.Gaze</id>
   <name>Gaze</name>
-  <summary>Enroll faces and configure facial authentication</summary>
+  <summary>录入人脸并配置人脸认证</summary>
   <metadata_license>FSFAP</metadata_license>
   <project_license>GPL-3.0-or-later</project_license>
   <launchable type="desktop-id">com.gundulabs.Gaze.desktop</launchable>
   <description>
-    <p>Enroll and manage faces, test face authentication, and adjust every Gaze setting.</p>
+    <p>录入和管理人脸、测试人脸认证，并调整 Gaze 各项设置。</p>
   </description>
-  <url type="homepage">https://gaze.gundulabs.com</url>
+  <url type="homepage">https://zxabinbina.cc.cd/projects/gaze</url>
   <developer_name>Gundu Labs</developer_name>
   <content_rating type="oars-1.1"/>
   <releases>
+    <release version="0.5.0" date="2026-10-30">
+      <description><p>完善图形界面与命令行汉化，保留原有排版，并同步上游更新。</p></description>
+    </release>
     <release version="0.4.1" date="2026-10-26"/>
     <release version="0.4.0" date="2026-10-24"/>
     <release version="0.3.10" date="2026-10-11"/>

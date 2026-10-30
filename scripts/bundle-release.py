@@ -94,7 +94,7 @@ def main():
     args = parser.parse_args()
     match = re.fullmatch(r"v(\d+\.\d+\.\d+)(?:-zh(?:\.([1-9]\d*))?)?", args.tag)
     if not match:
-        parser.error("tag must look like v0.4.1-zh.2")
+        parser.error("tag must look like v0.5.0")
     if not re.fullmatch(r"[0-9a-f]{40}", args.source_commit):
         parser.error("source-commit must be a full commit SHA")
     version, revision = match.group(1), match.group(2) or "1"

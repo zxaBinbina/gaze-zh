@@ -3,10 +3,10 @@
 
 [Desktop Entry]
 Name=Gaze
-Comment=Enroll faces and configure facial authentication
+Comment=录入人脸并配置人脸认证
 Exec=gaze-gui
 Icon=com.gundulabs.Gaze
 Terminal=false
 Type=Application
 Categories=Settings;Security;
-Keywords=face;auth;login;biometric;
+Keywords=人脸;认证;解锁;摄像头;face;auth;login;biometric;

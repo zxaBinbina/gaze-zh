@@ -236,12 +236,12 @@ fn append_package_manager_uninstall_steps(
     match package_manager {
         PackageManager::Apt => {
             plan.push((
-                "Remove apt packages",
+                "移除 apt 软件包",
                 "sudo apt-get remove --purge -y gaze-omarchy gaze gaze-gui gaze-gnome-extension gaze-cinnamon-extension gaze-hyprlock gaze-kde 2>/dev/null || true"
                     .into(),
             ));
             plan.push((
-                "Remove apt repo + keyring",
+                "移除 apt 软件源和密钥",
                 "sudo rm -f /etc/apt/sources.list.d/gundulabs.list \\
                   /usr/share/keyrings/gundulabs-archive-keyring.gpg && \\
                   sudo apt-get update 2>/dev/null || true"
@@ -251,28 +251,28 @@ fn append_package_manager_uninstall_steps(
         // Prefer Tumbleweed's native package manager.
         PackageManager::Zypper => {
             plan.push((
-                "Remove openSUSE PAM configuration",
+                "移除 openSUSE PAM 配置",
                 remove_suse_pam_configuration_cmd(),
             ));
-            plan.push(("Remove zypper packages", remove_zypper_packages_cmd()));
-            plan.push(("Remove zypper repo + key", remove_zypper_repo_and_key_cmd()));
+            plan.push(("移除 zypper 软件包", remove_zypper_packages_cmd()));
+            plan.push(("移除 zypper 软件源和密钥", remove_zypper_repo_and_key_cmd()));
         }
         PackageManager::Dnf => {
             plan.push((
-                "Remove dnf packages",
+                "移除 dnf 软件包",
                 "sudo dnf remove -y gaze-omarchy gaze gaze-gui gaze-gnome-extension gaze-cinnamon-extension gaze-hyprlock gaze-kde 2>/dev/null || true"
                     .into(),
             ));
             plan.push((
-                "Remove dnf repo",
+                "移除 dnf 软件源",
                 "sudo rm -f /etc/yum.repos.d/gundulabs.repo /etc/pki/rpm-gpg/RPM-GPG-KEY-gundulabs"
                     .into(),
             ));
         }
         PackageManager::RpmOstree => {
-            plan.push(("Remove layered packages", remove_rpm_ostree_packages_cmd()));
+            plan.push(("移除分层软件包", remove_rpm_ostree_packages_cmd()));
             plan.push((
-                "Remove dnf repo",
+                "移除 dnf 软件源",
                 "sudo rm -f /etc/yum.repos.d/gundulabs.repo /etc/pki/rpm-gpg/RPM-GPG-KEY-gundulabs \
                   /etc/systemd/system/gaze-finish-install.service \
                   /etc/systemd/system/multi-user.target.wants/gaze-finish-install.service \
@@ -280,14 +280,14 @@ fn append_package_manager_uninstall_steps(
                     .into(),
             ));
             plan.push((
-                "Reboot to finalize removal",
-                "echo 'Layered package removal takes effect after the next reboot.'".into(),
+                "重启以完成移除",
+                "echo '分层软件包将在下次重启后完成移除。'".into(),
             ));
         }
         PackageManager::Pacman => {
-            plan.push(("Remove pacman packages", remove_pacman_packages_cmd()));
+            plan.push(("移除 pacman 软件包", remove_pacman_packages_cmd()));
             plan.push((
-                "Remove old pacman repo entry",
+                "移除旧 pacman 软件源条目",
                 "sudo sed -i '/^\\[gaze\\]/,/^$/d' /etc/pacman.conf && \\
                   sudo rm -f /etc/pacman.d/gaze-mirrorlist"
                     .into(),
@@ -329,7 +329,7 @@ fn detect_package_manager() -> Option<PackageManager> {
     )
 }
 
-const RESTORE_OMARCHY_LOCK_STEP: &str = "Restore the stock Omarchy lock before removing Gaze";
+const RESTORE_OMARCHY_LOCK_STEP: &str = "移除 Gaze 前还原 Omarchy 原有锁屏";
 
 fn build_uninstall_plan(keep_data: bool) -> Vec<(&'static str, String)> {
     let mut plan: Vec<(&'static str, String)> = Vec::new();
@@ -340,19 +340,16 @@ fn build_uninstall_plan(keep_data: bool) -> Vec<(&'static str, String)> {
 
     if which("gnome-extensions") {
         plan.push((
-            "Disable and uninstall GNOME extension (best-effort)",
+            "尝试禁用并卸载 GNOME 扩展",
             "gnome-extensions disable gaze@gundulabs.com 2>/dev/null || true; \
               gnome-extensions uninstall gaze@gundulabs.com 2>/dev/null || true"
                 .into(),
         ));
     }
 
+    plan.push(("重置 GNOME 锁屏和登录设置", reset_gnome_user_settings_cmd()));
     plan.push((
-        "Reset GNOME lock/login settings",
-        reset_gnome_user_settings_cmd(),
-    ));
-    plan.push((
-        "Remove per-user GNOME extension copies",
+        "移除各用户的 GNOME 扩展副本",
         "for d in /home/*/.local/share/gnome-shell/extensions /root/.local/share/gnome-shell/extensions; do \
           [ -d \"$d/gaze@gundulabs.com\" ] || continue; \
           sudo rm -rf \"$d/gaze@gundulabs.com\"; \
@@ -360,40 +357,34 @@ fn build_uninstall_plan(keep_data: bool) -> Vec<(&'static str, String)> {
             .into(),
     ));
     plan.push((
-        "Remove the installer's one-shot GNOME enable",
+        "移除安装器的一次性 GNOME 启用项",
         "for h in /home/* /root; do \
           sudo rm -f \"$h/.config/autostart/gaze-gnome-enable.desktop\" \"$h/.local/share/gaze/gnome-enable.sh\"; \
           done"
             .into(),
     ));
+    plan.push(("移除 GDM dconf 覆盖设置", remove_gdm_dconf_overrides_cmd()));
     plan.push((
-        "Remove GDM dconf overrides",
-        remove_gdm_dconf_overrides_cmd(),
-    ));
-    plan.push((
-        "Disable the Cinnamon extension and remove its settings",
+        "禁用 Cinnamon 扩展并移除其设置",
         reset_cinnamon_user_settings_cmd(),
     ));
 
     if which("pam-auth-update") {
         plan.push((
-            "Remove Debian/Ubuntu PAM profile",
+            "移除 Debian/Ubuntu PAM 配置",
             "sudo pam-auth-update --package --remove gaze 2>/dev/null || true".into(),
         ));
     }
     if which("authselect") {
-        plan.push(("Restore authselect profile", restore_authselect_cmd()));
+        plan.push(("还原 authselect 配置", restore_authselect_cmd()));
     }
 
     if which("pacman") && !which("pam-auth-update") && !which("authselect") {
-        plan.push((
-            "Remove Arch PAM configuration",
-            remove_arch_pam_configuration_cmd(),
-        ));
+        plan.push(("移除 Arch PAM 配置", remove_arch_pam_configuration_cmd()));
     }
 
     plan.push((
-        "Remove hyprlock Gaze PAM references",
+        "移除 hyprlock 中的 Gaze PAM 引用",
         "for d in /home/*/.config/hypr /root/.config/hypr; do \
           f=\"$d/hyprlock.conf\"; \
           [ -f \"$f\" ] || continue; \
@@ -404,7 +395,7 @@ fn build_uninstall_plan(keep_data: bool) -> Vec<(&'static str, String)> {
     ));
 
     plan.push((
-        "Stop and disable daemon",
+        "停止并禁用后台服务",
         "sudo systemctl disable --now gazed 2>/dev/null || true".into(),
     ));
 
@@ -414,40 +405,34 @@ fn build_uninstall_plan(keep_data: bool) -> Vec<(&'static str, String)> {
 
     if which("semodule") {
         plan.push((
-            "Remove SELinux policy",
+            "移除 SELinux 策略",
             "sudo semodule -r gaze-gdm-camera 2>/dev/null; sudo semodule -r gaze-greeter-keyring 2>/dev/null || true".into(),
         ));
     }
 
     plan.push((
-        "Remove unmanaged development links/files",
+        "移除未受包管理器管理的开发链接和文件",
         remove_unmanaged_install_artifacts_cmd(),
     ));
 
     plan.push((
         // gazed holds decrypted face templates in memory, so its crash dumps
         // are biometric data too.
-        "Remove gaze core dumps",
+        "移除 Gaze 崩溃转储",
         "[ -d /var/lib/systemd/coredump ] && \
           sudo find /var/lib/systemd/coredump \\( -name 'core.gazed.*' \
           -o -name 'core.gaze.*' -o -name 'core.gaze-gui.*' \\) -delete \
           2>/dev/null || true"
             .into(),
     ));
-    plan.push(("Remove model cache", "sudo rm -rf /var/cache/gaze".into()));
-    plan.push(("Remove config", "sudo rm -rf /etc/gaze".into()));
+    plan.push(("移除模型缓存", "sudo rm -rf /var/cache/gaze".into()));
+    plan.push(("移除配置", "sudo rm -rf /etc/gaze".into()));
     if !keep_data {
-        plan.push((
-            "Remove enrolled face data",
-            "sudo rm -rf /var/lib/gaze".into(),
-        ));
+        plan.push(("移除已录入的人脸数据", "sudo rm -rf /var/lib/gaze".into()));
     }
 
-    plan.push((
-        "Refresh GNOME system settings",
-        refresh_gnome_system_settings_cmd(),
-    ));
-    plan.push(("Reload systemd", "sudo systemctl daemon-reload".into()));
+    plan.push(("刷新 GNOME 系统设置", refresh_gnome_system_settings_cmd()));
+    plan.push(("重新加载 systemd", "sudo systemctl daemon-reload".into()));
 
     plan
 }
@@ -456,10 +441,7 @@ pub fn handle_uninstall(yes: bool, keep_data: bool, dry_run: bool) -> anyhow::Re
     let term = Term::stdout();
     let plan = build_uninstall_plan(keep_data);
 
-    term.write_line(&format!(
-        "\n{}\n",
-        style("Gaze uninstall plan").red().bold()
-    ))?;
+    term.write_line(&format!("\n{}\n", style("Gaze 卸载计划").red().bold()))?;
     for (i, (desc, cmd)) in plan.iter().enumerate() {
         term.write_line(&format!(
             "  {} {}\n    {}",
@@ -472,12 +454,12 @@ pub fn handle_uninstall(yes: bool, keep_data: bool, dry_run: bool) -> anyhow::Re
 
     if keep_data {
         term.write_line(&format!(
-            "  {} /var/lib/gaze (enrolled faces) will be preserved.",
+            "  {} 将保留 /var/lib/gaze（已录入的人脸）。",
             style("i").cyan().bold()
         ))?;
     } else {
         term.write_line(&format!(
-            "  {} This removes enrolled face data. Pass --keep-data to preserve it.",
+            "  {} 将删除已录入的人脸数据。传入 --keep-data 可保留数据。",
             style("!").yellow().bold()
         ))?;
     }
@@ -485,7 +467,7 @@ pub fn handle_uninstall(yes: bool, keep_data: bool, dry_run: bool) -> anyhow::Re
 
     if dry_run {
         term.write_line(&format!(
-            "{} Dry run; no commands were executed.",
+            "{} 仅预览，未执行任何命令。",
             style("i").cyan().bold()
         ))?;
         return Ok(());
@@ -494,12 +476,12 @@ pub fn handle_uninstall(yes: bool, keep_data: bool, dry_run: bool) -> anyhow::Re
     if !yes {
         let theme = ColorfulTheme::default();
         let proceed = Select::with_theme(&theme)
-            .with_prompt("Proceed with uninstall?")
-            .items(["No, cancel", "Yes, uninstall Gaze"])
+            .with_prompt("继续卸载？")
+            .items(["否，取消", "是，卸载 Gaze"])
             .default(0)
             .interact()?;
         if proceed != 1 {
-            term.write_line(&format!("{} Cancelled.", style("✗").red().bold()))?;
+            term.write_line(&format!("{} 已取消。", style("✗").red().bold()))?;
             return Ok(());
         }
     }
@@ -509,28 +491,26 @@ pub fn handle_uninstall(yes: bool, keep_data: bool, dry_run: bool) -> anyhow::Re
         let status = std::process::Command::new("sh").arg("-c").arg(cmd).status();
         match status {
             Ok(s) if s.success() => {
-                term.write_line(&format!("  {} done", style("✓").green()))?;
+                term.write_line(&format!("  {} 完成", style("✓").green()))?;
             }
             Ok(s) => {
                 if *desc == RESTORE_OMARCHY_LOCK_STEP {
                     anyhow::bail!(
-                        "Omarchy lock restoration failed; Gaze has not been removed. Run gaze-omarchy disable from your unlocked desktop first."
+                        "还原 Omarchy 锁屏失败，尚未移除 Gaze。请先在已解锁的桌面运行 gaze-omarchy disable。"
                     );
                 }
                 term.write_line(&format!(
-                    "  {} step exited with {} (continuing)",
+                    "  {} 步骤退出码为 {}（继续）",
                     style("!").yellow(),
                     s.code().unwrap_or(-1)
                 ))?;
             }
             Err(e) => {
                 if *desc == RESTORE_OMARCHY_LOCK_STEP {
-                    anyhow::bail!(
-                        "Cannot restore the Omarchy lock: {e}. Gaze has not been removed."
-                    );
+                    anyhow::bail!("无法还原 Omarchy 锁屏：{e}。尚未移除 Gaze。");
                 }
                 term.write_line(&format!(
-                    "  {} failed to spawn: {} (continuing)",
+                    "  {} 启动失败：{}（继续）",
                     style("!").yellow(),
                     e
                 ))?;
@@ -539,12 +519,11 @@ pub fn handle_uninstall(yes: bool, keep_data: bool, dry_run: bool) -> anyhow::Re
     }
 
     term.write_line(&format!(
-        "\n{} Gaze uninstalled. A reboot is recommended to clear any in-memory state.",
+        "\n{} Gaze 已卸载。建议重启以清除内存中的残留状态。",
         style("✓").green().bold()
     ))?;
     term.write_line(&format!(
-        "  {} If a hyprlock.conf referenced Gaze, a backup was left next to it \
-          as hyprlock.conf.gaze-uninstall-bak.",
+        "  {} 如 hyprlock.conf 曾引用 Gaze，其旁边已保留备份 hyprlock.conf.gaze-uninstall-bak。",
         style("i").cyan().bold()
     ))?;
     Ok(())
@@ -562,18 +541,18 @@ mod tests {
     fn uninstall_plan_preserves_face_data_only_when_requested() {
         assert!(plan_has(
             &build_uninstall_plan(false),
-            "Remove enrolled face data"
+            "移除已录入的人脸数据"
         ));
         assert!(!plan_has(
             &build_uninstall_plan(true),
-            "Remove enrolled face data"
+            "移除已录入的人脸数据"
         ));
     }
 
     #[test]
     fn uninstall_always_removes_unmanaged_development_artifacts() {
         let plan = build_uninstall_plan(true);
-        assert!(plan_has(&plan, "Remove unmanaged development links/files"));
+        assert!(plan_has(&plan, "移除未受包管理器管理的开发链接和文件"));
 
         let command = remove_unmanaged_install_artifacts_cmd();
         for path in [
@@ -593,23 +572,20 @@ mod tests {
     #[test]
     fn uninstall_plan_removes_per_user_extensions_and_core_dumps() {
         let plan = build_uninstall_plan(true);
-        assert!(plan_has(&plan, "Remove per-user GNOME extension copies"));
-        assert!(plan_has(
-            &plan,
-            "Disable the Cinnamon extension and remove its settings"
-        ));
-        assert!(plan_has(&plan, "Remove gaze core dumps"));
+        assert!(plan_has(&plan, "移除各用户的 GNOME 扩展副本"));
+        assert!(plan_has(&plan, "禁用 Cinnamon 扩展并移除其设置"));
+        assert!(plan_has(&plan, "移除 Gaze 崩溃转储"));
 
         let (_, cmd) = plan
             .iter()
-            .find(|(desc, _)| *desc == "Remove per-user GNOME extension copies")
+            .find(|(desc, _)| *desc == "移除各用户的 GNOME 扩展副本")
             .unwrap();
         assert!(cmd.contains("/home/*/.local/share/gnome-shell/extensions"));
         assert!(cmd.contains("/root/.local/share/gnome-shell/extensions"));
 
         let (_, cmd) = plan
             .iter()
-            .find(|(desc, _)| *desc == "Remove gaze core dumps")
+            .find(|(desc, _)| *desc == "移除 Gaze 崩溃转储")
             .unwrap();
         assert!(cmd.contains("/var/lib/systemd/coredump"));
     }
@@ -691,9 +667,9 @@ mod tests {
         append_package_manager_uninstall_steps(&mut plan, PackageManager::Zypper);
 
         assert_eq!(plan.len(), 3);
-        assert_eq!(plan[0].0, "Remove openSUSE PAM configuration");
-        assert_eq!(plan[1].0, "Remove zypper packages");
-        assert_eq!(plan[2].0, "Remove zypper repo + key");
+        assert_eq!(plan[0].0, "移除 openSUSE PAM 配置");
+        assert_eq!(plan[1].0, "移除 zypper 软件包");
+        assert_eq!(plan[2].0, "移除 zypper 软件源和密钥");
 
         let command = &plan[2].1;
         assert!(command.contains("/etc/zypp/repos.d/gundulabs.repo"));

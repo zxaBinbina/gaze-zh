@@ -17,26 +17,23 @@ pub const USERS_DIR: &str = "/var/lib/gaze/users";
 pub const MODELS_DIR: &str = "/var/cache/gaze";
 pub const DEFAULT_RGB_CAMERA: &str = "primary";
 pub const SECURITY_LEVEL_OPTIONS: [&str; 5] = ["low", "medium", "high", "maximum", "custom"];
-pub const SECURITY_LEVEL_LABELS: [&str; 5] = ["Low", "Medium", "High", "Maximum", "Custom"];
+pub const SECURITY_LEVEL_LABELS: [&str; 5] = ["低", "中", "高", "最高", "自定义"];
 pub const MODEL_QUALITY_OPTIONS: [&str; 2] = ["standard", "accurate"];
-pub const MODEL_QUALITY_LABELS: [&str; 2] = ["Standard", "Accurate"];
+pub const MODEL_QUALITY_LABELS: [&str; 2] = ["标准", "精确"];
 pub const HYBRID_POLICY_OPTIONS: [&str; 4] = ["default", "or", "fallback_on_dark", "and"];
-pub const HYBRID_POLICY_LABELS: [&str; 4] = ["Default", "Or", "Fallback on dark", "And"];
+pub const HYBRID_POLICY_LABELS: [&str; 4] = ["默认", "任一匹配", "暗光时回退", "全部匹配"];
 pub const PARALLEL_CAPTURE_OPTIONS: [&str; 3] = ["never", "auto", "always"];
 pub const PARALLEL_CAPTURE_LABELS: [&str; 3] = [
-    "Never (capture RGB, then IR)",
-    "Auto (parallel when the camera allows it)",
-    "Always (capture RGB and IR at once)",
+    "从不（先 RGB，后红外）",
+    "自动（摄像头允许时并行）",
+    "始终（同时采集 RGB 与红外）",
 ];
 pub const START_DELAY_SCOPE_OPTIONS: [&str; 2] = ["all", "screen_lock"];
-pub const START_DELAY_SCOPE_LABELS: [&str; 2] = [
-    "All face authentication (including sudo)",
-    "Screen lockers only",
-];
+pub const START_DELAY_SCOPE_LABELS: [&str; 2] = ["所有人脸认证（含 sudo）", "仅锁屏"];
 // Clients validate syntax independently of the daemon's installed vendor runtime.
 pub const INFERENCE_EXECUTION_PROVIDER_OPTIONS: [&str; 4] = ["cpu", "auto", "openvino", "vitis"];
 pub const INFERENCE_EXECUTION_PROVIDER_LABELS: [&str; 4] =
-    ["CPU", "Automatic (NPU)", "Intel OpenVINO", "AMD Ryzen AI"];
+    ["CPU", "自动（NPU）", "Intel OpenVINO", "AMD Ryzen AI"];
 pub const INFERENCE_DEVICE_OPTIONS: [&str; 3] = ["cpu", "gpu", "npu"];
 pub const INFERENCE_DEVICE_LABELS: [&str; 3] = ["CPU", "GPU", "NPU"];
 pub const DEFAULT_ENROLLMENT_MIN_FACE_SIZE_RATIO: f64 = 0.25;
@@ -123,26 +120,26 @@ impl InferenceConfig {
     pub fn validate(&self) -> anyhow::Result<()> {
         if !INFERENCE_EXECUTION_PROVIDER_OPTIONS.contains(&self.execution_provider.as_str()) {
             anyhow::bail!(
-                "invalid inference.execution_provider {:?}: expected one of {:?}",
+                "inference.execution_provider 的值 {:?} 无效：应为 {:?} 之一",
                 self.execution_provider,
                 INFERENCE_EXECUTION_PROVIDER_OPTIONS
             );
         }
         if !INFERENCE_DEVICE_OPTIONS.contains(&self.device.as_str()) {
             anyhow::bail!(
-                "invalid inference.device {:?}: expected one of {:?}",
+                "inference.device 的值 {:?} 无效：应为 {:?} 之一",
                 self.device,
                 INFERENCE_DEVICE_OPTIONS
             );
         }
         if self.execution_provider == "cpu" && self.device != "cpu" {
             anyhow::bail!(
-                "inference.device must be \"cpu\" when inference.execution_provider is \"cpu\""
+                "inference.execution_provider 为 \"cpu\" 时，inference.device 必须为 \"cpu\""
             );
         }
         if matches!(self.execution_provider.as_str(), "auto" | "vitis") && self.device != "npu" {
             anyhow::bail!(
-                "inference.device must be \"npu\" when inference.execution_provider is {:?}",
+                "inference.execution_provider 为 {:?} 时，inference.device 必须为 \"npu\"",
                 self.execution_provider
             );
         }
@@ -213,7 +210,7 @@ impl StorageConfig {
         if (self.unlock_gnome_keyring || self.unlock_kwallet)
             && (!self.encrypt_templates || !liveness.enabled)
         {
-            anyhow::bail!("keyring unlock requires storage.encrypt_templates and liveness.enabled");
+            anyhow::bail!("密钥环解锁需要启用 storage.encrypt_templates 和 liveness.enabled");
         }
         Ok(())
     }
@@ -251,7 +248,7 @@ impl DuressConfig {
     pub fn validate(&self) -> anyhow::Result<()> {
         if !Self::closed_threshold_in_range(self.closed_threshold) {
             anyhow::bail!(
-                "duress.closed_threshold must be between {} and {}, got {}",
+                "duress.closed_threshold 必须在 {} 到 {} 之间，当前为 {}",
                 MIN_DURESS_CLOSED_THRESHOLD,
                 MAX_DURESS_CLOSED_THRESHOLD,
                 self.closed_threshold
@@ -259,7 +256,7 @@ impl DuressConfig {
         }
         if self.hold_ms > MAX_DURESS_HOLD_MS {
             anyhow::bail!(
-                "duress.hold_ms must be at most {}, got {}",
+                "duress.hold_ms 不得超过 {}，当前为 {}",
                 MAX_DURESS_HOLD_MS,
                 self.hold_ms
             );
@@ -328,7 +325,7 @@ impl LivenessConfig {
     pub fn validate(&self) -> anyhow::Result<()> {
         if !Self::threshold_in_range(self.threshold) {
             anyhow::bail!(
-                "liveness.threshold must be between {} and {}, got {}",
+                "liveness.threshold 必须在 {} 到 {} 之间，当前为 {}",
                 MIN_LIVENESS_THRESHOLD,
                 MAX_LIVENESS_THRESHOLD,
                 self.threshold
@@ -336,7 +333,7 @@ impl LivenessConfig {
         }
         if !Self::max_seconds_in_range(self.max_seconds) {
             anyhow::bail!(
-                "liveness.max_seconds must be between {} and {}, got {}",
+                "liveness.max_seconds 必须在 {} 到 {} 之间，当前为 {}",
                 MIN_LIVENESS_MAX_SECONDS,
                 MAX_LIVENESS_MAX_SECONDS,
                 self.max_seconds
@@ -344,7 +341,7 @@ impl LivenessConfig {
         }
         if !Self::threshold_in_range(self.ir_threshold) {
             anyhow::bail!(
-                "liveness.ir_threshold must be between {} and {}, got {}",
+                "liveness.ir_threshold 必须在 {} 到 {} 之间，当前为 {}",
                 MIN_LIVENESS_THRESHOLD,
                 MAX_LIVENESS_THRESHOLD,
                 self.ir_threshold
@@ -442,21 +439,20 @@ impl CameraConfig {
     pub fn validate(&self) -> anyhow::Result<()> {
         if !PARALLEL_CAPTURE_OPTIONS.contains(&self.parallel_capture.as_str()) {
             anyhow::bail!(
-                "invalid cameras.parallel_capture {:?}: expected one of {:?}",
+                "cameras.parallel_capture 的值 {:?} 无效：应为 {:?} 之一",
                 self.parallel_capture,
                 PARALLEL_CAPTURE_OPTIONS
             );
         }
         match (self.ir_frame_width, self.ir_frame_height) {
             (None, None) => {}
-            (Some(_), None) | (None, Some(_)) => anyhow::bail!(
-                "cameras.ir_frame_width and cameras.ir_frame_height must be set together"
-            ),
+            (Some(_), None) | (None, Some(_)) => {
+                anyhow::bail!("cameras.ir_frame_width 和 cameras.ir_frame_height 必须同时设置")
+            }
             (Some(width), Some(height)) => {
                 if !ir_frame_dimension_valid(width) || !ir_frame_dimension_valid(height) {
                     anyhow::bail!(
-                        "cameras.ir_frame_width and cameras.ir_frame_height must be between 1 and \
-                         {MAX_IR_FRAME_DIMENSION}, got {width}x{height}"
+                        "cameras.ir_frame_width 和 cameras.ir_frame_height 必须在 1 到 {MAX_IR_FRAME_DIMENSION} 之间，当前为 {width}x{height}"
                     );
                 }
             }
@@ -698,7 +694,7 @@ impl EnrollmentConfig {
                 .contains(&self.min_face_size_ratio)
         {
             anyhow::bail!(
-                "enrollment.min_face_size_ratio must be between {} and {}, got {}",
+                "enrollment.min_face_size_ratio 必须在 {} 到 {} 之间，当前为 {}",
                 MIN_ENROLLMENT_FACE_SIZE_RATIO,
                 MAX_ENROLLMENT_FACE_SIZE_RATIO,
                 self.min_face_size_ratio
@@ -870,7 +866,7 @@ fn create_temp_config_file(
     }
     Err(std::io::Error::new(
         std::io::ErrorKind::AlreadyExists,
-        "could not create a unique temporary config file",
+        "无法创建唯一的临时配置文件",
     ))
 }
 
@@ -881,7 +877,7 @@ pub struct ConfigCommitUncertain(pub std::io::Error);
 
 impl std::fmt::Display for ConfigCommitUncertain {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "config replaced but directory sync failed: {}", self.0)
+        write!(f, "配置已替换，但目录同步失败：{}", self.0)
     }
 }
 
@@ -897,11 +893,11 @@ fn replace_file_atomically(path: &Path, contents: &str) -> std::io::Result<()> {
                 parent
             }
         })
-        .ok_or_else(|| std::io::Error::other("config path must have a parent directory"))?;
+        .ok_or_else(|| std::io::Error::other("配置路径必须有父目录"))?;
     let file_name = path
         .file_name()
         .and_then(|name| name.to_str())
-        .ok_or_else(|| std::io::Error::other("config path must have a valid file name"))?;
+        .ok_or_else(|| std::io::Error::other("配置路径必须包含有效文件名"))?;
     let mode = std::fs::metadata(path)
         .map(|meta| meta.permissions().mode() & 0o777)
         .unwrap_or(DEFAULT_CONFIG_MODE);
@@ -932,13 +928,11 @@ impl Config {
         for part in key.split('.') {
             item = item
                 .get(part)
-                .ok_or_else(|| anyhow::anyhow!("unknown setting `{key}`"))?;
+                .ok_or_else(|| anyhow::anyhow!("未知设置 `{key}`"))?;
         }
         let value = item.as_value().filter(|_| !item.is_table_like());
         let Some(value) = value else {
-            anyhow::bail!(
-                "`{key}` is a section; ask for one of its settings, such as `{key}.<name>`"
-            );
+            anyhow::bail!("`{key}` 是一个配置节；请指定其中的设置，例如 `{key}.<name>`");
         };
         Ok(match value.as_str() {
             Some(text) => text.to_string(),
@@ -949,44 +943,46 @@ impl Config {
     pub fn with_key(&self, key: &str, raw: &str) -> anyhow::Result<Config> {
         let (section, leaf) = key
             .rsplit_once('.')
-            .ok_or_else(|| anyhow::anyhow!("use section.setting, for example `security.level`"))?;
+            .ok_or_else(|| anyhow::anyhow!("请使用 节名.设置名，例如 `security.level`"))?;
         if FILE_ONLY_CONFIG_KEYS.contains(&key) || FILE_ONLY_CONFIG_SECTIONS.contains(&section) {
-            anyhow::bail!("`{key}` can only be set in {CONFIG_PATH}; edit it and restart gazed");
+            anyhow::bail!(
+                "`{key}` 只能在 {CONFIG_PATH} 中设置；请编辑后重启 gazed（restart gazed）"
+            );
         }
         let mut doc = toml_edit::ser::to_document(self)?;
         let mut table = doc.as_item_mut();
         for part in section.split('.') {
             table = table
                 .get_mut(part)
-                .ok_or_else(|| anyhow::anyhow!("unknown setting `{key}`"))?;
+                .ok_or_else(|| anyhow::anyhow!("未知设置 `{key}`"))?;
         }
         let table = table
             .as_table_like_mut()
-            .ok_or_else(|| anyhow::anyhow!("unknown setting `{key}`"))?;
+            .ok_or_else(|| anyhow::anyhow!("未知设置 `{key}`"))?;
         let current = table
             .get(leaf)
             .and_then(toml_edit::Item::as_value)
-            .ok_or_else(|| anyhow::anyhow!("unknown setting `{key}`"))?;
+            .ok_or_else(|| anyhow::anyhow!("未知设置 `{key}`"))?;
         let raw = raw.trim();
         let value = match current {
             toml_edit::Value::Boolean(_) => toml_edit::value(
                 raw.parse::<bool>()
-                    .map_err(|_| anyhow::anyhow!("`{key}` takes true or false"))?,
+                    .map_err(|_| anyhow::anyhow!("`{key}` 只接受 true 或 false"))?,
             ),
             toml_edit::Value::Integer(_) => toml_edit::value(
                 raw.parse::<i64>()
-                    .map_err(|_| anyhow::anyhow!("`{key}` takes a whole number"))?,
+                    .map_err(|_| anyhow::anyhow!("`{key}` 只接受整数"))?,
             ),
             toml_edit::Value::Float(_) => toml_edit::value(
                 raw.parse::<f64>()
-                    .map_err(|_| anyhow::anyhow!("`{key}` takes a number"))?,
+                    .map_err(|_| anyhow::anyhow!("`{key}` 只接受数字"))?,
             ),
             toml_edit::Value::String(_) => toml_edit::value(raw),
-            _ => anyhow::bail!("`{key}` cannot be set from the command line; edit {CONFIG_PATH}"),
+            _ => anyhow::bail!("无法通过命令行设置 `{key}`；请编辑 {CONFIG_PATH}"),
         };
         table.insert(leaf, value);
         let config: Config = toml_edit::de::from_document(doc)
-            .map_err(|e| anyhow::anyhow!("invalid value for `{key}`: {e}"))?;
+            .map_err(|e| anyhow::anyhow!("`{key}` 的值无效：{e}"))?;
         config.security.validate()?;
         config.enrollment.validate()?;
         config.inference.validate()?;
@@ -1071,29 +1067,24 @@ impl Config {
                     parent
                 }
             })
-            .context("config path must have a parent directory")?;
+            .context("配置路径必须有父目录")?;
         let file_name = path
             .file_name()
             .and_then(|n| n.to_str())
-            .context("config path must have a valid file name")?;
+            .context("配置路径必须包含有效文件名")?;
         let (tmp_path, mut file, mut cleanup) = create_temp_config_file(parent, file_name)
-            .with_context(|| {
-                format!(
-                    "failed to create temporary config file for {}",
-                    path.display()
-                )
-            })?;
+            .with_context(|| format!("无法为 {} 创建临时配置文件", path.display()))?;
         file.write_all(encoded.as_bytes())
             .and_then(|_| file.flush())
-            .with_context(|| format!("failed to write config file: {}", path.display()))?;
+            .with_context(|| format!("写入配置文件失败：{}", path.display()))?;
         let target_mode = existing_mode.unwrap_or(DEFAULT_CONFIG_MODE);
         file.set_permissions(std::fs::Permissions::from_mode(target_mode))
-            .with_context(|| format!("failed to set mode {target_mode:o} on {}", path.display()))?;
+            .with_context(|| format!("设置权限 {target_mode:o} 失败：{}", path.display()))?;
         file.sync_all()
-            .with_context(|| format!("failed to sync config file: {}", path.display()))?;
+            .with_context(|| format!("同步配置文件失败：{}", path.display()))?;
         drop(file);
         std::fs::rename(&tmp_path, path)
-            .with_context(|| format!("failed to replace config file: {}", path.display()))?;
+            .with_context(|| format!("替换配置文件失败：{}", path.display()))?;
         cleanup.disarm();
         std::fs::File::open(parent)
             .and_then(|dir| dir.sync_all())
@@ -1721,7 +1712,7 @@ mod tests {
             .save_to(path.to_str().unwrap())
             .unwrap_err();
         assert!(
-            err.to_string().contains("failed to replace config file"),
+            err.to_string().contains("替换配置文件失败"),
             "unexpected error: {err:#}"
         );
         assert!(

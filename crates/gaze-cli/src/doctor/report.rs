@@ -14,24 +14,24 @@ pub(super) fn write(report: &Report, username: &str) -> anyhow::Result<PathBuf> 
         "gaze doctor",
         &console::strip_ansi_codes(&report.render()),
     );
-    section(&mut out, "gaze version", env!("CARGO_PKG_VERSION"));
+    section(&mut out, "Gaze 版本", env!("CARGO_PKG_VERSION"));
     section(
         &mut out,
         "/etc/os-release",
-        &fs::read_to_string("/etc/os-release").unwrap_or_else(|e| format!("unreadable: {e}")),
+        &fs::read_to_string("/etc/os-release").unwrap_or_else(|e| format!("无法读取：{e}")),
     );
-    section(&mut out, "kernel", &run("uname", &["-srm"]));
-    section(&mut out, "desktop session", &desktop_session());
-    section(&mut out, "installed Gaze packages", &installed_packages());
-    section(&mut out, "PAM lines that mention Gaze", &pam_lines());
+    section(&mut out, "内核", &run("uname", &["-srm"]));
+    section(&mut out, "桌面会话", &desktop_session());
+    section(&mut out, "已安装的 Gaze 软件包", &installed_packages());
+    section(&mut out, "包含 Gaze 的 PAM 配置行", &pam_lines());
     section(
         &mut out,
-        "gazed service",
+        "gazed 服务",
         &run("systemctl", &["status", "gazed", "--no-pager", "--lines=0"]),
     );
     section(
         &mut out,
-        "gazed journal",
+        "gazed 日志",
         &run(
             "journalctl",
             &[
@@ -48,7 +48,7 @@ pub(super) fn write(report: &Report, username: &str) -> anyhow::Result<PathBuf> 
     section(
         &mut out,
         CONFIG_PATH,
-        &fs::read_to_string(CONFIG_PATH).unwrap_or_else(|e| format!("unreadable: {e}")),
+        &fs::read_to_string(CONFIG_PATH).unwrap_or_else(|e| format!("无法读取：{e}")),
     );
 
     let text = redact(&out, username, &hostname());
@@ -85,8 +85,8 @@ fn section(out: &mut String, title: &str, body: &str) {
 fn run(program: &str, args: &[&str]) -> String {
     match command_output(program, args) {
         Ok((_, text)) if !text.is_empty() => text,
-        Ok(_) => "(no output)".to_string(),
-        Err(e) => format!("{program} unavailable: {e}"),
+        Ok(_) => "（无输出）".to_string(),
+        Err(e) => format!("{program} 不可用：{e}"),
     }
 }
 
@@ -117,7 +117,7 @@ fn installed_packages() -> String {
         })
         .collect();
     if found.is_empty() {
-        "no Gaze packages found through dpkg, rpm or pacman".to_string()
+        "通过 dpkg、rpm 或 pacman 未找到 Gaze 软件包".to_string()
     } else {
         found.join("\n")
     }
@@ -144,7 +144,7 @@ fn pam_lines() -> String {
         }
     }
     if lines.is_empty() {
-        "no PAM service references Gaze".to_string()
+        "没有 PAM 服务引用 Gaze".to_string()
     } else {
         lines.join("\n")
     }
