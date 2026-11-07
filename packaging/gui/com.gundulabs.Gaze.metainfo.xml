@@ -16,6 +16,9 @@
   <developer_name>Gundu Labs</developer_name>
   <content_rating type="oars-1.1"/>
   <releases>
+    <release version="0.5.2" date="2026-11-07">
+      <description><p>同步上游相机来源回退、测试命令诊断和 Plasma 6.8 认证兼容更新，保留并补齐简体中文提示。</p></description>
+    </release>
     <release version="0.5.1" date="2026-10-30">
       <description><p>补齐认证成功、确认、错误及安装提示的汉化，并加入上游同步后的汉化回归检查。</p></description>
     </release>
