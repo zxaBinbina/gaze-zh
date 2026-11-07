@@ -8,7 +8,7 @@ Gaze Omarchy 集成已安装。请在已解锁的桌面中运行以下命令，�
 
     gaze-omarchy enable
     gaze add-face default
-    gaze auth
+    gaze test
     gaze-omarchy doctor
 
 软件包或 Omarchy 更新后，请运行 gaze-omarchy doctor。在已解锁桌面中

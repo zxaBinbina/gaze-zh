@@ -207,6 +207,7 @@ const GAZE_MSG_FACE_NOT_DETECTED = "GAZE_MSG_FACE_NOT_DETECTED";
 const GAZE_MSG_FACE_TOO_DARK = "GAZE_MSG_FACE_TOO_DARK";
 const GAZE_MSG_FACE_TIMED_OUT = "GAZE_MSG_FACE_TIMED_OUT";
 const GAZE_MSG_FACE_UNAVAILABLE = "GAZE_MSG_FACE_UNAVAILABLE";
+const GAZE_MSG_PASSWORD_REQUIRED = "GAZE_MSG_PASSWORD_REQUIRED";
 
 let activeExtensionInstance = null;
 
@@ -226,6 +227,7 @@ const safeGettext = (str) => {
     "Too dark for face authentication. Enter your password.": "光线过暗，无法进行人脸认证。请输入密码。",
     "Face authentication timed out. Enter your password.": "人脸认证超时。请输入密码。",
     "Face authentication unavailable. Enter your password.": "人脸认证不可用。请输入密码。",
+    "Changing Gaze's settings or faces needs your password.": "更改 Gaze 设置或人脸数据需要输入密码。",
     "Password:": "密码：",
     "Password: ": "密码：",
 
@@ -285,6 +287,10 @@ const INTERNAL_ERROR_MAP = new Map([
   [
     GAZE_MSG_FACE_UNAVAILABLE,
     "Face authentication unavailable. Please enter your password.",
+  ],
+  [
+    GAZE_MSG_PASSWORD_REQUIRED,
+    "Changing Gaze's settings or faces needs your password.",
   ],
 ]);
 
@@ -870,6 +876,7 @@ export default class GazeFaceAuthExtension extends Extension {
         "com.gundulabs.Gaze",
         "/com/gundulabs/Gaze",
         (proxy, error) => {
+          if (this._dbusProxy !== proxy) return;
           if (error) {
             logError(error, "[gaze] Failed to connect to gazed");
             return;
@@ -882,15 +889,17 @@ export default class GazeFaceAuthExtension extends Extension {
         },
       );
 
-      this._dbusProxy.connect("notify::g-name-owner", () => {
-        if (this._dbusProxy.g_name_owner) {
+      this._nameOwnerId = this._dbusProxy.connect(
+        "notify::g-name-owner",
+        (proxy) => {
+          if (this._dbusProxy !== proxy || !proxy.g_name_owner) return;
           try {
-            this._dbusProxy.RegisterExtensionRemote(true);
-            registerPamInternalServices(this._dbusProxy);
+            proxy.RegisterExtensionRemote(true);
+            registerPamInternalServices(proxy);
           } catch (e) {}
           cacheCamera();
-        }
-      });
+        },
+      );
     } catch (e) {}
 
     const extensionSettings = this._extensionSettings;
@@ -2229,6 +2238,10 @@ export default class GazeFaceAuthExtension extends Extension {
     activeExtensionInstance = null;
     this._gazeEnableToken = null;
     if (this._dbusProxy) {
+      if (this._nameOwnerId) {
+        this._dbusProxy.disconnect(this._nameOwnerId);
+        this._nameOwnerId = 0;
+      }
       try {
         if (typeof this._dbusProxy.RemovePamInternalRemote === "function") {
           this._dbusProxy.RemovePamInternalRemote("polkit-1");

@@ -359,14 +359,9 @@ impl AuthDaemon {
                 return;
             }
 
-            let template_id = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map(|d| d.as_secs().to_string())
-                .unwrap_or_else(|_| "0".to_string());
-
             info!(
-                "开始录入：为 {} 采集人脸，目标：{}，模板：{}，采集 RGB：{}，采集红外：{}",
-                username, face_name, template_id, run_rgb, run_ir
+                "开始录入：为 {} 采集人脸，目标：{}，采集 RGB：{}，采集红外：{}",
+                username, face_name, run_rgb, run_ir
             );
 
             let orientation_watch = OrientationWatch::start(config.cameras.auto_rotate).await;
@@ -424,7 +419,7 @@ impl AuthDaemon {
                                 continue;
                             }
 
-                            let mut cam = match Camera::open_privileged(&rgb_device_clone) {
+                            let mut cam = match Camera::open_rgb_privileged(&rgb_device_clone) {
                                 Ok(c) => c,
                                 Err(e) => {
                                     dead_streams += 1;
@@ -506,7 +501,7 @@ impl AuthDaemon {
                         }
                     }
 
-                    let mut cam = match Camera::open_privileged(&rgb_device_clone) {
+                    let mut cam = match Camera::open_rgb_privileged(&rgb_device_clone) {
                         Ok(c) => c,
                         Err(e) => {
                             let _ = tx.blocking_send(EnrollMsg::Error(format!("RGB 摄像头打开失败：{e}")));
@@ -939,7 +934,12 @@ impl AuthDaemon {
                 let mut db = db_arc.lock().await;
                 // Stop/replacement may arrive during the pause after the last capture.
                 let saved = if rx.try_recv() == Err(oneshot::error::TryRecvError::Empty) {
-                    Some(db.add_template(&username, &face_name, &template_id, captured_embeddings))
+                    let now_secs = std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .map_or(0, |d| d.as_secs());
+                    Some(db.next_template_id(&username, &face_name, now_secs).and_then(|template_id| {
+                        db.add_template(&username, &face_name, &template_id, captured_embeddings)
+                    }))
                 } else {
                     None
                 };
@@ -1281,12 +1281,11 @@ impl AuthDaemon {
 
     async fn get_gdm_face_auth(&self, #[zbus(header)] header: Header<'_>) -> fdo::Result<bool> {
         Self::ensure_config_read_access(&header).await?;
-        tokio::task::spawn_blocking(|| {
-            gdm_face_auth_from_dconf()
-                .unwrap_or_else(|| std::path::Path::new(GDM_FACE_OVERRIDE_PATH).exists())
+        run_gdm_task(&self.rt_handle, "读取", || {
+            Ok(gdm_face_auth_from_dconf()
+                .unwrap_or_else(|| std::path::Path::new(GDM_FACE_OVERRIDE_PATH).exists()))
         })
         .await
-        .map_err(|e| fdo::Error::Failed(format!("无法读取 GDM 人脸登录设置：{e}")))
     }
 
     async fn set_gdm_face_auth(
@@ -1295,9 +1294,10 @@ impl AuthDaemon {
         enabled: bool,
     ) -> fdo::Result<bool> {
         Self::ensure_authorized(&header, POLKIT_ACTION_MANAGE_GDM_PROFILE).await?;
-        tokio::task::spawn_blocking(move || write_gdm_face_auth(enabled))
-            .await
-            .map_err(|e| fdo::Error::Failed(format!("无法更新 GDM 人脸登录设置：{e}")))?
+        run_gdm_task(&self.rt_handle, "更新", move || {
+            write_gdm_face_auth(enabled)
+        })
+        .await
     }
 
     #[zbus(signal)]

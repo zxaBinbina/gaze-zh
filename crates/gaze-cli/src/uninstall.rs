@@ -70,17 +70,21 @@ fn remove_gdm_dconf_overrides_cmd() -> String {
 
 fn restore_authselect_cmd() -> String {
     [
+        "current=$(sudo authselect current 2>/dev/null || true);",
+        r#"case "$(printf '%s\n' "$current" | sed -n 's/^Profile ID:[[:space:]]*//p')" in"#,
+        "gaze|custom/gaze)",
+        r#"profile=""; features="";"#,
         "if [ -f /etc/gaze/authselect.previous ]; then",
         r#"profile=$(sudo sed -n 's/^Profile ID:[[:space:]]*//p' /etc/gaze/authselect.previous);"#,
         r#"features=$(sudo sed -n 's/^- //p' /etc/gaze/authselect.previous | tr '\n' ' ');"#,
-        r#"if [ -n "$profile" ]; then"#,
-        r#"sudo authselect select "$profile" $features --force 2>/dev/null || true;"#,
-        "else",
-        "sudo authselect select sssd --force 2>/dev/null || true;",
         "fi;",
-        "else",
-        "sudo authselect select sssd --force 2>/dev/null || true;",
-        "fi",
+        r#"if [ -z "$profile" ]; then"#,
+        r#"if sudo authselect list 2>/dev/null | grep -q '^- local[[:space:]]'; then profile=local; else profile=sssd; fi;"#,
+        r#"features=$(printf '%s\n' "$current" | sed -n 's/^- //p' | grep -v -e '^with-face' -e '^with-silent-lastlog$' | tr '\n' ' ');"#,
+        "fi;",
+        r#"sudo authselect select "$profile" $features --force 2>/dev/null ||"#,
+        r#"sudo authselect select "$profile" --force 2>/dev/null || true;;"#,
+        "esac",
     ]
     .join(" ")
 }
@@ -388,8 +392,10 @@ fn build_uninstall_plan(keep_data: bool) -> Vec<(&'static str, String)> {
         "for d in /home/*/.config/hypr /root/.config/hypr; do \
           f=\"$d/hyprlock.conf\"; \
           [ -f \"$f\" ] || continue; \
-          sudo sed -i.gaze-uninstall-bak \
-            '/^\\s*\\(pam_\\)\\?module\\s*=\\s*hyprlock-gaze\\(-simultaneous\\)\\?\\s*$/d' \"$f\" || true; \
+          sudo grep -q 'hyprlock-gaze' \"$f\" 2>/dev/null || continue; \
+          sudo sed --follow-symlinks -i.gaze-uninstall-bak \
+            '/^\\s*\\(pam_\\)\\?module\\s*=\\s*hyprlock-gaze\\(-simultaneous\\)\\?\\s*$/d' \"$f\" \
+            || echo \"  无法编辑 $f；请手动删除其中的 hyprlock-gaze 模块行。\"; \
           done"
             .into(),
     ));
@@ -523,7 +529,7 @@ pub fn handle_uninstall(yes: bool, keep_data: bool, dry_run: bool) -> anyhow::Re
         style("✓").green().bold()
     ))?;
     term.write_line(&format!(
-        "  {} 如 hyprlock.conf 曾引用 Gaze，其旁边已保留备份 hyprlock.conf.gaze-uninstall-bak。",
+        "  {} 如 hyprlock.conf 曾引用 Gaze，已在该文件或其链接目标旁保留后缀为 .gaze-uninstall-bak 的备份。",
         style("i").cyan().bold()
     ))?;
     Ok(())

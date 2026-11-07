@@ -79,7 +79,7 @@ body:
       label: 哪些界面受影响？
       description: 勾选你实际尝试过的每一个。哪些*能用*和哪些失败一样有诊断价值，因为同一次人脸匹配可能在 CLI 上成功却在 greeter 上失败，这能快速缩小范围。
       options:
-        - label: "命令行上的 `gaze auth`"
+        - label: "命令行上的 `gaze test`"
         - label: "`gaze add-face` / `gaze refine-face` 录入"
         - label: "`gaze-gui`（桌面应用）"
         - label: "`sudo` 或其他终端提权"
@@ -183,7 +183,7 @@ body:
   - type: textarea
     id: auth-verbose
     attributes:
-      label: "`gaze auth --verbose` 输出"
+      label: "`gaze test` 输出"
       description: 用于识别、评分、活体检测或 IR-vs-RGB 问题。显示每张人脸、每个光谱的分数以及每项的通过/失败结果。
       render: text
 

@@ -82,7 +82,7 @@ jobs:
           build-deps: "false"
 
       - name: Install cargo-audit
-        uses: taiki-e/install-action@86f7a0ffb25f40114606501a311ebcfaf882ea32 # v2.88.0
+        uses: taiki-e/install-action@c509219cf42fba86913069efd0ade2458c59337b # v2.90.1
         with:
           tool: cargo-audit
 
@@ -472,7 +472,7 @@ jobs:
       - name: Evaluate NixOS module
         run: |
           # Twice, because the KDE lock screen slot is chosen from these two
-          # options: fprintd alone takes kde-smartcard, both together fall back
+          # options: fprintd alone takes kde-smartcard before Plasma 6.8, both together fall back
           # to sharing kde-fingerprint with the reader. One eval builds only one
           # of those branches.
           for p11 in false true; do

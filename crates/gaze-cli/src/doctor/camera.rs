@@ -101,8 +101,20 @@ pub(super) fn check_cameras(report: &mut Report, config: Option<&Config>) {
         return;
     };
 
-    let rgb = config.cameras.rgb.trim();
-    if !rgb.is_empty() {
+    let rgb = config.cameras.rgb.first();
+    if matches!(
+        config.cameras.rgb,
+        gaze_core::config::CameraSources::Ordered(_)
+    ) && !rgb.is_empty()
+    {
+        report.pass(
+            "RGB 摄像头",
+            format!(
+                "运行时将按顺序尝试来源 {}，跳过无法打开的来源",
+                config.cameras.rgb
+            ),
+        );
+    } else if !rgb.is_empty() {
         match gaze_vision::camera::enumerate_cameras() {
             Ok(cameras) => {
                 let detected = cameras
@@ -161,7 +173,7 @@ pub(super) fn check_cameras(report: &mut Report, config: Option<&Config>) {
                     report.warning(
                         "RGB 摄像头",
                         "已配置自定义 GStreamer 来源，本次只读检查未打开该来源",
-                        "运行 `gaze auth`，确认自定义来源能输出画面。",
+                        "运行 `gaze test`，确认自定义来源能输出画面。",
                     );
                 }
             }
@@ -218,7 +230,7 @@ pub(super) fn check_cameras(report: &mut Report, config: Option<&Config>) {
         report.warning(
             "红外摄像头",
             "已配置自定义 GStreamer 来源，本次只读检查未打开该来源",
-            "运行 `gaze auth`，确认红外来源能输出画面。",
+            "运行 `gaze test`，确认红外来源能输出画面。",
         );
     }
 

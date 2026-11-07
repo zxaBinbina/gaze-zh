@@ -306,7 +306,7 @@ pub(super) async fn check_daemon(
         Ok(Ok(faces)) => {
             report.pass("录入", format!("{username} 已录入 {} 张人脸", faces.len()));
             if let Some(config) = config {
-                let missing_rgb = !config.cameras.rgb.trim().is_empty()
+                let missing_rgb = !config.cameras.rgb.is_empty()
                     && faces.iter().any(|(_, _, has_rgb, _)| !has_rgb);
                 let missing_ir = !config.cameras.ir.trim().is_empty()
                     && faces.iter().any(|(_, _, _, has_ir)| !has_ir);

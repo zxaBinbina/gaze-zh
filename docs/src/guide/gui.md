@@ -30,6 +30,10 @@ Open the config dialog from the header-bar settings button.
 The dialog mirrors `/etc/gaze/config.toml`, grouped the same way. Saving writes
 the file through the daemon, so it needs a polkit authorization.
 
+That authorization always takes your password, as does changing your faces, so a
+face match can't change Gaze itself. The polkit dialog tells you this and waits
+for the password.
+
 **Security**
 
 - Security level (`low`, `medium`, `high`, `maximum`, or `custom`)
@@ -88,7 +92,7 @@ using [Hardware Acceleration](/guide/acceleration), then restart the daemon afte
 ## When to use GUI vs CLI
 
 - Use GUI for enrollment and quick pass/fail checks.
-- Use CLI (`gaze auth --verbose`) when you want detailed authentication metrics and diagnostics.
+- Use CLI (`gaze test`) when you want detailed authentication metrics and diagnostics.
 
 ## If the GUI cannot authenticate
 

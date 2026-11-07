@@ -134,7 +134,12 @@ in
 
     kde = {
       lockScreen = lib.mkEnableOption ''
-        KDE Plasma 锁屏免按键人脸解锁。KScreenLocker 会预先启动两项生物识别服务，与密码框并行。Gaze 使用 `kde-fingerprint`；若 {option}`services.fprintd.enable` 已占用该服务，则改用 `kde-smartcard`，使人脸和指纹并行认证。此功能对应 `gaze-kde` 软件包
+        KDE Plasma 锁屏免按键人脸解锁。KScreenLocker 会预先启动 `kde-fingerprint`，
+        与密码框并行，无需按键即可开始人脸认证。Plasma 6.8 之前还会启动
+        `kde-smartcard`；若 {option}`services.fprintd.enable` 已占用前者，
+        Gaze 就使用后者，使人脸和指纹并行认证。从 Plasma 6.8 起，Gaze
+        与指纹识别器共用 `kde-fingerprint`，且先执行人脸认证。此功能对应
+        `gaze-kde` 软件包
       '';
 
       loginScreen = lib.mkEnableOption ''
@@ -420,11 +425,13 @@ in
           # the text of one would drop what it configured there.
           readerHasFingerprintSlot = config.services.fprintd.enable;
           p11HasSmartcardSlot = config.security.pam.p11.enable;
+          smartcardRunsUpFront =
+            lib.versionOlder (pkgs.kdePackages.kscreenlocker.version or "0") "6.7.90";
 
           # `pam_fprintd` occupies its slot for the full timeout. Sharing that slot
           # would delay whichever module runs second, so use a separate slot when possible.
           slot =
-            if readerHasFingerprintSlot && !p11HasSmartcardSlot then
+            if readerHasFingerprintSlot && !p11HasSmartcardSlot && smartcardRunsUpFront then
               "kde-smartcard"
             else
               "kde-fingerprint";

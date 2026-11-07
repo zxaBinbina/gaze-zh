@@ -5,6 +5,7 @@ use super::{
     FACE_PAM_SERVICE, KDE_FACE_PAM_FILE, KDE_SMARTCARD_PAM_FILE, PLASMALOGIN_FACE_PAM_FILE,
     pam_service_name,
 };
+use gaze_core::desktop::kscreenlocker_starts_smartcard_slot;
 
 pub fn caller_is_remote(rhost: Option<&str>) -> bool {
     match rhost {
@@ -197,9 +198,10 @@ pub(super) fn face_slots_outranking(service: Option<&str>) -> &'static [&'static
 }
 
 pub fn service_defers_to_face_slot(service: Option<&str>) -> bool {
-    face_slots_outranking(service)
-        .iter()
-        .any(|path| pam_stack_runs_gaze(pam_service_contents(path).as_deref()))
+    face_slots_outranking(service).iter().any(|path| {
+        pam_stack_runs_gaze(pam_service_contents(path).as_deref())
+            && (*path != KDE_SMARTCARD_PAM_FILE || kscreenlocker_starts_smartcard_slot())
+    })
 }
 
 /// The greeter cannot route a response to this slot, so prompting would block it
@@ -216,6 +218,10 @@ pub fn service_shows_only_error_messages(service: Option<&str>) -> bool {
 /// These greeters allow one `pam_authenticate` per arming, so retry inside it.
 pub fn service_retries_transient_give_up(service: Option<&str>) -> bool {
     is_unpromptable_slot(service)
+}
+
+pub fn service_retires_unavailable_slot(service: Option<&str>) -> bool {
+    is_kde_noninteractive_service(service)
 }
 
 #[cfg(test)]
@@ -408,8 +414,12 @@ mod tests {
         // Discarding info messages is a KScreenLocker theme quirk, not a PLM one.
         for slot in [KDE_FACE_PAM_SERVICE, KDE_SMARTCARD_PAM_SERVICE] {
             assert!(service_shows_only_error_messages(Some(slot)), "{slot}");
+            assert!(service_retires_unavailable_slot(Some(slot)), "{slot}");
         }
         assert!(!service_shows_only_error_messages(Some(
+            PLASMALOGIN_FACE_PAM_SERVICE
+        )));
+        assert!(!service_retires_unavailable_slot(Some(
             PLASMALOGIN_FACE_PAM_SERVICE
         )));
 
@@ -430,10 +440,15 @@ mod tests {
                 !service_retries_transient_give_up(Some(service)),
                 "{service}"
             );
+            assert!(
+                !service_retires_unavailable_slot(Some(service)),
+                "{service}"
+            );
         }
         assert!(!service_cannot_be_prompted(None));
         assert!(!service_shows_only_error_messages(None));
         assert!(!service_retries_transient_give_up(None));
+        assert!(!service_retires_unavailable_slot(None));
     }
 
     #[test]

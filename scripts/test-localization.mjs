@@ -19,6 +19,7 @@ const pamText = name => {
 const prompts = ['CONFIRMATION_PROMPT', 'LOOK_PROMPT', 'LOOK_OR_PASSWORD_PROMPT',
     'LOOK_AFTER_PASSWORD_PROMPT', 'FACE_VERIFIED', 'FACE_NOT_RECOGNIZED',
     'FACE_NOT_DETECTED', 'FACE_TOO_DARK', 'FACE_TIMED_OUT', 'FACE_UNAVAILABLE',
+    'FACE_PASSWORD_REQUIRED',
     'TYPED_CONFIRMATION_PROMPT', 'FINISH_PROMPT_HINT'];
 
 test('PAM terminal and graphical prompts stay Chinese after upstream sync', () => {
@@ -45,6 +46,10 @@ for (const desktop of ['gnome-shell', 'cinnamon']) {
     const handlers = ['safeGettext', 'isConfirmationMessage', 'isCameraHintMessage',
         'isFaceVerifiedMessage', 'enterConfirmMode', 'respondToConfirm']
         .map(name => arrow(source, name)).join('\n');
+    const errorHandler = desktop === 'gnome-shell' ? 'getInternalErrorMessage' : 'translatePamError';
+    const errorHandlers = ['INTERNAL_ERROR_MAP',
+        ...(desktop === 'cinnamon' ? ['GENERIC_ERROR_MAP'] : []), errorHandler]
+        .map(name => arrow(source, name)).join('\n');
     const context = vm.createContext({
         _: text => text,
         activeExtensionInstance: null,
@@ -54,9 +59,17 @@ for (const desktop of ['gnome-shell', 'cinnamon']) {
         cancelDelayedReset() {},
         hideFaceHint() {},
     });
-    const api = vm.runInContext(`${constants}\n${handlers}\n({safeGettext,
+    const api = vm.runInContext(`${constants}\n${handlers}\n${errorHandlers}\n({safeGettext,
         isConfirmationMessage, isCameraHintMessage, isFaceVerifiedMessage,
-        enterConfirmMode, respondToConfirm})`, context);
+        enterConfirmMode, respondToConfirm, passwordRequired: ${errorHandler}})`, context);
+
+    test(`${desktop}: admin password refusals stay Chinese without confirming authentication`, () => {
+        const expected = pamText('FACE_PASSWORD_REQUIRED');
+        assert.equal(api.passwordRequired('GAZE_MSG_PASSWORD_REQUIRED'), expected);
+        assert.equal(api.safeGettext("Changing Gaze's settings or faces needs your password."), expected);
+        assert.equal(api.isFaceVerifiedMessage(expected), false);
+        assert.equal(api.isConfirmationMessage(expected), false);
+    });
 
     test(`${desktop}: old PAM messages display in Chinese during upgrades`, () => {
         for (const text of ['Face Verified.', 'Face Verified. Press Enter to continue.',

@@ -77,6 +77,8 @@ pub unsafe fn parse_raw_pam_options(argc: c_int, argv: *const *const c_char) -> 
     parse_pam_options(args.iter().map(String::as_str))
 }
 
+const POLKIT_PROMPT_SETTLE: Duration = Duration::from_millis(150);
+
 // Polkit dialogs ignore echo-off confirmation prompts, so keep a password request pending
 // for the agent to answer and flip the dialog into confirm mode via the info-message token.
 unsafe fn confirm_via_polkit_dialog(pamh: PamHandle, is_internal: bool) -> c_int {
@@ -85,7 +87,7 @@ unsafe fn confirm_via_polkit_dialog(pamh: PamHandle, is_internal: bool) -> c_int
     wait_for_prompt_started(&state);
     // Let the pending request reach the dialog before the confirm token,
     // or the dialog re-shows the password entry.
-    std::thread::sleep(Duration::from_millis(150));
+    std::thread::sleep(POLKIT_PROMPT_SETTLE);
 
     unsafe { confirm_graphical_polkit(pamh, &state, prompt_thread, is_internal) }
 }
@@ -167,16 +169,33 @@ where
     }
 }
 
+fn give_up_code(service: Option<&str>, verdict: &Verdict) -> c_int {
+    let may_clear = match verdict {
+        Verdict::Exhausted => true,
+        Verdict::Reached(AuthOutcome::Unavailable, status) => {
+            *status != Some(gaze_core::dbus::CaptureStatus::Unused)
+        }
+        _ => false,
+    };
+    if may_clear && service_retires_unavailable_slot(service) {
+        PAM_AUTH_ERR
+    } else {
+        PAM_AUTHINFO_UNAVAIL
+    }
+}
+
 fn retry_is_warranted(verdict: Option<FirstPassVerdict>) -> bool {
     verdict.is_none_or(FirstPassVerdict::allows_retry)
 }
 
 fn sequential_handoff(verdict: &Verdict) -> Option<FirstPassVerdict> {
-    // Only an actual non-match suppresses the later retry PAM entry. Timeouts and unavailable
-    // cameras leave identity undecided, so that entry may try again after password fallback.
+    // Only a non-match or a prompt refusing face suppresses the later retry PAM entry. Timeouts
+    // and unavailable cameras leave identity undecided, so that entry may try again.
     match verdict {
         Verdict::Reached(AuthOutcome::Match, _) => None,
-        Verdict::Reached(AuthOutcome::NoMatch, _) => Some(FirstPassVerdict::NoMatch),
+        Verdict::Reached(AuthOutcome::NoMatch | AuthOutcome::PasswordRequired, _) => {
+            Some(FirstPassVerdict::NoMatch)
+        }
         _ => Some(FirstPassVerdict::Undecided),
     }
 }
@@ -255,6 +274,7 @@ unsafe fn do_authenticate_sequential(pamh: PamHandle, flags: c_int, options: Pam
         if let Some(handoff) = sequential_handoff(&verdict) {
             unsafe { record_first_pass_verdict(pamh, handoff) };
         }
+        let give_up = give_up_code(service.as_deref(), &verdict);
         match verdict {
             Verdict::Reached(AuthOutcome::Match, _) => Ok((config, is_internal, prompt_line)),
             Verdict::Reached(AuthOutcome::NoMatch, _) => {
@@ -271,7 +291,11 @@ unsafe fn do_authenticate_sequential(pamh: PamHandle, flags: c_int, options: Pam
                 } else {
                     give_up_message(status)
                 });
-                Err(PAM_AUTHINFO_UNAVAIL)
+                Err(give_up)
+            }
+            Verdict::Reached(AuthOutcome::PasswordRequired, _) => {
+                tell(password_required_message(is_internal));
+                Err(give_up)
             }
             Verdict::Exhausted => {
                 tell(if is_internal {
@@ -279,7 +303,7 @@ unsafe fn do_authenticate_sequential(pamh: PamHandle, flags: c_int, options: Pam
                 } else {
                     FACE_TIMED_OUT
                 });
-                Err(PAM_AUTHINFO_UNAVAIL)
+                Err(give_up)
             }
             Verdict::Failed => {
                 tell(if is_internal {
@@ -287,7 +311,7 @@ unsafe fn do_authenticate_sequential(pamh: PamHandle, flags: c_int, options: Pam
                 } else {
                     FACE_UNAVAILABLE
                 });
-                Err(PAM_AUTHINFO_UNAVAIL)
+                Err(give_up)
             }
         }
     });
@@ -490,7 +514,7 @@ async fn authenticate_biometric_with_timeout(
 
 fn first_pass_verdict(outcome: Option<AuthOutcome>) -> FirstPassVerdict {
     match outcome {
-        Some(AuthOutcome::NoMatch) => FirstPassVerdict::NoMatch,
+        Some(AuthOutcome::NoMatch | AuthOutcome::PasswordRequired) => FirstPassVerdict::NoMatch,
         _ => FirstPassVerdict::Undecided,
     }
 }
@@ -859,6 +883,19 @@ unsafe fn do_authenticate_simultaneous(
         SelectorResult::Biometric(bio_res) => {
             if bio_res != Some(AuthOutcome::Match) {
                 unsafe { record_first_pass_verdict(pamh, first_pass_verdict(bio_res)) };
+                if bio_res == Some(AuthOutcome::PasswordRequired) {
+                    wait_for_prompt_started(&state);
+                    std::thread::sleep(POLKIT_PROMPT_SETTLE);
+                    unsafe {
+                        report_outcome(
+                            pamh,
+                            service.as_deref(),
+                            silent,
+                            password_required_message(is_internal),
+                            is_internal,
+                        )
+                    };
+                }
                 let fallback = unsafe { wait_for_password_and_fallback(pamh, &state) };
                 let _ = prompt_thread.join();
                 return fallback;
@@ -1249,6 +1286,51 @@ mod tests {
     }
 
     #[test]
+    fn kde_lock_slots_fail_a_give_up_the_next_look_could_clear() {
+        let clearable = [
+            Verdict::Exhausted,
+            Verdict::Reached(AuthOutcome::Unavailable, None),
+            Verdict::Reached(AuthOutcome::Unavailable, Some(CaptureStatus::NoFace)),
+            Verdict::Reached(AuthOutcome::Unavailable, Some(CaptureStatus::TooDark)),
+            Verdict::Reached(AuthOutcome::Unavailable, Some(CaptureStatus::Clipped)),
+        ];
+        let lasting = [
+            Verdict::Failed,
+            Verdict::Reached(AuthOutcome::Unavailable, Some(CaptureStatus::Unused)),
+        ];
+        for slot in [KDE_FACE_PAM_SERVICE, KDE_SMARTCARD_PAM_SERVICE] {
+            for verdict in &clearable {
+                assert_eq!(
+                    give_up_code(Some(slot), verdict),
+                    PAM_AUTH_ERR,
+                    "{slot} {verdict:?}"
+                );
+            }
+            for verdict in &lasting {
+                assert_eq!(
+                    give_up_code(Some(slot), verdict),
+                    PAM_AUTHINFO_UNAVAIL,
+                    "{slot} {verdict:?}"
+                );
+            }
+        }
+        for service in [
+            Some(PLASMALOGIN_FACE_PAM_SERVICE),
+            Some("kde"),
+            Some("sudo"),
+            None,
+        ] {
+            for verdict in clearable.iter().chain(&lasting) {
+                assert_eq!(
+                    give_up_code(service, verdict),
+                    PAM_AUTHINFO_UNAVAIL,
+                    "{service:?} {verdict:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
     fn a_match_hands_nothing_off() {
         assert_eq!(
             sequential_handoff(&Verdict::Reached(AuthOutcome::Match, None)),
@@ -1321,6 +1403,43 @@ mod tests {
             calls.set(calls.get() + 1);
             std::future::ready(script[index])
         }
+    }
+
+    #[test]
+    fn a_refused_prompt_goes_to_the_password_without_another_scan() {
+        let verdict = Verdict::Reached(AuthOutcome::PasswordRequired, None);
+
+        assert_eq!(
+            sequential_handoff(&verdict),
+            Some(FirstPassVerdict::NoMatch)
+        );
+        assert_eq!(
+            first_pass_verdict(Some(AuthOutcome::PasswordRequired)),
+            FirstPassVerdict::NoMatch
+        );
+        assert_eq!(
+            give_up_code(Some("polkit-1"), &verdict),
+            PAM_AUTHINFO_UNAVAIL
+        );
+        assert_eq!(password_required_message(true), GAZE_MSG_PASSWORD_REQUIRED);
+        assert_eq!(password_required_message(false), FACE_PASSWORD_REQUIRED);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_refused_prompt_is_final_even_where_retrying_is_enabled() {
+        let verdict = verify_until(
+            Duration::from_secs(12),
+            true,
+            scripted(vec![
+                Ok((AuthOutcome::PasswordRequired, None)),
+                Ok((AuthOutcome::Match, None)),
+            ]),
+        )
+        .await;
+        assert_eq!(
+            verdict,
+            Verdict::Reached(AuthOutcome::PasswordRequired, None)
+        );
     }
 
     #[tokio::test(start_paused = true)]

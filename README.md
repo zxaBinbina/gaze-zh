@@ -26,7 +26,7 @@ Gaze 在本机完成 RGB／红外人脸识别与活体检测，通过 PAM 接入
 
 本仓库基于 [GunduLabs/gaze](https://github.com/GunduLabs/gaze)，持续合并上游，并保留中文界面、PAM 提示及 KRDP 登录兼容逻辑。KRDP 6.7.5 画面冻结修复的历史构建说明见 [docs/krdp-fix.md](docs/krdp-fix.md)。
 
-当前源码版本为 **0.5.1**，采用中文分支独立版本号；上游版本仅作为同步信息记录。已合并上游 `cc74790`（2026-10-30），本版修复认证成功后仍显示英文的遗漏，并补齐 PAM 认证、后台错误、安装器和软件包提示的中文；GUI、CLI 与桌面集成均使用简体中文。窗口尺寸、控件排列和终端界面结构沿用上游；中文表格按终端显示宽度对齐。命令名称、选项、配置键值和 JSON 字段保持兼容。
+当前源码版本为 **0.5.1**，采用中文分支独立版本号；上游版本仅作为同步信息记录。源码已同步至上游 `1d21641`（2026-11-07），包含有序 RGB 来源回退、`gaze test` 默认诊断输出和 KDE Plasma 6.8 认证兼容更新，并保留 PAM 认证、后台错误、安装器和软件包提示的中文；GUI、CLI 与桌面集成均使用简体中文。窗口尺寸、控件排列和终端界面结构沿用上游；中文表格按终端显示宽度对齐。命令名称、选项、配置键值和 JSON 字段保持兼容。
 
 本版变更详见 [v0.5.1 中文发行版说明](docs/releases/v0.5.1.md)。
 
@@ -70,8 +70,7 @@ curl -fsSL https://zxabinbina.cc.cd/projects/gaze/install.sh | sh
 ```bash
 gaze doctor                 # 检查安装、配置和设备
 gaze add-face default       # 按提示录入人脸
-gaze auth                   # 测试人脸认证
-gaze auth --verbose         # 查看各光谱的匹配指标
+gaze test                   # 测试人脸验证并显示各光谱的匹配指标
 ```
 
 录入和修改设置时会请求管理员授权。命令默认操作发起调用的用户；需要指定用户时加 `--user <用户名>`。
@@ -115,13 +114,13 @@ x86_64 推理需要支持 AVX2 的 CPU；ARM64 不使用 AVX2 检查。摄像头
 | `gaze config --show`                      | 输出完整 TOML 配置及实际生效值             |
 | `gaze config get security.level`          | 读取单项设置                               |
 | `gaze config set security.level high`     | 修改单项设置；键和值仍使用原有标识         |
-| `gaze auth --silent`                      | 静默认证，通过退出码报告结果               |
+| `gaze test --silent`                      | 静默认证，通过退出码报告结果               |
 | `gaze doctor --benchmark`                 | 测试模型推理性能                           |
 | `gaze doctor --report`                    | 生成隐去用户名和主机名的诊断报告           |
 | `gaze keyring` / `gaze keyring --kwallet` | 录入对应密钥环或钱包凭据                   |
 | `gaze uninstall --dry-run`                | 预览卸载计划                               |
 
-`gaze auth` 的退出码：`0` 表示认证成功，`1` 表示失败，`130` 表示用户取消。`--verbose` 和 `--silent` 互斥。JSON 字段、配置文件格式及补全命令不因界面汉化而改变。
+`gaze test` 的退出码：`0` 表示人脸验证成功，`1` 表示失败，`130` 表示用户取消。旧命令 `gaze auth` 和 `--verbose` 选项继续兼容，默认已显示详细指标；`--verbose` 和 `--silent` 互斥。此命令不授予权限，也不测试 PAM 集成；已启用的胁迫检测可能触发持续锁定。JSON 字段、配置文件格式及补全命令不因界面汉化而改变。
 
 完整说明：[CLI](https://zxabinbina.cc.cd/projects/gaze/guide/cli) · [GUI](https://zxabinbina.cc.cd/projects/gaze/guide/gui) · [配置参考](https://zxabinbina.cc.cd/projects/gaze/guide/configuration)
 

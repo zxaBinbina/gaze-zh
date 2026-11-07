@@ -28,7 +28,7 @@ pub use service::{
     OMARCHY_FACE_PAM_SERVICE, PLASMALOGIN_FACE_PAM_SERVICE, caller_is_remote,
     face_auth_out_of_scope, is_krdp_network_login, pam_stack_runs_gaze, root_service_is_local,
     service_cannot_be_prompted, service_defers_to_face_service, service_defers_to_face_slot,
-    service_is_network_facing, service_retries_transient_give_up,
+    service_is_network_facing, service_retires_unavailable_slot, service_retries_transient_give_up,
     service_shows_only_error_messages,
 };
 
@@ -104,12 +104,13 @@ pub const FACE_NOT_DETECTED: &str = "未检测到人脸。请输入密码。";
 pub const FACE_TOO_DARK: &str = "光线过暗，无法进行人脸认证。请输入密码。";
 pub const FACE_TIMED_OUT: &str = "人脸认证超时。请输入密码。";
 pub const FACE_UNAVAILABLE: &str = "人脸认证不可用。请输入密码。";
+pub const FACE_PASSWORD_REQUIRED: &str = "更改 Gaze 设置或人脸数据需要输入密码。";
 
 pub use gaze_core::dbus::{
     GAZE_CANCEL, GAZE_CONFIRMED, GAZE_MSG_FACE_NOT_DETECTED, GAZE_MSG_FACE_NOT_RECOGNIZED,
     GAZE_MSG_FACE_TIMED_OUT, GAZE_MSG_FACE_TOO_DARK, GAZE_MSG_FACE_UNAVAILABLE,
     GAZE_MSG_FACE_VERIFIED, GAZE_MSG_LOOK_CAMERA, GAZE_MSG_LOOK_OR_PASSWORD,
-    GAZE_REQUIRE_CONFIRMATION,
+    GAZE_MSG_PASSWORD_REQUIRED, GAZE_REQUIRE_CONFIRMATION,
 };
 
 fn pam_service_name(service: &str) -> &str {
@@ -132,6 +133,14 @@ pub fn internal_give_up_message(status: Option<gaze_core::dbus::CaptureStatus>) 
         Some(gaze_core::dbus::CaptureStatus::NoFace) | None => GAZE_MSG_FACE_NOT_DETECTED,
         Some(gaze_core::dbus::CaptureStatus::Unused) => GAZE_MSG_FACE_UNAVAILABLE,
         _ => GAZE_MSG_FACE_NOT_RECOGNIZED,
+    }
+}
+
+pub fn password_required_message(is_internal: bool) -> &'static str {
+    if is_internal {
+        GAZE_MSG_PASSWORD_REQUIRED
+    } else {
+        FACE_PASSWORD_REQUIRED
     }
 }
 
@@ -987,6 +996,7 @@ pub enum AuthOutcome {
     Match,
     NoMatch,
     Unavailable,
+    PasswordRequired,
 }
 
 /// Uses the status embedded in the verification result, with the same priority as daemon `FaceStatus`.
@@ -1059,8 +1069,25 @@ async fn request_verify_start(
                 .await
                 .map_err(|e| anyhow::anyhow!("无法开始验证：{e}"))
         }
-        other => other.map_err(|e| anyhow::anyhow!("无法开始验证：{e}")),
+        other => other.map_err(|e| anyhow::Error::new(e).context("无法开始验证")),
     }
+}
+
+fn refused_for_password(name: &str, text: Option<&str>) -> bool {
+    name == "org.freedesktop.DBus.Error.AccessDenied"
+        && matches!(
+            text,
+            Some(gaze_core::dbus::FACE_BARRED_FOR_ADMIN_PROMPT)
+                | Some(gaze_core::dbus::FACE_BARRED_FOR_ADMIN_PROMPT_ZH)
+        )
+}
+
+fn start_needs_password(error: &anyhow::Error) -> bool {
+    matches!(
+        error.downcast_ref::<zbus::Error>(),
+        Some(zbus::Error::MethodError(name, text, _))
+            if refused_for_password(name.as_str(), text.as_deref())
+    )
 }
 
 pub async fn authenticate_biometric_with_status_on_and_notify<F>(
@@ -1091,7 +1118,14 @@ where
         .receive_face_status()
         .await
         .map_err(|e| anyhow::anyhow!("无法接收数据流：{e}"))?;
-    request_verify_start(proxy, service, require_keyring).await?;
+    if let Err(error) = request_verify_start(proxy, service, require_keyring).await {
+        if !start_needs_password(&error) {
+            return Err(error);
+        }
+        guard.active = false;
+        let _ = proxy.release().await;
+        return Ok((AuthOutcome::PasswordRequired, None));
+    }
 
     use futures::StreamExt;
     let mut last_status: Option<gaze_core::dbus::CaptureStatus> = None;
@@ -1508,6 +1542,24 @@ mod tests {
             give_up_message(Some(CaptureStatus::Usable)),
             FACE_NOT_RECOGNIZED
         );
+    }
+
+    #[test]
+    fn only_the_admin_prompt_refusal_asks_for_the_password() {
+        const DENIED: &str = "org.freedesktop.DBus.Error.AccessDenied";
+        let barred = gaze_core::dbus::FACE_BARRED_FOR_ADMIN_PROMPT;
+
+        assert!(refused_for_password(DENIED, Some(barred)));
+        assert!(refused_for_password(
+            DENIED,
+            Some(gaze_core::dbus::FACE_BARRED_FOR_ADMIN_PROMPT_ZH)
+        ));
+        assert!(!refused_for_password(DENIED, Some("another refusal")));
+        assert!(!refused_for_password(DENIED, None));
+        assert!(!refused_for_password(
+            "org.freedesktop.DBus.Error.Failed",
+            Some(barred)
+        ));
     }
 
     #[test]

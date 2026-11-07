@@ -1412,7 +1412,7 @@ if [ -n "$PROBLEMS" ]; then
 fi
 next_step "gaze config" "配置摄像头和安全设置"
 next_step "gaze add-face <name>" "录入人脸"
-next_step "gaze auth" "在终端中测试"
+next_step "gaze test" "在终端中测试"
 if want_gnome_extension_package && [ "${OSTREE_PENDING:-0}" -eq 0 ]; then
     next_step "reboot" "GNOME Shell 和 GDM 仅在启动时加载新扩展"
 elif want_cinnamon_extension_package; then

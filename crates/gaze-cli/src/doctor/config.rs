@@ -177,7 +177,7 @@ pub(super) fn config_findings(config: &Config) -> Vec<Check> {
         error(err.to_string(), fix);
     }
 
-    let rgb = config.cameras.rgb.trim();
+    let rgb = &config.cameras.rgb;
     let ir = config.cameras.ir.trim();
     if rgb.is_empty() && ir.is_empty() {
         error(
@@ -185,18 +185,20 @@ pub(super) fn config_findings(config: &Config) -> Vec<Check> {
             "将 cameras.rgb 设为 \"primary\"，或配置红外摄像头。",
         );
     }
-    if let Some(index) = rgb.strip_prefix("/dev/video") {
-        if index.is_empty() || !index.chars().all(|c| c.is_ascii_digit()) {
+    for rgb in rgb.iter() {
+        if let Some(index) = rgb.strip_prefix("/dev/video") {
+            if index.is_empty() || !index.chars().all(|c| c.is_ascii_digit()) {
+                error(
+                    format!("RGB 摄像头节点 {rgb:?} 无效"),
+                    "使用 /dev/video<number>、usb:VVVV:PPPP、\"primary\" 或 GStreamer 来源。",
+                );
+            }
+        } else if rgb.starts_with("usb:") && gaze_vision::camera::parse_usb_spec(rgb).is_none() {
             error(
-                format!("RGB 摄像头节点 {rgb:?} 无效"),
-                "使用 /dev/video<number>、usb:VVVV:PPPP、\"primary\" 或 GStreamer 来源。",
+                format!("RGB USB 规格 {rgb:?} 无效"),
+                "使用十六进制 VID:PID 格式 usb:VVVV:PPPP，例如 usb:046d:085e。",
             );
         }
-    } else if rgb.starts_with("usb:") && gaze_vision::camera::parse_usb_spec(rgb).is_none() {
-        error(
-            format!("RGB USB 规格 {rgb:?} 无效"),
-            "使用十六进制 VID:PID 格式 usb:VVVV:PPPP，例如 usb:046d:085e。",
-        );
     }
 
     if config.liveness.enabled {
@@ -346,7 +348,7 @@ mod tests {
         config.security.rgb_threshold = 1.5;
         config.security.ir_threshold = -0.1;
         config.security.hybrid_policy = "sometimes".to_string();
-        config.cameras.rgb = "/dev/videoX".to_string();
+        config.cameras.rgb = "/dev/videoX".into();
         config.enrollment.min_face_size_ratio = 0.05;
         config.liveness.threshold = f64::NAN;
         config.liveness.max_seconds = 0.0;

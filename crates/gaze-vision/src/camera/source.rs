@@ -3,7 +3,7 @@
 
 use std::os::fd::AsRawFd;
 
-use gaze_core::config::{CameraConfig, DEFAULT_RGB_CAMERA};
+use gaze_core::config::{CameraConfig, CameraSources, DEFAULT_RGB_CAMERA};
 use gaze_core::ir::devices::{camera_function_of, find_device, usb_ids_of};
 
 use super::*;
@@ -21,7 +21,7 @@ pub(super) fn node_requires_forced_ir_yuy2(node: &str, want_color: bool) -> bool
 
 #[derive(Debug, Clone)]
 pub struct ConfiguredCameraSources {
-    pub rgb: String,
+    pub rgb: CameraSources,
     pub ir: String,
     pub ir_node: String,
     pub serial_capture: bool,
@@ -37,23 +37,23 @@ pub fn resolve_ir_source(cameras: &CameraConfig) -> Option<(String, String)> {
     }
 }
 
-pub fn resolve_rgb_source(cameras: &CameraConfig) -> Option<String> {
-    let rgb = cameras.rgb.trim();
-    if rgb.is_empty() {
-        None
-    } else {
-        Some(rgb.to_string())
-    }
+pub fn resolve_rgb_source(cameras: &CameraConfig) -> Option<CameraSources> {
+    (!cameras.rgb.is_empty()).then(|| cameras.rgb.clone())
 }
 
 pub fn resolve_configured_sources(cameras: &CameraConfig) -> ConfiguredCameraSources {
-    let rgb = resolve_rgb_source(cameras).unwrap_or_default();
+    let rgb = cameras.rgb.clone();
     let (ir, ir_node) = resolve_ir_source(cameras).unwrap_or_default();
     let serial_capture = match cameras.parallel_capture() {
         "always" => false,
         "auto" => {
-            let rgb_node = resolve_node_for(&rgb, true);
-            capture_must_serialize(rgb_node.as_deref(), non_empty(&ir_node))
+            // Any fallback may be selected when capture opens. Only run in
+            // parallel if every candidate is proven independent of IR.
+            rgb.is_empty()
+                || rgb.iter().any(|source| {
+                    let rgb_node = resolve_node_for(source, true);
+                    capture_must_serialize(rgb_node.as_deref(), non_empty(&ir_node))
+                })
         }
         _ => true,
     };
@@ -115,13 +115,13 @@ pub(super) fn serialize_for_unresolved_rgb(
             .any(|function| function == ir_function)
 }
 
-pub fn preferred_capture_source(cameras: &CameraConfig) -> (String, bool) {
+pub fn preferred_capture_source(cameras: &CameraConfig) -> (CameraSources, bool) {
     if let Some(rgb_source) = resolve_rgb_source(cameras) {
         (rgb_source, false)
     } else if let Some((ir_source, _)) = resolve_ir_source(cameras) {
-        (ir_source, true)
+        (ir_source.into(), true)
     } else {
-        (DEFAULT_RGB_CAMERA.to_string(), false)
+        (DEFAULT_RGB_CAMERA.into(), false)
     }
 }
 
@@ -315,19 +315,18 @@ pub(super) fn v4l2_nodes_with_color(want_color: bool) -> Vec<String> {
     if gstreamer::init().is_err() {
         return Vec::new();
     }
-    let monitor = gstreamer::DeviceMonitor::new();
-    let caps = gstreamer::Caps::builder("video/x-raw").build();
-    monitor.add_filter(Some("Video/Source"), Some(&caps));
-    if monitor.start().is_err() {
+    // Probe the provider directly: a DeviceMonitor drops its devices whenever the libcamera
+    // provider is present (it hides v4l2deviceprovider), leaving no node without PipeWire.
+    let Some(provider) = gstreamer::DeviceProviderFactory::by_name("v4l2deviceprovider") else {
         return Vec::new();
-    }
-    wait_for_device_updates(&monitor);
-    let devices = monitor.devices();
-    monitor.stop();
+    };
+    let devices = provider.devices();
+    let raw_caps = gstreamer::Caps::builder("video/x-raw").build();
 
     let mut seen = std::collections::HashSet::new();
     let mut nodes: Vec<String> = devices
         .iter()
+        .filter(|device| is_raw_video_source(device, &raw_caps))
         .filter_map(|device| {
             let node = device_video_node(device)?;
             if !seen.insert(node.clone()) {
@@ -338,6 +337,13 @@ pub(super) fn v4l2_nodes_with_color(want_color: bool) -> Vec<String> {
         .collect();
     nodes.sort_by_key(|node| video_node_index(node).unwrap_or(u32::MAX));
     nodes
+}
+
+fn is_raw_video_source(device: &gstreamer::Device, raw_caps: &gstreamer::Caps) -> bool {
+    device.has_classes("Video/Source")
+        && device
+            .caps()
+            .is_some_and(|caps| caps.can_intersect(raw_caps))
 }
 
 pub(super) fn device_video_node(device: &gstreamer::Device) -> Option<String> {
@@ -351,13 +357,46 @@ pub(super) fn device_video_node(device: &gstreamer::Device) -> Option<String> {
     path.starts_with("/dev/video").then_some(path)
 }
 
+/// True when the node has a PCI or USB device ancestor. USB controllers can themselves
+/// live on the platform bus, so the sysfs path need not start with a PCI root.
+pub fn is_physical_node(node: &str) -> bool {
+    if video_node_index(node).is_none() {
+        return false;
+    }
+    let name = node.strip_prefix("/dev/").unwrap();
+    std::fs::canonicalize(format!("/sys/class/video4linux/{name}/device"))
+        .is_ok_and(|path| has_physical_bus_ancestor(&path))
+}
+
+fn has_physical_bus_ancestor(path: &std::path::Path) -> bool {
+    path.ancestors().any(|ancestor| {
+        std::fs::canonicalize(ancestor.join("subsystem")).is_ok_and(|bus| {
+            matches!(
+                bus.file_name().and_then(|name| name.to_str()),
+                Some("pci" | "usb")
+            )
+        })
+    })
+}
+
+fn select_physical_node(
+    nodes: impl IntoIterator<Item = String>,
+    mut is_physical: impl FnMut(&str) -> bool,
+) -> Option<String> {
+    nodes.into_iter().find(|node| is_physical(node))
+}
+
+fn first_physical_v4l2_node(want_color: bool) -> Option<String> {
+    select_physical_node(v4l2_nodes_with_color(want_color), is_physical_node)
+}
+
 pub fn resolve_privileged_node(source: &str, want_color: bool) -> Option<String> {
     let source = source.trim();
     if source.is_empty() {
         return None;
     }
     if source == DEFAULT_RGB_CAMERA {
-        return first_v4l2_node(want_color);
+        return first_physical_v4l2_node(want_color);
     }
     if let Some((vid, pid)) = parse_usb_spec(source) {
         return resolve_usb_video_node(vid, pid, want_color);
@@ -369,7 +408,7 @@ pub fn resolve_privileged_node(source: &str, want_color: bool) -> Option<String>
         return is_node.then(|| source.to_string());
     }
     match v4l2_fallback_for(source) {
-        V4l2Fallback::AnyDevice => first_v4l2_node(want_color),
+        V4l2Fallback::AnyDevice => first_physical_v4l2_node(want_color),
         V4l2Fallback::SameNode(target) => node_from_pipewire_target(&target, want_color),
         V4l2Fallback::None => None,
     }
@@ -562,6 +601,100 @@ pub(super) fn node_from_pipewire_target(target: &str, want_color: bool) -> Optio
 mod tests {
     use super::*;
 
+    mod test_device {
+        use gstreamer::{glib, subclass::prelude::*};
+
+        #[derive(Default)]
+        pub struct TestDevice;
+
+        #[glib::object_subclass]
+        impl ObjectSubclass for TestDevice {
+            const NAME: &'static str = "GazeSourceFilterTestDevice";
+            type Type = super::TestDevice;
+            type ParentType = gstreamer::Device;
+        }
+
+        impl ObjectImpl for TestDevice {}
+        impl GstObjectImpl for TestDevice {}
+        impl DeviceImpl for TestDevice {}
+    }
+
+    gstreamer::glib::wrapper! {
+        pub struct TestDevice(ObjectSubclass<test_device::TestDevice>)
+            @extends gstreamer::Device, gstreamer::Object;
+    }
+
+    #[test]
+    fn direct_provider_filter_accepts_only_raw_video_sources() {
+        gstreamer::init().unwrap();
+        let raw_caps = gstreamer::Caps::builder("video/x-raw").build();
+        for (class, caps, expected) in [
+            ("Video/Source", "video/x-raw,format=YUY2", true),
+            ("Video/Source", "video/x-raw,format=GRAY8", true),
+            ("Video/Sink", "video/x-raw,format=YUY2", false),
+            ("Audio/Source", "video/x-raw", false),
+            ("Video/Source", "image/jpeg", false),
+            ("Video/Source", "image/jpeg;video/x-raw", true),
+        ] {
+            let caps: gstreamer::Caps = caps.parse().unwrap();
+            let device: TestDevice = gstreamer::glib::Object::builder()
+                .property("device-class", class)
+                .property("caps", caps)
+                .build();
+            assert_eq!(
+                is_raw_video_source(device.upcast_ref(), &raw_caps),
+                expected
+            );
+        }
+    }
+
+    #[test]
+    fn physical_detection_follows_bus_links_instead_of_path_prefixes() {
+        use std::os::unix::fs::symlink;
+        let root = std::env::temp_dir().join(format!(
+            "gaze-physical-camera-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        for bus in ["pci", "usb", "platform"] {
+            std::fs::create_dir_all(root.join("bus").join(bus)).unwrap();
+        }
+        for (device, bus, expected) in [
+            ("devices/pci0000:00/0000:00:14.0", "pci", true),
+            ("devices/platform/soc/usb1/1-1/1-1:1.0", "usb", true),
+            ("devices/platform/vivid.0", "platform", false),
+        ] {
+            let device = root.join(device);
+            std::fs::create_dir_all(device.join("video4linux/video0")).unwrap();
+            symlink(root.join("bus").join(bus), device.join("subsystem")).unwrap();
+            assert_eq!(has_physical_bus_ancestor(&device), expected);
+            assert_eq!(
+                has_physical_bus_ancestor(&device.join("video4linux/video0")),
+                expected
+            );
+        }
+        let virtual_device = root.join("devices/virtual/video4linux/video10");
+        std::fs::create_dir_all(&virtual_device).unwrap();
+        assert!(!has_physical_bus_ancestor(&virtual_device));
+        assert!(!has_physical_bus_ancestor(&root.join("missing")));
+        assert!(!is_physical_node("/dev/video-does-not-exist"));
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn automatic_selection_skips_virtual_nodes_and_preserves_order() {
+        let nodes = || ["/dev/video0", "/dev/video2", "/dev/video4"].map(String::from);
+        assert_eq!(
+            select_physical_node(nodes(), |node| node != "/dev/video0"),
+            Some("/dev/video2".to_string())
+        );
+        assert_eq!(select_physical_node(nodes(), |_| false), None);
+        assert_eq!(select_physical_node(Vec::new(), |_| true), None);
+    }
+
     #[test]
     fn a_pipewire_target_names_the_udev_path_of_its_node() {
         assert_eq!(
@@ -601,7 +734,7 @@ mod tests {
     #[test]
     fn configured_sources_leave_ir_empty_when_no_ir_configured() {
         let cameras = CameraConfig {
-            rgb: "primary".to_string(),
+            rgb: "primary".into(),
             ir: String::new(),
             ir_frame_width: None,
             ir_frame_height: None,
@@ -611,18 +744,47 @@ mod tests {
             auto_rotate: true,
         };
         let sources = resolve_configured_sources(&cameras);
-        assert_eq!(sources.rgb, "primary");
+        assert_eq!(sources.rgb, "primary".into());
         assert_eq!(sources.ir, "");
         assert_eq!(sources.ir_node, "");
         assert_eq!(
             preferred_capture_source(&cameras),
-            ("primary".to_string(), false)
+            ("primary".into(), false)
         );
+    }
+
+    #[test]
+    fn configured_and_preview_sources_preserve_the_entire_rgb_fallback_list() {
+        let mut cameras = cameras_with("primary", "");
+        cameras.rgb = CameraSources::Ordered(vec!["usb:046d:081b".into(), "primary".into()]);
+        assert_eq!(resolve_configured_sources(&cameras).rgb, cameras.rgb);
+        assert_eq!(
+            preferred_capture_source(&cameras),
+            (cameras.rgb.clone(), false)
+        );
+
+        cameras.rgb = CameraSources::Ordered(vec![]);
+        cameras.ir = "/dev/video2".into();
+        assert!(resolve_configured_sources(&cameras).rgb.is_empty());
+        assert_eq!(
+            preferred_capture_source(&cameras),
+            ("/dev/video2".into(), true)
+        );
+    }
+
+    #[test]
+    fn auto_parallel_capture_accounts_for_every_rgb_fallback() {
+        let mut cameras = cameras_with("primary", "/dev/video2");
+        cameras.rgb = CameraSources::Ordered(vec!["/dev/video0".into(), "/dev/video2".into()]);
+        cameras.parallel_capture = "auto".into();
+        assert!(resolve_configured_sources(&cameras).serial_capture);
+        cameras.parallel_capture = "always".into();
+        assert!(!resolve_configured_sources(&cameras).serial_capture);
     }
 
     fn cameras_with(rgb: &str, ir: &str) -> CameraConfig {
         CameraConfig {
-            rgb: rgb.to_string(),
+            rgb: rgb.into(),
             ir: ir.to_string(),
             ir_frame_width: None,
             ir_frame_height: None,
@@ -724,7 +886,7 @@ mod tests {
     #[test]
     fn configured_sources_resolve_an_ir_device_node() {
         let cameras = CameraConfig {
-            rgb: "primary".to_string(),
+            rgb: "primary".into(),
             ir: "/dev/video2".to_string(),
             ir_frame_width: None,
             ir_frame_height: None,
@@ -734,7 +896,7 @@ mod tests {
             auto_rotate: true,
         };
         let sources = resolve_configured_sources(&cameras);
-        assert_eq!(sources.rgb, "primary");
+        assert_eq!(sources.rgb, "primary".into());
         assert_eq!(sources.ir, "/dev/video2");
         assert_eq!(sources.ir_node, "/dev/video2");
     }
@@ -742,7 +904,7 @@ mod tests {
     #[test]
     fn preferred_capture_source_falls_back_to_ir_when_rgb_is_unset() {
         let cameras = CameraConfig {
-            rgb: String::new(),
+            rgb: "".into(),
             ir: "/dev/video2".to_string(),
             ir_frame_width: None,
             ir_frame_height: None,
@@ -753,7 +915,7 @@ mod tests {
         };
         assert_eq!(
             preferred_capture_source(&cameras),
-            ("/dev/video2".to_string(), true)
+            ("/dev/video2".into(), true)
         );
     }
 
@@ -889,7 +1051,7 @@ mod tests {
     #[test]
     fn configured_sources_leave_the_node_empty_for_a_pipewire_ir_source() {
         let cameras = CameraConfig {
-            rgb: "primary".to_string(),
+            rgb: "primary".into(),
             ir: "pipewiresrc target-object=device-name".to_string(),
             ir_frame_width: None,
             ir_frame_height: None,

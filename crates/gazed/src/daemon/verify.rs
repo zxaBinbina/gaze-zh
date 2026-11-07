@@ -4,13 +4,19 @@
 use super::*;
 
 #[derive(Default)]
+struct SpectrumBudget {
+    frames: u32,
+    held: u32,
+}
+
+#[derive(Default)]
 struct VerifyFrameBudget {
-    rgb: u32,
-    ir: u32,
+    rgb: SpectrumBudget,
+    ir: SpectrumBudget,
 }
 
 impl VerifyFrameBudget {
-    fn frames(&mut self, spectrum: Spectrum) -> &mut u32 {
+    fn budget(&mut self, spectrum: Spectrum) -> &mut SpectrumBudget {
         match spectrum {
             Spectrum::Rgb => &mut self.rgb,
             Spectrum::Ir => &mut self.ir,
@@ -19,14 +25,22 @@ impl VerifyFrameBudget {
 
     /// Reset this camera's budget; return whether shared deadlines should reset.
     fn phase_started(&mut self, spectrum: Spectrum, serial_capture: bool) -> bool {
-        *self.frames(spectrum) = 0;
+        *self.budget(spectrum) = SpectrumBudget::default();
         serial_capture
     }
 
     fn frame_spent(&mut self, spectrum: Spectrum, max_frames: u32) -> bool {
-        let frames = self.frames(spectrum);
-        *frames = frames.saturating_add(1);
-        *frames > max_frames
+        let budget = self.budget(spectrum);
+        budget.frames = budget.frames.saturating_add(1);
+        budget.frames > max_frames
+    }
+
+    fn duress_frame_held(&mut self, spectrum: Spectrum, max_held: u32) {
+        let budget = self.budget(spectrum);
+        if budget.held < max_held && budget.frames > 0 {
+            budget.held += 1;
+            budget.frames -= 1;
+        }
     }
 }
 
@@ -36,6 +50,7 @@ pub(super) enum VerifyMsg {
     Status(Spectrum, CaptureStatus, Option<ndarray::Array1<f32>>, f64),
     Success(Spectrum, ndarray::Array1<f32>),
     Duress(Spectrum),
+    DuressHeld(Spectrum, f64),
     Unavailable(Spectrum, String),
     Error(String),
 }
@@ -344,7 +359,7 @@ impl AuthDaemon {
     ) -> fdo::Result<()> {
         if Self::face_barred_for_admin_prompt(pam_service.as_deref()) {
             return Err(fdo::Error::AccessDenied(
-                "更改 Gaze 自身设置或人脸数据需要输入密码".into(),
+                gaze_core::dbus::FACE_BARRED_FOR_ADMIN_PROMPT_ZH.into(),
             ));
         }
         let claim = self.check_claim(&header).await?;
@@ -486,7 +501,7 @@ impl AuthDaemon {
             drop(db);
 
             let (run_rgb, run_ir) = auth_streams(
-                &rgb_device,
+                rgb_device.first(),
                 &ir_device,
                 has_rgb_templates,
                 has_ir_templates,
@@ -499,7 +514,7 @@ impl AuthDaemon {
                 return;
             }
 
-            if and_policy_unsatisfiable(&hybrid_policy, &rgb_device, &ir_device, run_rgb, run_ir) {
+            if and_policy_unsatisfiable(&hybrid_policy, rgb_device.first(), &ir_device, run_rgb, run_ir) {
                 error!(
                     run_rgb,
                     run_ir,
@@ -669,7 +684,7 @@ impl AuthDaemon {
                             .then(|| Instant::now() + VERIFY_SERIAL_RGB_BUDGET);
                         let mut yielded_to_ir = false;
 
-                        let mut cam = match Camera::open_privileged(&rgb_device_clone) {
+                        let mut cam = match Camera::open_rgb_privileged(&rgb_device_clone) {
                             Ok(c) => c,
                             Err(e) => {
                                 let _ = tx.blocking_send(VerifyMsg::Unavailable(Spectrum::Rgb, format!("RGB 摄像头打开失败：{e}")));
@@ -772,7 +787,7 @@ impl AuthDaemon {
                             }
 
                             let latest_embed = embed_opt.as_ref().map(|d| d.embedding.clone());
-                            let _ = tx.try_send(VerifyMsg::Status(Spectrum::Rgb, status, latest_embed, cam.fps()));
+                            let status_sent = tx.try_send(VerifyMsg::Status(Spectrum::Rgb, status, latest_embed, cam.fps())).is_ok();
 
                             if should_yield_rgb_to_ir(&hybrid_policy_clone, run_ir, status) {
                                 yielded_to_ir = true;
@@ -808,6 +823,9 @@ impl AuthDaemon {
                                             return;
                                         }
                                         if closed {
+                                            if status_sent {
+                                                let _ = tx.blocking_send(VerifyMsg::DuressHeld(Spectrum::Rgb, cam.fps()));
+                                            }
                                             continue;
                                         }
                                     }
@@ -933,7 +951,7 @@ impl AuthDaemon {
                         let mut cam = match Camera::open_ir_privileged(&ir_device_clone, config_clone.cameras.ir_frame_size()) {
                             Ok(c) => c,
                             Err(e) => {
-                                let _ = tx.blocking_send(VerifyMsg::Error(format!("红外摄像头打开失败：{e}")));
+                                let _ = tx.blocking_send(VerifyMsg::Unavailable(Spectrum::Ir, format!("红外摄像头打开失败：{e}")));
                                 return;
                             }
                         };
@@ -1009,7 +1027,7 @@ impl AuthDaemon {
                             tracing::debug!("已处理红外画面：状态={:?}，已提取特征向量={}", status, embed_opt.is_some());
 
                             let latest_embed = embed_opt.as_ref().map(|d| d.embedding.clone());
-                            let _ = tx.try_send(VerifyMsg::Status(Spectrum::Ir, status, latest_embed, cam.fps()));
+                            let status_sent = tx.try_send(VerifyMsg::Status(Spectrum::Ir, status, latest_embed, cam.fps())).is_ok();
 
                             if status == CaptureStatus::Usable && let Some(data) = embed_opt {
                                 let threshold = ir_threshold;
@@ -1040,6 +1058,9 @@ impl AuthDaemon {
                                             return;
                                         }
                                         if closed {
+                                            if status_sent {
+                                                let _ = tx.blocking_send(VerifyMsg::DuressHeld(Spectrum::Ir, cam.fps()));
+                                            }
                                             continue;
                                         }
                                     }
@@ -1108,7 +1129,7 @@ impl AuthDaemon {
                             let reason = cam.take_stream_error().unwrap_or_else(|| {
                                 "红外摄像头数据流意外中断".to_string()
                             });
-                            let _ = tx.blocking_send(VerifyMsg::Error(reason));
+                            let _ = tx.blocking_send(VerifyMsg::Unavailable(Spectrum::Ir, reason));
                         }
                     }));
                 }
@@ -1317,6 +1338,9 @@ impl AuthDaemon {
                                     let _ = Self::verify_status(&ctxt, VerifyResult::VerifyNoMatch, Vec::new(), rgb_status, ir_status).await;
                                     break;
                                 }
+                                VerifyMsg::DuressHeld(spectrum, fps) => {
+                                    frame_budget.duress_frame_held(spectrum, duress_cfg.effective_hold_frames(fps));
+                                }
                                 VerifyMsg::Unavailable(Spectrum::Rgb, reason)
                                     if run_rgb && ir_continues_without_rgb(&hybrid_policy, run_ir) =>
                                 {
@@ -1324,6 +1348,19 @@ impl AuthDaemon {
                                     let _ = Self::verify_diagnostic(&ctxt, &format!("{reason}；继续使用红外摄像头")).await;
                                     run_rgb = false;
                                     rgb_status = CaptureStatus::Unused;
+                                    if finish_if_auth_passed!() {
+                                        break;
+                                    }
+                                }
+                                VerifyMsg::Unavailable(Spectrum::Ir, reason)
+                                    if run_ir
+                                        && rgb_continues_without_ir(&hybrid_policy, run_rgb)
+                                        && !rgb_phase_done.load(std::sync::atomic::Ordering::Relaxed) =>
+                                {
+                                    warn!("开始验证：{reason}；继续仅使用 RGB");
+                                    let _ = Self::verify_diagnostic(&ctxt, &format!("{reason}；继续使用 RGB 摄像头")).await;
+                                    run_ir = false;
+                                    ir_status = CaptureStatus::Unused;
                                     if finish_if_auth_passed!() {
                                         break;
                                     }
@@ -1373,6 +1410,35 @@ impl AuthDaemon {
 mod tests {
     use super::*;
     use gaze_core::dbus::CaptureStatus;
+
+    #[test]
+    fn duress_hold_frames_do_not_spend_the_liveness_budget() {
+        let mut budget = VerifyFrameBudget::default();
+        for _ in 0..10 {
+            assert!(!budget.frame_spent(Spectrum::Rgb, 2));
+            budget.duress_frame_held(Spectrum::Rgb, 10);
+        }
+        assert!(!budget.frame_spent(Spectrum::Rgb, 2));
+        budget.duress_frame_held(Spectrum::Rgb, 10);
+        assert!(!budget.frame_spent(Spectrum::Rgb, 2));
+        assert!(budget.frame_spent(Spectrum::Rgb, 2));
+    }
+
+    #[test]
+    fn duress_refunds_stay_per_camera_and_reset_with_the_phase() {
+        let mut budget = VerifyFrameBudget::default();
+        assert!(!budget.frame_spent(Spectrum::Ir, 1));
+        budget.duress_frame_held(Spectrum::Rgb, 5);
+        assert!(budget.frame_spent(Spectrum::Ir, 1));
+
+        assert!(!budget.frame_spent(Spectrum::Rgb, 1));
+        budget.duress_frame_held(Spectrum::Rgb, 1);
+        assert!(!budget.phase_started(Spectrum::Rgb, false));
+        assert!(!budget.frame_spent(Spectrum::Rgb, 1));
+        budget.duress_frame_held(Spectrum::Rgb, 1);
+        assert!(!budget.frame_spent(Spectrum::Rgb, 1));
+        assert!(budget.frame_spent(Spectrum::Rgb, 1));
+    }
 
     #[test]
     fn parallel_cameras_have_independent_frame_budgets() {

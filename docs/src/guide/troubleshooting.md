@@ -285,7 +285,7 @@ sudo pacman -S libcamera gst-plugin-libcamera
 
 :::
 
-If `gaze auth` reports `libcamera fallback also failed` with `reason not-negotiated`, and the daemon log shows `Failed to fork: Function not implemented` from libcamera, your libcamera build ships IPA modules whose signatures do not verify. libcamera then tries to run them in a separate sandboxed process, which the daemon's hardening blocks, and without its software ISP the camera offers only raw frames. On Fedora 44 this is fixed in `libcamera-0.7.1-2.fc44` and later. Until that reaches the stable repository, install it from updates-testing:
+If `gaze test` reports `libcamera fallback also failed` with `reason not-negotiated`, and the daemon log shows `Failed to fork: Function not implemented` from libcamera, your libcamera build ships IPA modules whose signatures do not verify. libcamera then tries to run them in a separate sandboxed process, which the daemon's hardening blocks, and without its software ISP the camera offers only raw frames. On Fedora 44 this is fixed in `libcamera-0.7.1-2.fc44` and later. Until that reaches the stable repository, install it from updates-testing:
 
 ```bash
 journalctl -u gazed -b | grep -i 'failed to fork'
@@ -312,7 +312,7 @@ gaze refine-face default
 3. Test scores:
 
 ```bash
-gaze auth --verbose
+gaze test
 ```
 
 4. Add a second profile for a common variation:
@@ -326,7 +326,7 @@ widescreen (16:9) camera, re-enroll your faces once: older releases stretched
 widescreen frames to 4:3, so templates enrolled before the fix will not match
 undistorted frames as well as freshly enrolled ones.
 
-### `gaze auth --verbose` shows a passing score but still fails
+### `gaze test` shows a passing score but still fails
 
 A face that clears the similarity threshold is only half the decision: the
 anti-spoof check has to pass as well. When it does not, the run ends with
@@ -417,7 +417,7 @@ Older Gaze builds could try to use the selected user's PipeWire runtime before t
 
 Different from the SELinux case below: there the prompt appears and the camera
 stays dark, here nothing about face authentication appears at the login screen and the
-greeter logs nothing, while the lock screen, `sudo` and `gaze auth` all work.
+greeter logs nothing, while the lock screen, `sudo` and `gaze test` all work.
 
 The greeter has GNOME Shell's extension kill switch on, which stops every
 extension there regardless of what enables them:
@@ -443,7 +443,7 @@ on Debian and Ubuntu, and a multi-seat machine has one directory per seat.
 
 #### GDM never scans on Fedora or SELinux-enabled systems
 
-If face authentication works in your desktop session (`sudo`, the lock screen, `gaze auth`)
+If face authentication works in your desktop session (`sudo`, the lock screen, `gaze test`)
 but the GDM login screen never opens the camera, SELinux may be denying the
 greeter the camera device. Gaze ships a policy module for this and the
 extension package loads it on install, but that step cannot fail the package
@@ -624,6 +624,12 @@ curl -fsSL https://gaze.gundulabs.com/install.sh | sh
 To restore mail service before updating, disable Gaze in the shared stack with
 `sudo pam-auth-update --disable gaze gaze-simultaneous`.
 
+### Gaze's own settings ask for a password instead of your face
+
+This is expected. The **Unlock** button in the GUI, face enrollment, and the GDM login switch in the GNOME extension all open a Gaze admin prompt, and `gazed` refuses face authentication for it. The prompt reads "Changing Gaze's settings or faces needs your password."
+
+This stops a face match from changing Gaze itself, for example by enrolling another face. Other polkit prompts, such as `pkexec`, still use face authentication unless a Gaze prompt is open at the same time.
+
 ## 6. First run is slow
 
 The first authentication may take a little longer while Gaze downloads the
@@ -661,6 +667,8 @@ your installed package predates the fix for Ubuntu 26.04's PAM module search pat
 ```bash
 curl -fsSL https://gaze.gundulabs.com/install.sh | sh
 ```
+
+If the line instead ends in `undefined symbol: pam_set_data`, your package's PAM module does not link libpam, so services that load libpam privately, such as the `(systemd)` user manager, cannot load it. Those log lines don't stop face authentication elsewhere, and updating the same way clears them.
 
 ## 10. Crash on launch (SIGSEGV or SIGILL) on older CPUs
 
@@ -711,7 +719,7 @@ described in [Hardware Acceleration](/guide/acceleration) and restart `gazed`.
 gaze doctor
 systemctl status gazed
 journalctl -u gazed -n 300 --no-pager
-gaze auth --verbose
+gaze test
 ```
 
 Include the complete `gaze doctor` output, distro version, and desktop environment (GNOME/KDE/etc.) when reporting issues. On KDE, add `gaze-kde-pam status` and the contents of `/etc/pam.d/kde-fingerprint`. On Omarchy, add `gaze-omarchy doctor` and `omarchy-shell lock status`.

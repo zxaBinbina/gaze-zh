@@ -34,6 +34,10 @@ level = "medium"
 # 设置 rgb = "" 可仅使用红外摄像头认证。省略此键会保留 primary。
 # 需要设置 ir 并具有红外模板（切换后请重新录入）。
 rgb = "primary"
+# 也可按顺序尝试 RGB 来源，直到成功打开一个（例如先尝试扩展坞 USB，再尝试内置摄像头）：
+# rgb = ["usb:046d:081b", "primary"]
+# 空列表表示禁用 RGB。仅在摄像头打开失败时回退到下一个来源。
+# 如需合盖认证，还需设置 auth.abort_if_lid_closed = false。
 # 红外（Windows Hello）摄像头。设为 /dev/video* 节点或摄像头的 GStreamer 来源，
 # 例如 pipewiresrc target-object=<pipewire-target>。
 # ir = "/dev/video2"

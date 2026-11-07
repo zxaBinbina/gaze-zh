@@ -82,7 +82,7 @@ fn command_requires_root(command: &Commands) -> Option<&'static str> {
             None => (!show).then_some("config"),
         },
         Commands::Keyring { .. } => Some("keyring"),
-        Commands::Auth { .. }
+        Commands::Test { .. }
         | Commands::ListFaces { .. }
         | Commands::Duress { .. }
         | Commands::Doctor { .. }
@@ -92,7 +92,7 @@ fn command_requires_root(command: &Commands) -> Option<&'static str> {
 
 fn command_target_user(command: &Commands) -> Option<&str> {
     match command {
-        Commands::Auth { user, .. }
+        Commands::Test { user, .. }
         | Commands::ListFaces { user, .. }
         | Commands::Duress { user, .. }
         | Commands::Doctor { user, .. } => user.as_deref(),
@@ -234,11 +234,20 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
-    /// 测试用户的人脸认证
-    Auth {
+    /// 测试人脸验证，不授予权限或测试 PAM
+    #[command(
+        visible_alias = "auth",
+        long_about = "通过守护进程测试人脸验证，包括摄像头采集与识别。此命令不授予权限，也不测试 PAM 集成。已配置的胁迫检测可能触发持续锁定。"
+    )]
+    Test {
         #[arg(short, long, help = "指定用户（默认为当前用户）")]
         user: Option<String>,
-        #[arg(short, long, conflicts_with = "silent", help = "显示详细认证指标")]
+        #[arg(
+            short,
+            long,
+            conflicts_with = "silent",
+            help = "保留此选项以兼容旧版；默认已显示详细指标"
+        )]
         verbose: bool,
         #[arg(short, long, help = "隐藏终端界面和所有输出；通过退出码报告结果")]
         silent: bool,
@@ -480,12 +489,7 @@ async fn handle_enroll(
     Ok(())
 }
 
-async fn handle_auth(
-    proxy: &GazeProxy<'_>,
-    user: &str,
-    verbose: bool,
-    silent: bool,
-) -> anyhow::Result<()> {
+async fn handle_test(proxy: &GazeProxy<'_>, user: &str, silent: bool) -> anyhow::Result<()> {
     let term = Term::stdout();
 
     let has_faces = match proxy.list_faces(user).await {
@@ -583,7 +587,7 @@ async fn handle_auth(
                     };
                 }
             }
-        // Collect these even without `--verbose`, so failures can include the latest diagnostic.
+        // Collect diagnostics for the detailed result.
             signal = diagnostic_stream.next() => {
                 let Some(signal) = signal else { break };
                 if let Ok(args) = signal.args() {
@@ -631,15 +635,18 @@ async fn handle_auth(
         std::process::exit(1);
     }
 
+    if !silent {
+        for message in &diagnostics {
+            println!("{message}");
+        }
+        if !diagnostics.is_empty() {
+            println!();
+        }
+    }
+
     let mut authenticated = false;
     if let Some((result, faces, rgb_status, ir_status)) = verify_result {
-        if verbose {
-            for message in &diagnostics {
-                println!("{message}");
-            }
-            if !diagnostics.is_empty() {
-                println!();
-            }
+        if !silent {
             println!(
                 "\n{} {} {} {} {} {} {}",
                 style(i18n::cell("人脸", 20, true)).bold(),
@@ -702,7 +709,7 @@ async fn handle_auth(
                     });
                 if let Some((face, pct)) = matched {
                     term.write_line(&format!(
-                        "{} 认证通过：{}（{:.1}%，{}毫秒）",
+                        "{} 人脸验证通过：{}（{:.1}%，{}毫秒）",
                         style("✓").green().bold(),
                         style(&face).green().bold(),
                         pct,
@@ -710,7 +717,7 @@ async fn handle_auth(
                     ))?;
                 } else {
                     term.write_line(&format!(
-                        "{} 认证通过：{}（{}毫秒）",
+                        "{} 人脸验证通过：{}（{}毫秒）",
                         style("✓").green().bold(),
                         style(user).green().bold(),
                         start.elapsed().as_millis()
@@ -723,15 +730,10 @@ async fn handle_auth(
     if !authenticated && !silent {
         let err_term = Term::stderr();
         err_term.write_line(&format!(
-            "{} 认证失败（{}毫秒）",
+            "{} 人脸验证失败（{}毫秒）",
             style("✗").red().bold(),
             start.elapsed().as_millis()
         ))?;
-        // "Authentication failed" alone can sound like a face mismatch even if the camera never
-        // opened. Verbose mode has already printed the full diagnostic list.
-        if !verbose && let Some(reason) = diagnostics.last() {
-            err_term.write_line(&format!("  {}", style(reason).yellow()))?;
-        }
     }
 
     let _ = proxy.release().await;
@@ -769,7 +771,7 @@ async fn run() -> anyhow::Result<()> {
         reexec_as_root(name)?;
     }
 
-    let silent_auth = matches!(cli.command, Commands::Auth { silent: true, .. });
+    let silent_auth = matches!(cli.command, Commands::Test { silent: true, .. });
 
     let _polkit_agent =
         (command_may_be_challenged(&cli.command) && !silent_auth).then(polkit::PolkitAgent::spawn);
@@ -829,18 +831,12 @@ async fn run() -> anyhow::Result<()> {
     };
 
     match cli.command {
-        Commands::Auth {
+        Commands::Test {
             user,
-            verbose,
+            verbose: _,
             silent,
         } => {
-            let result = handle_auth(
-                &proxy,
-                &user.unwrap_or_else(get_current_user),
-                verbose,
-                silent,
-            )
-            .await;
+            let result = handle_test(&proxy, &user.unwrap_or_else(get_current_user), silent).await;
             if silent && result.is_err() {
                 std::process::exit(1);
             }
@@ -910,38 +906,59 @@ mod tests {
     use super::*;
 
     #[test]
-    fn cli_parses_auth_and_safe_uninstall_flags() {
-        let cli = Cli::try_parse_from(["gaze", "auth", "--user", "alice", "--verbose"]).unwrap();
-        assert!(matches!(
-            cli.command,
-            Commands::Auth {
-                user: Some(ref user),
-                verbose: true,
-                silent: false,
-            } if user == "alice"
-        ));
+    fn cli_parses_test_alias_and_safe_uninstall_flags() {
+        for command in ["test", "auth"] {
+            let cli = Cli::try_parse_from(["gaze", command]).unwrap();
+            assert!(matches!(
+                cli.command,
+                Commands::Test {
+                    user: None,
+                    verbose: false,
+                    silent: false
+                }
+            ));
+            let cli =
+                Cli::try_parse_from(["gaze", command, "--user", "alice", "--verbose"]).unwrap();
+            assert!(matches!(
+                cli.command,
+                Commands::Test {
+                    user: Some(ref user),
+                    verbose: true,
+                    silent: false,
+                } if user == "alice"
+            ));
 
-        let cli = Cli::try_parse_from(["gaze", "auth", "-s", "-u", "bob"]).unwrap();
-        assert!(matches!(
-            cli.command,
-            Commands::Auth {
-                user: Some(ref user),
-                verbose: false,
-                silent: true,
-            } if user == "bob"
-        ));
+            let cli = Cli::try_parse_from(["gaze", command, "-s", "-u", "bob"]).unwrap();
+            assert!(matches!(
+                cli.command,
+                Commands::Test {
+                    user: Some(ref user),
+                    verbose: false,
+                    silent: true,
+                } if user == "bob"
+            ));
 
-        let cli = Cli::try_parse_from(["gaze", "auth", "--silent"]).unwrap();
-        assert!(matches!(
-            cli.command,
-            Commands::Auth {
-                user: None,
-                verbose: false,
-                silent: true,
-            }
-        ));
+            let cli = Cli::try_parse_from(["gaze", command, "--silent"]).unwrap();
+            assert!(matches!(
+                cli.command,
+                Commands::Test {
+                    user: None,
+                    verbose: false,
+                    silent: true,
+                }
+            ));
 
-        assert!(Cli::try_parse_from(["gaze", "auth", "--verbose", "--silent"]).is_err());
+            let cli = Cli::try_parse_from(["gaze", command, "-v"]).unwrap();
+            assert!(matches!(
+                cli.command,
+                Commands::Test {
+                    verbose: true,
+                    silent: false,
+                    ..
+                }
+            ));
+            assert!(Cli::try_parse_from(["gaze", command, "--verbose", "--silent"]).is_err());
+        }
 
         let cli = Cli::try_parse_from(["gaze", "uninstall", "--yes", "--keep-data", "--dry-run"])
             .unwrap();
@@ -1005,8 +1022,9 @@ mod tests {
     }
 
     #[test]
-    fn read_only_commands_stay_unprivileged() {
+    fn inspection_and_test_commands_stay_unprivileged() {
         for args in [
+            vec!["gaze", "test"],
             vec!["gaze", "auth"],
             vec!["gaze", "list-faces"],
             vec!["gaze", "doctor"],
@@ -1177,7 +1195,7 @@ mod tests {
     #[test]
     fn only_the_commands_that_name_a_user_have_a_target() {
         assert_eq!(
-            command_target_user(&Commands::Auth {
+            command_target_user(&Commands::Test {
                 user: Some("alice".into()),
                 verbose: false,
                 silent: false,
@@ -1192,7 +1210,7 @@ mod tests {
             Some("bob")
         );
         assert_eq!(
-            command_target_user(&Commands::Auth {
+            command_target_user(&Commands::Test {
                 user: None,
                 verbose: false,
                 silent: false,

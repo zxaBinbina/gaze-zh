@@ -117,7 +117,7 @@ enable_plugin() {
 	# Recheck before restarting an authentication service.
 	unlocked_status
 	run omarchy restart shell || fail '请在解锁状态下重启 Omarchy shell 以加载插件。'
-	printf 'Gaze Omarchy 锁屏已启用。使用 gaze add-face default 录入，然后运行 gaze auth。\n'
+	printf 'Gaze Omarchy 锁屏已启用。使用 gaze add-face default 录入，然后运行 gaze test。\n'
 }
 
 wait_for_stock() {
@@ -159,7 +159,7 @@ doctor() {
 	doctor_failed=0
 	compatible || issue 'Omarchy 主程序与已审核的基准版本不同；请更新 gaze-omarchy。'
 	pam_ready || issue '专用人脸 PAM 缺失、被修改或不可信；请重新安装 gaze-omarchy。'
-	enrolled || issue '尚未录入或守护进程不可用；请运行 gaze add-face default 和 gaze auth。'
+	enrolled || issue '尚未录入或守护进程不可用；请运行 gaze add-face default 和 gaze test。'
 	owns_link || issue '当前用户未安装插件；请在解锁状态下运行 gaze-omarchy enable。'
 	catalog=$(run omarchy-plugin-catalog 2>/dev/null) || catalog=
 	printf '%s\n' "$catalog" | jq -e --arg id "$PLUGIN_ID" \

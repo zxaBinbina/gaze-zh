@@ -4,11 +4,12 @@
 use console::{Term, style};
 use dialoguer::{Confirm, Input, Select, theme::Theme};
 use gaze_core::config::{
-    AuthConfig, Config, DEFAULT_SECURITY_THRESHOLD, HYBRID_POLICY_LABELS, INFERENCE_DEVICE_LABELS,
-    INFERENCE_EXECUTION_PROVIDER_LABELS, MAX_ENROLLMENT_FACE_SIZE_RATIO, MAX_LIVENESS_MAX_SECONDS,
-    MAX_LIVENESS_THRESHOLD, MAX_SECURITY_THRESHOLD, MIN_ENROLLMENT_FACE_SIZE_RATIO,
-    MIN_LIVENESS_MAX_SECONDS, MIN_LIVENESS_THRESHOLD, MIN_SECURITY_THRESHOLD, MODEL_QUALITY_LABELS,
-    SECURITY_LEVEL_LABELS, START_DELAY_SCOPE_LABELS, SecurityLevel,
+    AuthConfig, CameraSources, Config, DEFAULT_SECURITY_THRESHOLD, HYBRID_POLICY_LABELS,
+    INFERENCE_DEVICE_LABELS, INFERENCE_EXECUTION_PROVIDER_LABELS, MAX_ENROLLMENT_FACE_SIZE_RATIO,
+    MAX_LIVENESS_MAX_SECONDS, MAX_LIVENESS_THRESHOLD, MAX_SECURITY_THRESHOLD,
+    MIN_ENROLLMENT_FACE_SIZE_RATIO, MIN_LIVENESS_MAX_SECONDS, MIN_LIVENESS_THRESHOLD,
+    MIN_SECURITY_THRESHOLD, MODEL_QUALITY_LABELS, SECURITY_LEVEL_LABELS, START_DELAY_SCOPE_LABELS,
+    SecurityLevel,
 };
 use gaze_core::dbus::{GazeProxy, apply_config_to_daemon, apply_config_with_keyring_to_daemon};
 
@@ -80,9 +81,20 @@ pub async fn run_config_wizard(
 
     let mut cameras =
         gaze_vision::camera::rgb_choices().map_err(|e| anyhow::anyhow!("无法列出摄像头：{e}"))?;
-    ensure_configured_source_listed(&mut cameras, &config.cameras.rgb);
+    ensure_configured_source_listed(&mut cameras, config.cameras.rgb.first());
+    let mut default_cam_idx =
+        gaze_vision::camera::source_index(&cameras, config.cameras.rgb.first());
+    let keep_fallback_idx = if matches!(config.cameras.rgb, CameraSources::Ordered(_)) {
+        default_cam_idx = cameras.len();
+        cameras.push((
+            format!("保留有序回退来源：{}", config.cameras.rgb),
+            String::new(),
+        ));
+        Some(default_cam_idx)
+    } else {
+        None
+    };
     let cam_names: Vec<String> = cameras.iter().map(|(n, _)| n.clone()).collect();
-    let default_cam_idx = gaze_vision::camera::source_index(&cameras, &config.cameras.rgb);
 
     let selected_cam_idx = Select::with_theme(&theme)
         .with_prompt("RGB 摄像头来源")
@@ -90,7 +102,9 @@ pub async fn run_config_wizard(
         .default(default_cam_idx)
         .interact()?;
 
-    config.cameras.rgb = cameras[selected_cam_idx].1.clone();
+    if Some(selected_cam_idx) != keep_fallback_idx {
+        config.cameras.rgb = cameras[selected_cam_idx].1.clone().into();
+    }
 
     config.cameras.dark_luma_threshold = Input::<u8>::with_theme(&theme)
         .with_prompt("暗光阈值：拒绝平均亮度低于此值的画面（0-255）")
@@ -116,7 +130,7 @@ pub async fn run_config_wizard(
             "{} 未选择红外摄像头，保留主 RGB 摄像头",
             style("!").yellow().bold()
         ))?;
-        config.cameras.rgb = gaze_core::config::DEFAULT_RGB_CAMERA.to_string();
+        config.cameras.rgb = gaze_core::config::DEFAULT_RGB_CAMERA.into();
     }
 
     if config.cameras.ir.is_empty() {

@@ -41,9 +41,9 @@ Authentication succeeds when the best similarity and liveness scores both meet t
 
 ## One authentication attempt
 
-Everything below happens once per `gaze auth`, PAM prompt, or lock screen unlock. The
+Everything below happens once per `gaze test`, PAM prompt, or lock screen unlock. The
 same daemon code runs on every surface, so a problem you can reproduce with
-`gaze auth --verbose` is the same problem the lock screen hits.
+`gaze test` is the same problem the lock screen hits.
 
 ### Before the camera opens
 
@@ -181,18 +181,25 @@ seconds rather than running forever.
 
 | Ending | CLI | PAM message | PAM code |
 | --- | --- | --- | --- |
-| Match | `Authenticated as: <face>` | Face Verified. | success |
-| A face was judged and did not match | `Authentication failed` | Face not recognized. Enter your password. | `PAM_AUTH_ERR` |
-| Matched, but liveness did not pass | `Authentication failed` plus the liveness note | Face not recognized. Enter your password. | `PAM_AUTH_ERR` |
-| Ended too dark | `Authentication failed` | Too dark for face authentication. Enter your password. | `PAM_AUTHINFO_UNAVAIL` |
-| Ended with no face | `Authentication failed` | Face not detected. Enter your password. | `PAM_AUTHINFO_UNAVAIL` |
-| The camera never ran, or the daemon could not be reached | `Authentication failed` | Face authentication unavailable. Enter your password. | `PAM_AUTHINFO_UNAVAIL` |
+| Match | `Face verification passed: <face>` | Face Verified. | success |
+| A face was judged and did not match | `Face verification failed` | Face not recognized. Enter your password. | `PAM_AUTH_ERR` |
+| Matched, but liveness did not pass | `Face verification failed` plus the liveness note | Face not recognized. Enter your password. | `PAM_AUTH_ERR` |
+| Ended too dark | `Face verification failed` | Too dark for face authentication. Enter your password. | `PAM_AUTHINFO_UNAVAIL` |
+| Ended with no face | `Face verification failed` | Face not detected. Enter your password. | `PAM_AUTHINFO_UNAVAIL` |
+| The camera never ran, or the daemon could not be reached | `Face verification failed` | Face authentication unavailable. Enter your password. | `PAM_AUTHINFO_UNAVAIL` |
 | PAM budget spent | n/a, PAM only | Face authentication timed out. Enter your password. | `PAM_AUTHINFO_UNAVAIL` |
 
 Only a face that was actually judged returns `PAM_AUTH_ERR`. Every other ending returns
 `PAM_AUTHINFO_UNAVAIL`, which tells PAM that Gaze reached no decision rather than that you
 failed an attempt, so a dark room or a camera in use by another program does not count against
 you. A run that ends on a hardware error is reported the same way.
+
+The KDE lock screen's biometric slots (`kde-fingerprint`, `kde-smartcard`) are the exception.
+KScreenLocker stops calling a slot for the rest of the lock once it answers
+`PAM_AUTHINFO_UNAVAIL`, so there a dark room, no face or a spent budget returns `PAM_AUTH_ERR`
+and the slot stays armed. A daemon that cannot be reached or refuses the camera still returns
+`PAM_AUTHINFO_UNAVAIL`. Gaze wires these slots so a failure never reaches
+`pam_faillock authfail`, so nothing is counted.
 
 ## Reading it in the logs
 
