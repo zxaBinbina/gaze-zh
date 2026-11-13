@@ -287,22 +287,24 @@ pub async fn run_config_wizard(
     }
 
     config.enrollment.max_templates = Input::with_theme(&theme)
-        .with_prompt("模板上限（采集组数）")
+        .with_prompt("模板上限（采集组数，0 表示不限）")
         .default(config.enrollment.max_templates)
         .interact_text()?;
 
     let min_face_size_ratio: f64 = Input::with_theme(&theme)
         .with_prompt("录入时最小人脸占比（0.10 - 0.75；调低可在更远处录入）")
         .default(config.enrollment.min_face_size_ratio)
+        .validate_with(|value: &f64| {
+            if (MIN_ENROLLMENT_FACE_SIZE_RATIO..=MAX_ENROLLMENT_FACE_SIZE_RATIO).contains(value) {
+                Ok(())
+            } else {
+                Err(format!(
+                    "必须介于 {MIN_ENROLLMENT_FACE_SIZE_RATIO} 和 {MAX_ENROLLMENT_FACE_SIZE_RATIO} 之间"
+                ))
+            }
+        })
         .interact_text()?;
-    config.enrollment.min_face_size_ratio = if min_face_size_ratio.is_finite() {
-        min_face_size_ratio.clamp(
-            MIN_ENROLLMENT_FACE_SIZE_RATIO,
-            MAX_ENROLLMENT_FACE_SIZE_RATIO,
-        )
-    } else {
-        config.enrollment.effective_min_face_size_ratio() as f64
-    };
+    config.enrollment.min_face_size_ratio = min_face_size_ratio;
 
     config.liveness.enabled = Confirm::with_theme(&theme)
         .with_prompt("启用活体防伪")
@@ -353,6 +355,19 @@ pub async fn run_config_wizard(
         .default(config.storage.encrypt_templates)
         .interact()?;
 
+    let keyring_prerequisites = config.storage.encrypt_templates && config.liveness.enabled;
+    for (was_on, name) in [
+        (config.storage.unlock_gnome_keyring, "GNOME Keyring"),
+        (config.storage.unlock_kwallet, "KWallet"),
+    ] {
+        if was_on && !keyring_prerequisites {
+            term.write_line(&format!(
+                "{} 正在关闭 {name} 解锁：此功能需要同时启用模板加密和活体检测",
+                style("!").yellow().bold()
+            ))?;
+        }
+    }
+
     config.storage.unlock_gnome_keyring =
         if keyring_supported.gnome && config.storage.encrypt_templates && config.liveness.enabled {
             Confirm::with_theme(&theme)
@@ -388,11 +403,7 @@ pub async fn run_config_wizard(
             .default(false)
             .interact()?
     {
-        keyring::enroll(
-            &get_current_user(),
-            &config,
-            gaze_security::keyring::Backend::Gnome,
-        )?;
+        enroll_keyring(&config, gaze_security::keyring::Backend::Gnome)?;
     }
 
     if config.storage.unlock_kwallet
@@ -401,13 +412,24 @@ pub async fn run_config_wizard(
             .default(false)
             .interact()?
     {
-        keyring::enroll(
-            &get_current_user(),
-            &config,
-            gaze_security::keyring::Backend::KWallet,
-        )?;
+        enroll_keyring(&config, gaze_security::keyring::Backend::KWallet)?;
     }
 
+    Ok(())
+}
+
+// The wizard runs unprivileged, but storing a credential needs root, which `gaze keyring` obtains.
+fn enroll_keyring(config: &Config, backend: gaze_security::keyring::Backend) -> anyhow::Result<()> {
+    if crate::is_root() {
+        return keyring::enroll(&get_current_user(), config, backend);
+    }
+    let mut command = std::process::Command::new(std::env::current_exe()?);
+    command.arg("keyring");
+    if backend == gaze_security::keyring::Backend::KWallet {
+        command.arg("--kwallet");
+    }
+    let status = command.status()?;
+    anyhow::ensure!(status.success(), "{} 密码录入未完成", backend.name());
     Ok(())
 }
 

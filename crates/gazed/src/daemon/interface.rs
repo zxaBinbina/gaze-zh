@@ -325,7 +325,7 @@ impl AuthDaemon {
             if run_ir && rgb_continues_without_ir(config.security.hybrid_policy(), run_rgb) {
                 let source = ir_device.clone();
                 let disconnected = tokio::task::spawn_blocking(move || {
-                    gaze_vision::camera::camera_disconnected(&source, false)
+                    gaze_vision::camera::camera_disconnected(&source, false, false)
                 })
                 .await
                 .unwrap_or(false);
@@ -419,7 +419,10 @@ impl AuthDaemon {
                                 continue;
                             }
 
-                            let mut cam = match Camera::open_rgb_privileged(&rgb_device_clone) {
+                            let mut cam = match Camera::open_rgb_privileged(
+                                &rgb_device_clone,
+                                config_clone.cameras.nonphysical_rgb_opt_in(),
+                            ) {
                                 Ok(c) => c,
                                 Err(e) => {
                                     dead_streams += 1;
@@ -501,7 +504,10 @@ impl AuthDaemon {
                         }
                     }
 
-                    let mut cam = match Camera::open_rgb_privileged(&rgb_device_clone) {
+                    let mut cam = match Camera::open_rgb_privileged(
+                        &rgb_device_clone,
+                        config_clone.cameras.nonphysical_rgb_opt_in(),
+                    ) {
                         Ok(c) => c,
                         Err(e) => {
                             let _ = tx.blocking_send(EnrollMsg::Error(format!("RGB 摄像头打开失败：{e}")));
@@ -631,7 +637,11 @@ impl AuthDaemon {
                                 &CameraKind::Ir { source: ir_device_clone.clone(), node: ir_node_clone.clone() },
                                 emitter_enabled
                             );
-                            let mut cam = match Camera::open_ir_privileged(&ir_device_clone, config_clone.cameras.ir_frame_size()) {
+                            let mut cam = match Camera::open_ir_privileged(
+                                &ir_device_clone,
+                                config_clone.cameras.ir_frame_size(),
+                                config_clone.cameras.ir_bridge_source(),
+                            ) {
                                 Ok(c) => c,
                                 Err(e) => {
                                     dead_streams += 1;
@@ -708,7 +718,11 @@ impl AuthDaemon {
                         emitter_enabled
                     );
 
-                    let mut cam = match Camera::open_ir_privileged(&ir_device_clone, config_clone.cameras.ir_frame_size()) {
+                    let mut cam = match Camera::open_ir_privileged(
+                        &ir_device_clone,
+                        config_clone.cameras.ir_frame_size(),
+                        config_clone.cameras.ir_bridge_source(),
+                    ) {
                         Ok(c) => c,
                         Err(e) => {
                             let _ = tx.blocking_send(EnrollMsg::Error(format!("红外摄像头打开失败：{e}")));

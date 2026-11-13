@@ -216,9 +216,13 @@ impl From<DbusCameraConfig> for CameraConfig {
         };
         Self {
             rgb,
+            allow_nonphysical_rgb: false,
+            allow_untrusted_rgb_writers: false,
             ir: cameras.ir,
             ir_frame_width: None,
             ir_frame_height: None,
+            ir_source_marker: None,
+            ir_source_driver: None,
             emitter_enabled: cameras.emitter_enabled,
             dark_luma_threshold: cameras.dark_luma_threshold,
             parallel_capture: cameras.parallel_capture,
@@ -1454,6 +1458,20 @@ mod tests {
             .expect("no error")
             .expect("current layout is readable");
         assert!(decoded.cameras.auto_rotate);
+    }
+
+    #[test]
+    fn allow_nonphysical_rgb_stays_off_the_legacy_config_wire() {
+        let mut config = Config::default();
+        config.cameras.allow_nonphysical_rgb = true;
+        config.cameras.allow_untrusted_rgb_writers = true;
+        let raw = OwnedVariant::try_from(DbusConfig::from(config)).unwrap();
+        assert_eq!(raw.value_signature(), DbusConfig::SIGNATURE);
+        let decoded = config_from_property(raw)
+            .expect("no error")
+            .expect("current layout is readable");
+        assert!(!decoded.cameras.allow_nonphysical_rgb);
+        assert!(!decoded.cameras.allow_untrusted_rgb_writers);
     }
 
     #[test]

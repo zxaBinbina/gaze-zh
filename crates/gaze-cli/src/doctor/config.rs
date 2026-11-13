@@ -190,13 +190,20 @@ pub(super) fn config_findings(config: &Config) -> Vec<Check> {
             if index.is_empty() || !index.chars().all(|c| c.is_ascii_digit()) {
                 error(
                     format!("RGB 摄像头节点 {rgb:?} 无效"),
-                    "使用 /dev/video<number>、usb:VVVV:PPPP、\"primary\" 或 GStreamer 来源。",
+                    "请使用 /dev/video<number>、usb:VVVV:PPPP、libcamera:<name>、\"primary\" 或 GStreamer 来源。",
                 );
             }
         } else if rgb.starts_with("usb:") && gaze_vision::camera::parse_usb_spec(rgb).is_none() {
             error(
                 format!("RGB USB 规格 {rgb:?} 无效"),
                 "使用十六进制 VID:PID 格式 usb:VVVV:PPPP，例如 usb:046d:085e。",
+            );
+        } else if rgb.starts_with("libcamera:")
+            && gaze_vision::camera::parse_libcamera_spec(rgb).is_none()
+        {
+            error(
+                format!("RGB libcamera 规格 {rgb:?} 无效"),
+                "请使用 libcamera:<摄像头名称>，名称取自 `cam --list`。",
             );
         }
     }
@@ -268,6 +275,27 @@ pub(super) fn config_findings(config: &Config) -> Vec<Check> {
                 "如果混合认证开始报错“红外摄像头数据流意外停止”，请使用 \"auto\" 或 \"never\"。"
                     .to_string(),
             ),
+        });
+    }
+    let opt_in = config.cameras.nonphysical_rgb_opt_in();
+    if opt_in.allow_untrusted_writers {
+        findings.push(Check {
+            level: Level::Warning,
+            name: "RGB 摄像头信任设置",
+            message: "cameras.allow_untrusted_rgb_writers 为 true，任何可写入 RGB 节点的进程都可能通过人脸认证"
+                .to_string(),
+            fix: Some(
+                "请移除此设置并将节点权限限制为 root，或使用物理 RGB 摄像头。"
+                    .to_string(),
+            ),
+        });
+    } else if opt_in.enabled {
+        findings.push(Check {
+            level: Level::Warning,
+            name: "RGB 摄像头信任设置",
+            message: "cameras.allow_nonphysical_rgb 为 true，虚拟 RGB 节点被信任用于认证"
+                .to_string(),
+            fix: Some("请尽量使用 usb:VVVV:PPPP 或物理 /dev/videoN 节点。".to_string()),
         });
     }
     if !config.liveness.enabled {
@@ -392,6 +420,26 @@ mod tests {
             messages
                 .iter()
                 .any(|message| message.contains("max_seconds"))
+        );
+    }
+
+    #[test]
+    fn config_warns_about_nonphysical_rgb_opt_ins() {
+        let trusts_rgb = |config: &Config| {
+            config_findings(config)
+                .iter()
+                .any(|check| check.name == "RGB 摄像头信任设置")
+        };
+        let mut config = Config::default();
+        assert!(!trusts_rgb(&config));
+        config.cameras.allow_nonphysical_rgb = true;
+        assert!(trusts_rgb(&config));
+        config.cameras.allow_untrusted_rgb_writers = true;
+        assert!(
+            config_findings(&config)
+                .iter()
+                .any(|check| check.level == Level::Warning
+                    && check.message.contains("allow_untrusted_rgb_writers"))
         );
     }
 

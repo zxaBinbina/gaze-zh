@@ -325,8 +325,10 @@ during enrollment, then combines their results during verification according to
 the configured `hybrid_policy`.
 
 If the configured IR camera is not connected, for example a USB IR camera on an
-undocked laptop, Gaze enrolls and verifies with the RGB camera alone. The `and`
-policy is the exception: it keeps requiring both cameras and fails instead.
+undocked laptop, Gaze enrolls with the RGB camera alone unless the policy is
+`and`. Verification only continues with RGB alone under `or`. Every other policy
+fails face authentication and falls back to your password, so unplugging the IR
+camera is never weaker than covering its lens.
 
 ### IR only
 
@@ -367,6 +369,73 @@ ir_frame_height = 340
 - In the GUI, turn on **IR Frame Size Override** under Hardware.
 - The daemon must be at least as new as the GUI or CLI that sets the override.
   An older daemon rejects it and leaves the rest of the configuration unchanged.
+
+### Virtual IR nodes (userspace bridges)
+
+Authentication only opens camera nodes backed by physical hardware: a PCI or USB
+device in sysfs, or a platform device that the device tree or ACPI describes,
+such as the Apple Silicon ISP. A userspace bridge that relays a sensor into a virtual node —
+for example a v4l2loopback device for an IPU6 IR sensor — cannot prove that on
+its own, so the daemon refuses it for privileged capture. Declare the bridge's
+provenance instead:
+
+```toml
+[cameras]
+ir = "/dev/video42"
+ir_source_marker = "/run/surface_ir_bridge_dev"
+# ir_source_driver = "ipu3-cio2"   # optional: pin the source's bound driver
+```
+
+- `ir_source_marker` is a file the privileged bridge writes. Its first line is
+  the `/dev/video*` path of the physical node it relays. It must be a regular
+  file owned by root that only root can write, and every directory above it must
+  be owned by root and not writable by other users. Only a privileged bridge can
+  create it, which is what makes it a trust anchor. These keys can only be set
+  in the config file.
+- An optional second line names the virtual node the bridge feeds. When it is
+  present, it must be the same device as `cameras.ir`, which stops a stale or
+  unrelated marker from vouching for a different node.
+- The named source must itself be a physical camera, and when
+  `ir_source_driver` is set it must also be bound to that driver.
+- The virtual node must not be writable by unprivileged users: anyone who can
+  feed it could replay recorded footage as authentication. Gaze refuses the node
+  when a user other than root, or anyone outside its group, can write to it.
+  Drop the `uaccess` udev tag and keep `root:video` `0660` permissions.
+
+This setting is only available in the config file, not in the GUI.
+
+### Nonphysical RGB cameras (opt-in)
+
+Privileged RGB capture also refuses virtual nodes such as v4l2loopback. If your
+RGB frames reach a V4L2 node through a relay with no bridge marker, opt in:
+
+```toml
+[cameras]
+allow_nonphysical_rgb = true
+```
+
+`rgb = "primary"` still prefers a physical camera and falls back to the first
+virtual node only when there is none. IR capture is not affected.
+
+The node must still refuse unprivileged writers, as with a bridged IR node.
+Members of the node's group count as trusted, so `root:video` `0660` is only
+safe if you trust everyone in `video`. systemd's `70-uaccess.rules` grants the seat user a
+write ACL on every V4L2 node, and a later `TAG-="uaccess"` rule does not remove
+it; shadow that file in `/etc/udev/rules.d/` to skip the node. To accept the
+user-writable node instead:
+
+```toml
+[cameras]
+allow_nonphysical_rgb = true
+allow_untrusted_rgb_writers = true
+```
+
+With this set, any process running as the seat user can feed the camera
+recorded footage and pass face authentication. `gaze doctor` and the daemon log
+warn while it is on.
+
+Both keys live only in `/etc/gaze/config.toml`. The GUI and `gaze config` leave
+them untouched; restart with `sudo systemctl restart gazed` after editing.
 
 ### Parallel RGB + IR capture
 
@@ -411,7 +480,7 @@ Gaze resolves the underlying `/dev/video*` node from the PipeWire camera, matche
 Non-USB emitters driven over I2C use the reviewed profiles in `crates/gaze-core/ir-profiles/i2c/`, which are compiled into Gaze and never read from user configuration. The only one today is the Surface Pro 4 OV7251 sensor. It needs:
 
 - The `i2c-dev` kernel module loaded, so the sensor's `/dev/i2c-*` bus exists. To load it at every boot, run `echo i2c-dev | sudo tee /etc/modules-load.d/i2c-dev.conf`.
-- A userspace bridge that relays the IPU3/CIO2 IR stream into a v4l2loopback device at `/dev/video42` named `Surface IR Camera`, and writes the path of the CIO2 source node to `/run/surface_ir_bridge_dev`. Point `cameras.ir` at `/dev/video42`.
+- A userspace bridge that relays the IPU3/CIO2 IR stream into a v4l2loopback device at `/dev/video42` named `Surface IR Camera`, and writes the path of the CIO2 source node to `/run/surface_ir_bridge_dev`. Point `cameras.ir` at `/dev/video42` and set `cameras.ir_source_marker` to `/run/surface_ir_bridge_dev` — the same marker doubles as capture provenance for the virtual node (see [Virtual IR nodes](#virtual-ir-nodes-userspace-bridges)).
 - The `ov7251` driver bound to `i2c-INT347E:00`.
 
 Gaze uses the I2C bus on the adapter where the sensor is bound. Before writing,
@@ -742,7 +811,7 @@ How it works:
 - A matched frame where either eye is closed never unlocks. That alone means a blink cannot let a coerced unlock through.
 - If an eye stays closed for `hold_ms`, Gaze rejects the attempt and locks face authentication for that user. While locked, face unlock reports itself as unavailable and falls straight through to the password prompt without touching the camera.
 - The lock is stored in `/var/lib/gaze/duress`, so a reboot or daemon restart does not clear it.
-- It clears after a successful login that did not use your face, such as your password, on a service that runs as root with `pam_gaze.so` in its auth stack: the login greeters (`gdm-password`, SDDM, LightDM, greetd), `login`, `sudo`, `su` and polkit. Lock screens that run as you (hyprlock, swaylock, the KDE lock screen) cannot clear it, because the daemon cannot tell that a password was used there; unlock with your password and then run `sudo -v`, or log in again. Network logins such as SSH or IMAP do not clear it. You can also clear it with `gaze duress --clear`, which requires fresh administrator authentication.
+- It clears after a successful login with your password on a service that runs as root, has `pam_gaze.so` in its auth stack, and establishes credentials afterwards: the login greeters (`gdm-password`, SDDM, LightDM, greetd), `login`, `sudo` and `su`. A fingerprint or other password-free login does not clear it, and neither do polkit prompts, which never establish credentials. Lock screens that run as you (hyprlock, swaylock, the KDE lock screen) cannot clear it, because the daemon cannot tell that a password was used there; unlock with your password and then run `sudo -v`, or log in again. Network logins such as SSH or IMAP do not clear it. You can also clear it with `gaze duress --clear`, which requires fresh administrator authentication.
 
 Settings:
 

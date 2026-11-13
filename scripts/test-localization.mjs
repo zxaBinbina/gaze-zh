@@ -127,3 +127,24 @@ test('Omarchy recognizes the actual localized PAM confirmation and still require
         assert.deepEqual(answers, ['yes']);
     }
 });
+
+test('daemon refusal diagnostics shown by GUI and CLI stay Chinese', async () => {
+    const source = await read('crates/gazed/src/daemon/mod.rs');
+    for (const name of ['DURESS_LOCKED_DIAGNOSTIC', 'LID_CLOSED_DIAGNOSTIC',
+        'DURESS_MODEL_MISSING_DIAGNOSTIC', 'LIVENESS_GATE_DIAGNOSTIC']) {
+        const message = source.match(new RegExp(`const ${name}: &str =\\s*"([^"]+)"`));
+        assert.ok(message, name);
+        assert.match(message[1], /[\u4e00-\u9fff]/, name);
+    }
+});
+
+test('Omarchy timeout and fingerprint failure notices remain Chinese', async () => {
+    const service = await read('integrations/omarchy/Service.qml');
+    const timeout = service.match(/id: faceTimeoutTimer[\s\S]*?root\.setFaceMessage\("([^"]+)"/);
+    assert.ok(timeout);
+    assert.match(timeout[1], /[\u4e00-\u9fff]/);
+    const view = await read('integrations/omarchy/LockView.qml');
+    const notice = view.match(/id: fingerprintNotice[\s\S]*?\n\s+text: "([^"]+)"/);
+    assert.ok(notice);
+    assert.match(notice[1], /[\u4e00-\u9fff]/);
+});

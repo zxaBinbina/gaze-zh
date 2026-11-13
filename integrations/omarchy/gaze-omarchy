@@ -99,12 +99,12 @@ unlocked_status() {
 
 enable_plugin() {
 	unlocked_status
-	compatible || fail '此 Omarchy 版本需要审核。受支持的基准版本为 4.0.2 和 4.0.3。'
+	compatible || fail '此 Omarchy 版本需要审核。受支持的基准版本为 4.5.0。'
 	pam_ready || fail '请重新安装 gaze-omarchy：其专用人脸 PAM 服务缺失或已被修改。'
-	catalog=$(run omarchy-plugin-catalog) || fail '无法查询 Omarchy 插件目录。'
-	printf '%s\n' "$catalog" | jq -e 'type == "array"' >/dev/null || fail '插件目录无效。'
+	catalog=$(run omarchy plugin list --json) || fail '无法查询 Omarchy 插件列表。'
+	printf '%s\n' "$catalog" | jq -e 'type == "array"' >/dev/null || fail '插件列表无效。'
 	if printf '%s\n' "$catalog" | jq -e --arg id "$PLUGIN_ID" \
-		'any(.[]; .enabled == true and (.clonedFrom // .omarchy.clonedFrom) == "omarchy.lock" and .id != $id)' >/dev/null; then
+		'any(.[]; .enabled == true and .clonedFrom == "omarchy.lock" and .id != $id)' >/dev/null; then
 		fail '启用 Gaze 前，请先禁用其他自定义锁屏插件。'
 	fi
 	if [ -e "$PLUGIN_LINK" ] || [ -L "$PLUGIN_LINK" ]; then
@@ -161,10 +161,10 @@ doctor() {
 	pam_ready || issue '专用人脸 PAM 缺失、被修改或不可信；请重新安装 gaze-omarchy。'
 	enrolled || issue '尚未录入或守护进程不可用；请运行 gaze add-face default 和 gaze test。'
 	owns_link || issue '当前用户未安装插件；请在解锁状态下运行 gaze-omarchy enable。'
-	catalog=$(run omarchy-plugin-catalog 2>/dev/null) || catalog=
+	catalog=$(run omarchy plugin list --json 2>/dev/null) || catalog=
 	printf '%s\n' "$catalog" | jq -e --arg id "$PLUGIN_ID" \
 		'any(.[]; .id == $id and .enabled == true)' >/dev/null 2>&1 ||
-		issue 'Gaze 插件已禁用或插件目录不可用；请在解锁状态下运行 gaze-omarchy enable。'
+		issue 'Gaze 插件已禁用或插件列表不可用；请在解锁状态下运行 gaze-omarchy enable。'
 	status=$(run omarchy-shell lock status 2>/dev/null) || status=
 	expected=$(jq -er '.version' "$SOURCE/manifest.json") || expected=
 	printf '%s\n' "$status" | jq -e --arg id "$PLUGIN_ID" --arg version "$expected" \

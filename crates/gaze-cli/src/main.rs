@@ -71,22 +71,31 @@ fn face_completer(current: &std::ffi::OsStr) -> Vec<CompletionCandidate> {
 
 fn command_requires_root(command: &Commands) -> Option<&'static str> {
     match command {
-        Commands::AddFace { .. } => Some("add-face"),
-        Commands::RefineFace { .. } => Some("refine-face"),
         Commands::RemoveFace { .. } => Some("remove-face"),
         Commands::RenameFace { .. } => Some("rename-face"),
         Commands::ClearUser { .. } => Some("clear-user"),
-        Commands::Config { show, action } => match action {
-            Some(ConfigAction::Get { .. }) => None,
-            Some(ConfigAction::Set { .. }) => Some("config"),
-            None => (!show).then_some("config"),
-        },
         Commands::Keyring { .. } => Some("keyring"),
-        Commands::Test { .. }
+        Commands::AddFace { .. }
+        | Commands::RefineFace { .. }
+        | Commands::Config { .. }
+        | Commands::Test { .. }
         | Commands::ListFaces { .. }
         | Commands::Duress { .. }
         | Commands::Doctor { .. }
         | Commands::Uninstall { .. } => None,
+    }
+}
+
+// Root skips polkit, and polkit is what refuses a face match for these, so sudo must not front them.
+fn command_needs_password_authorization(command: &Commands) -> bool {
+    match command {
+        Commands::AddFace { .. } | Commands::RefineFace { .. } => true,
+        Commands::Config { show, action } => match action {
+            Some(ConfigAction::Get { .. }) => false,
+            Some(ConfigAction::Set { .. }) => true,
+            None => !show,
+        },
+        _ => false,
     }
 }
 
@@ -107,6 +116,7 @@ fn command_may_be_challenged(command: &Commands) -> bool {
 fn command_may_be_challenged_as(command: &Commands, root: bool, current_user: &str) -> bool {
     !root
         && (matches!(command, Commands::Duress { clear: true, .. })
+            || command_needs_password_authorization(command)
             || matches!(command_target_user(command), Some(user) if user != current_user))
 }
 
@@ -152,6 +162,19 @@ fn capture_tone(status: CaptureStatus) -> Tone {
     }
 }
 
+fn capture_result_label(status: CaptureStatus) -> &'static str {
+    match status {
+        CaptureStatus::Unused => "未使用",
+        CaptureStatus::NoFace => "未检测到人脸",
+        CaptureStatus::TooDark => "光线过暗",
+        CaptureStatus::Clipped => "人脸不完整",
+        CaptureStatus::NotCentered => "人脸未居中",
+        CaptureStatus::TooFar => "距离过远",
+        CaptureStatus::TooClose => "距离过近",
+        CaptureStatus::Ready | CaptureStatus::Usable => "已检测到人脸",
+    }
+}
+
 async fn describe_dbus_error(proxy: &GazeProxy<'_>, context: &str, err: &zbus::Error) -> String {
     if dbus_is_not_activatable(err) {
         let (problem, fix) = daemon_unavailable_hint(proxy.inner().connection()).await;
@@ -189,7 +212,14 @@ fn interactive_terminal() -> bool {
     std::io::stdout().is_terminal() && std::io::stdin().is_terminal()
 }
 
-async fn run_busy<F, T>(title: &str, message: String, tone: Tone, future: F) -> anyhow::Result<T>
+// A write already sent to the daemon still happens, so only reads may be abandoned.
+async fn run_busy<F, T>(
+    title: &str,
+    message: String,
+    tone: Tone,
+    cancellable: bool,
+    future: F,
+) -> anyhow::Result<T>
 where
     F: Future<Output = T>,
 {
@@ -206,9 +236,12 @@ where
             title,
             message: &message,
             tone,
+            cancellable,
             tick,
         })?;
-        if let Some(TuiAction::Cancel) = tui::poll_action()? {
+        if let Some(TuiAction::Cancel) = tui::poll_action()?
+            && cancellable
+        {
             drop(terminal);
             anyhow::bail!("已取消");
         }
@@ -360,6 +393,10 @@ async fn handle_enroll(
 ) -> anyhow::Result<()> {
     let term = Term::stdout();
 
+    // The password prompt must finish before the capture screen takes over the terminal.
+    if let Err(err) = proxy.authorize_enrollment().await {
+        exit_with_error(&describe_dbus_error(proxy, "人脸录入未获授权", &err).await);
+    }
     if let Err(err) = proxy.claim(user).await {
         exit_with_error(&describe_dbus_error(proxy, "获取设备失败", &err).await);
     }
@@ -646,7 +683,7 @@ async fn handle_test(proxy: &GazeProxy<'_>, user: &str, silent: bool) -> anyhow:
 
     let mut authenticated = false;
     if let Some((result, faces, rgb_status, ir_status)) = verify_result {
-        if !silent {
+        if !silent && !faces.is_empty() {
             println!(
                 "\n{} {} {} {} {} {} {}",
                 style(i18n::cell("人脸", 20, true)).bold(),
@@ -681,12 +718,13 @@ async fn handle_test(proxy: &GazeProxy<'_>, user: &str, silent: bool) -> anyhow:
                 );
             }
             println!();
-
+        }
+        if !silent {
             println!(
                 "{} RGB: {} | IR: {}",
                 style("状态：").bold(),
-                style(rgb_status.to_string()).cyan(),
-                style(ir_status.to_string()).cyan()
+                style(capture_result_label(rgb_status)).cyan(),
+                style(capture_result_label(ir_status)).cyan()
             );
             println!();
         }
@@ -888,6 +926,12 @@ async fn run() -> anyhow::Result<()> {
                 }
                 None if show => print!("{}", config_show_text(&config)?),
                 None => {
+                    // Asking up front keeps a refused password from discarding every answer.
+                    if let Err(err) = proxy.authorize_settings().await {
+                        exit_with_error(
+                            &describe_dbus_error(&proxy, "更改设置未获授权", &err).await,
+                        );
+                    }
                     run_config_wizard(&Term::stdout(), &proxy, config, keyring_supported).await?
                 }
             }
@@ -993,14 +1037,11 @@ mod tests {
     }
 
     #[test]
-    fn face_and_config_writes_require_root() {
+    fn face_removal_requires_root() {
         for (args, expected) in [
-            (vec!["gaze", "add-face", "default"], "add-face"),
-            (vec!["gaze", "refine-face", "default"], "refine-face"),
             (vec!["gaze", "remove-face", "default"], "remove-face"),
             (vec!["gaze", "rename-face", "old", "new"], "rename-face"),
             (vec!["gaze", "clear-user"], "clear-user"),
-            (vec!["gaze", "config"], "config"),
         ] {
             let cli = Cli::try_parse_from(&args).unwrap();
             assert_eq!(
@@ -1008,6 +1049,35 @@ mod tests {
                 Some(expected),
                 "{args:?} must require root"
             );
+        }
+    }
+
+    #[test]
+    fn enrollment_and_config_writes_go_through_polkit_not_sudo() {
+        for args in [
+            vec!["gaze", "add-face", "default"],
+            vec!["gaze", "refine-face", "default"],
+            vec!["gaze", "config"],
+            vec!["gaze", "config", "set", "liveness.enabled", "true"],
+        ] {
+            let cli = Cli::try_parse_from(&args).unwrap();
+            assert_eq!(
+                command_requires_root(&cli.command),
+                None,
+                "{args:?} must not re-run through sudo"
+            );
+            assert!(
+                command_may_be_challenged_as(&cli.command, false, "alice"),
+                "{args:?} needs a tty polkit agent"
+            );
+            assert!(!command_may_be_challenged_as(&cli.command, true, "alice"));
+        }
+        for args in [
+            vec!["gaze", "config", "--show"],
+            vec!["gaze", "config", "get", "security.level"],
+        ] {
+            let cli = Cli::try_parse_from(&args).unwrap();
+            assert!(!command_may_be_challenged_as(&cli.command, false, "alice"));
         }
     }
 
@@ -1040,7 +1110,7 @@ mod tests {
     }
 
     #[test]
-    fn only_cross_user_reads_need_a_tty_polkit_agent() {
+    fn only_cross_user_reads_name_a_target_user() {
         let cli = Cli::try_parse_from(["gaze", "list-faces", "--user", "alice"]).unwrap();
         assert_eq!(command_target_user(&cli.command), Some("alice"));
 
@@ -1155,41 +1225,28 @@ mod tests {
     }
 
     #[test]
-    fn showing_the_config_stays_unprivileged_while_editing_it_does_not() {
-        assert_eq!(
-            command_requires_root(&Commands::Config {
-                show: true,
-                action: None
-            }),
-            None,
-            "reading the config is not a privileged operation"
-        );
-        assert_eq!(
-            command_requires_root(&Commands::Config {
-                show: false,
-                action: None
-            }),
-            Some("config")
-        );
-        assert_eq!(
-            command_requires_root(&Commands::Config {
-                show: false,
-                action: Some(ConfigAction::Get {
-                    key: "security.level".into()
-                })
-            }),
-            None
-        );
-        assert_eq!(
-            command_requires_root(&Commands::Config {
-                show: false,
-                action: Some(ConfigAction::Set {
-                    key: "liveness.enabled".into(),
-                    value: "true".into()
-                })
-            }),
-            Some("config")
-        );
+    fn showing_the_config_needs_no_authorization_while_editing_it_does() {
+        assert!(!command_needs_password_authorization(&Commands::Config {
+            show: true,
+            action: None
+        }));
+        assert!(command_needs_password_authorization(&Commands::Config {
+            show: false,
+            action: None
+        }));
+        assert!(!command_needs_password_authorization(&Commands::Config {
+            show: false,
+            action: Some(ConfigAction::Get {
+                key: "security.level".into()
+            })
+        }));
+        assert!(command_needs_password_authorization(&Commands::Config {
+            show: false,
+            action: Some(ConfigAction::Set {
+                key: "liveness.enabled".into(),
+                value: "true".into()
+            })
+        }));
     }
 
     #[test]

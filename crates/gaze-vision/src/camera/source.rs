@@ -2,9 +2,13 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 use std::os::fd::AsRawFd;
+use std::os::unix::fs::{FileTypeExt, MetadataExt};
 
-use gaze_core::config::{CameraConfig, CameraSources, DEFAULT_RGB_CAMERA};
-use gaze_core::ir::devices::{camera_function_of, find_device, usb_ids_of};
+use gaze_core::config::{
+    BridgeSource, CameraConfig, CameraSources, DEFAULT_RGB_CAMERA, NonphysicalRgbOptIn,
+};
+use gaze_core::ir::bridge::read_bridge_marker;
+use gaze_core::ir::devices::{camera_function_of, find_device, usb_ids_of, video_driver};
 
 use super::*;
 
@@ -194,7 +198,7 @@ pub(super) fn classify_source(source: &str, want_color: bool) -> anyhow::Result<
     let source = source.trim();
     if source.is_empty() {
         anyhow::bail!(
-            "摄像头来源不能为空；请使用 primary、/dev/video<n>、usb:VVVV:PPPP 或 GStreamer 来源"
+            "摄像头来源不能为空；请使用 primary、/dev/video<n>、usb:VVVV:PPPP、libcamera:<name> 或 GStreamer 来源"
         );
     }
     if source == DEFAULT_RGB_CAMERA {
@@ -218,6 +222,12 @@ pub(super) fn classify_source(source: &str, want_color: bool) -> anyhow::Result<
             anyhow::bail!("V4L2 摄像头节点 {source:?} 无效；应为 /dev/video<数字>");
         }
         return Ok(SourceElement::Element(format!("v4l2src device={source}")));
+    }
+    if source.starts_with(LIBCAMERA_SOURCE_PREFIX) {
+        let Some(name) = parse_libcamera_spec(source) else {
+            anyhow::bail!("libcamera 摄像头规格 {source:?} 无效；应为 libcamera:<摄像头名称>");
+        };
+        return Ok(SourceElement::Element(libcamera_source_element(name)));
     }
     Ok(SourceElement::Element(source.to_string()))
 }
@@ -357,8 +367,9 @@ pub(super) fn device_video_node(device: &gstreamer::Device) -> Option<String> {
     path.starts_with("/dev/video").then_some(path)
 }
 
-/// True when the node has a PCI or USB device ancestor. USB controllers can themselves
-/// live on the platform bus, so the sysfs path need not start with a PCI root.
+/// True when the node has a PCI or USB device ancestor, or a platform device that firmware
+/// (device tree or ACPI) describes, like SoC ISPs. Test drivers such as vivid register
+/// platform devices too, but nothing in firmware vouches for them.
 pub fn is_physical_node(node: &str) -> bool {
     if video_node_index(node).is_none() {
         return false;
@@ -370,33 +381,178 @@ pub fn is_physical_node(node: &str) -> bool {
 
 fn has_physical_bus_ancestor(path: &std::path::Path) -> bool {
     path.ancestors().any(|ancestor| {
-        std::fs::canonicalize(ancestor.join("subsystem")).is_ok_and(|bus| {
-            matches!(
-                bus.file_name().and_then(|name| name.to_str()),
-                Some("pci" | "usb")
-            )
-        })
+        let Ok(bus) = std::fs::canonicalize(ancestor.join("subsystem")) else {
+            return false;
+        };
+        match bus.file_name().and_then(|name| name.to_str()) {
+            Some("pci" | "usb") => true,
+            Some("platform") => {
+                ancestor.join("of_node").exists() || ancestor.join("firmware_node").exists()
+            }
+            _ => false,
+        }
+    })
+}
+
+/// Gates opening `node` for privileged capture. Physical nodes always pass. A virtual node
+/// (for example a v4l2loopback fed by a userspace bridge for an IPU6 sensor) passes only when
+/// `bridge` — the operator-declared `cameras.ir_source_marker`/`ir_source_driver` — proves
+/// which physical camera feeds it, or the RGB-only `opt_in` vouches for it.
+pub(super) fn check_trusted_node(
+    node: &str,
+    bridge: Option<BridgeSource<'_>>,
+    opt_in: NonphysicalRgbOptIn,
+) -> anyhow::Result<()> {
+    if is_physical_node(node) {
+        return Ok(());
+    }
+    let voucher = if opt_in.enabled {
+        "cameras.allow_nonphysical_rgb 已允许使用此设备".to_string()
+    } else {
+        let Some(bridge) = bridge else {
+            anyhow::bail!("拒绝使用 {node}：不是物理摄像头（可能是虚拟或回环设备）")
+        };
+        let source = check_bridge_marker(node, &bridge)
+            .map_err(|err| anyhow::anyhow!("refusing {node}: {err:#}"))?;
+        format!("桥接标记 {} 确认物理来源为 {source}", bridge.marker)
+    };
+    // Anyone able to feed a virtual node could pass recorded footage off as the real sensor.
+    if !opt_in.allow_untrusted_writers && node_grants_untrusted_write(node) {
+        anyhow::bail!(
+            "拒绝使用 {node}：非特权用户可写入此节点，录制的视频可能被回放至此节点；请限制节点权限（例如移除 uaccess 标签并使用 root:video 0660 权限），或设置 cameras.allow_untrusted_rgb_writers"
+        );
+    }
+    info!("{node} 是虚拟设备；{voucher}");
+    Ok(())
+}
+
+/// Validates the provenance `bridge` declares for the virtual capture `node`: the marker must
+/// name a physical `/dev/video*` node that is bound to `bridge.source_driver` when a driver is
+/// pinned. Returns the source node.
+pub fn check_bridge_marker(node: &str, bridge: &BridgeSource<'_>) -> anyhow::Result<String> {
+    let marker = read_bridge_marker(bridge.marker)?;
+    if let Some(sink) = &marker.sink
+        && !same_char_device(sink, node)
+    {
+        anyhow::bail!(
+            "桥接标记 {} 的输出节点为 {sink}，并非 {node}",
+            bridge.marker
+        );
+    }
+    let source = marker.source;
+    if !is_physical_node(&source) {
+        anyhow::bail!("桥接标记 {} 指向的 {source} 不是物理摄像头", bridge.marker);
+    }
+    if let Some(expected) = bridge.source_driver {
+        let actual = video_driver(&source);
+        if actual.as_deref() != Some(expected) {
+            anyhow::bail!(
+                "桥接来源 {source} 绑定到 {}，预期为 {expected}",
+                actual.as_deref().unwrap_or("无驱动")
+            );
+        }
+    }
+    Ok(source)
+}
+
+fn same_char_device(a: &str, b: &str) -> bool {
+    match (std::fs::metadata(a), std::fs::metadata(b)) {
+        (Ok(a), Ok(b)) => {
+            a.file_type().is_char_device() && b.file_type().is_char_device() && a.rdev() == b.rdev()
+        }
+        _ => false,
+    }
+}
+
+/// True when `node` can be written by processes other than root or members of its group — the
+/// replay vector a trusted bridge node must not have: anyone able to feed the node could pass
+/// recorded footage off as the real sensor.
+pub fn node_grants_untrusted_write(node: &str) -> bool {
+    std::fs::metadata(node).is_ok_and(|metadata| {
+        metadata.mode() & 0o002 != 0
+            || (metadata.uid() != 0 && metadata.mode() & 0o200 != 0)
+            || acl_grants_named_write(node)
+    })
+}
+
+/// True when the node's POSIX ACL grants write to a named user or group (for example the
+/// `uaccess` entry udev adds for the seat user).
+fn acl_grants_named_write(node: &str) -> bool {
+    let Ok(path) = std::ffi::CString::new(node) else {
+        return false;
+    };
+    let name = c"system.posix_acl_access".as_ptr();
+    let size = unsafe { libc::getxattr(path.as_ptr(), name, std::ptr::null_mut(), 0) };
+    if size <= 4 {
+        return false;
+    }
+    let mut buffer = vec![0u8; size as usize];
+    let read = unsafe {
+        libc::getxattr(
+            path.as_ptr(),
+            name,
+            buffer.as_mut_ptr().cast(),
+            buffer.len(),
+        )
+    };
+    read > 4 && acl_xattr_grants_named_write(&buffer[..read as usize])
+}
+
+/// POSIX ACL xattr payload: a 4-byte header then 8-byte entries of tag, permissions, id.
+/// Write to a named `ACL_USER` (0x02) or `ACL_GROUP` (0x08) entry grants write beyond the
+/// owning user and group; named entries are limited by the `ACL_MASK` (0x10) entry.
+fn acl_xattr_grants_named_write(xattr: &[u8]) -> bool {
+    const ACL_USER: u16 = 0x02;
+    const ACL_GROUP: u16 = 0x08;
+    const ACL_MASK: u16 = 0x10;
+    let Some(entries) = xattr.get(4..) else {
+        return false;
+    };
+    let entries = entries.as_chunks::<8>().0;
+    let mask = entries
+        .iter()
+        .find(|entry| u16::from_le_bytes([entry[0], entry[1]]) == ACL_MASK)
+        .map(|entry| u16::from_le_bytes([entry[2], entry[3]]));
+    entries.iter().any(|entry| {
+        let tag = u16::from_le_bytes([entry[0], entry[1]]);
+        let perm = u16::from_le_bytes([entry[2], entry[3]]);
+        let effective = mask.map_or(perm, |mask| perm & mask);
+        matches!(tag, ACL_USER | ACL_GROUP) && effective & 0x2 != 0
     })
 }
 
 fn select_physical_node(
     nodes: impl IntoIterator<Item = String>,
     mut is_physical: impl FnMut(&str) -> bool,
+    allow_nonphysical: bool,
 ) -> Option<String> {
-    nodes.into_iter().find(|node| is_physical(node))
+    let nodes: Vec<String> = nodes.into_iter().collect();
+    let first = nodes.first().cloned();
+    nodes
+        .into_iter()
+        .find(|node| is_physical(node))
+        .or(first.filter(|_| allow_nonphysical))
 }
 
-fn first_physical_v4l2_node(want_color: bool) -> Option<String> {
-    select_physical_node(v4l2_nodes_with_color(want_color), is_physical_node)
+fn pick_v4l2_node(want_color: bool, allow_nonphysical: bool) -> Option<String> {
+    select_physical_node(
+        v4l2_nodes_with_color(want_color),
+        is_physical_node,
+        allow_nonphysical,
+    )
 }
 
-pub fn resolve_privileged_node(source: &str, want_color: bool) -> Option<String> {
+pub fn resolve_privileged_node(
+    source: &str,
+    want_color: bool,
+    allow_nonphysical: bool,
+) -> Option<String> {
     let source = source.trim();
     if source.is_empty() {
         return None;
     }
     if source == DEFAULT_RGB_CAMERA {
-        return first_physical_v4l2_node(want_color);
+        return pick_v4l2_node(want_color, allow_nonphysical);
     }
     if let Some((vid, pid)) = parse_usb_spec(source) {
         return resolve_usb_video_node(vid, pid, want_color);
@@ -408,7 +564,7 @@ pub fn resolve_privileged_node(source: &str, want_color: bool) -> Option<String>
         return is_node.then(|| source.to_string());
     }
     match v4l2_fallback_for(source) {
-        V4l2Fallback::AnyDevice => first_physical_v4l2_node(want_color),
+        V4l2Fallback::AnyDevice => pick_v4l2_node(want_color, allow_nonphysical),
         V4l2Fallback::SameNode(target) => node_from_pipewire_target(&target, want_color),
         V4l2Fallback::None => None,
     }
@@ -509,9 +665,113 @@ pub(super) fn libcamera_negotiation_hint(detail: &str) -> Option<&'static str> {
     )
 }
 
+pub(super) fn libcamera_camera_missing(detail: &str) -> bool {
+    detail
+        .to_ascii_lowercase()
+        .contains("could not find a camera")
+        || detail.contains("libcamera 未找到")
+}
+
+pub(super) fn libcamera_missing_hint(detail: &str) -> Option<&'static str> {
+    libcamera_camera_missing(detail).then_some(
+        "。摄像头被其他程序使用时，libcamera 不会将其列出；请关闭其他摄像头应用、检查摄像头连接，或从 `cam --list` 中选择名称",
+    )
+}
+
+fn libcamera_eventually_lists(mut lists: impl FnMut(&[String]) -> bool) -> bool {
+    for attempt in 1..=PRIVILEGED_BUSY_ATTEMPTS {
+        if lists(libcamera_camera_names().as_slice()) {
+            return true;
+        }
+        if attempt < PRIVILEGED_BUSY_ATTEMPTS {
+            std::thread::sleep(PRIVILEGED_BUSY_RETRY_DELAY);
+        }
+    }
+    false
+}
+
 pub(super) fn libcamera_source_element(camera_name: &str) -> String {
     let escaped = camera_name.replace('\\', "\\\\").replace('"', "\\\"");
     format!("libcamerasrc camera-name=\"{escaped}\"")
+}
+
+/// Prefix that names a libcamera camera directly, e.g. `libcamera:\_SB_.PC00.LNK0` for an Intel
+/// IPU6/IPU7 MIPI sensor whose `/dev/video*` nodes are raw capture nodes only libcamera can drive.
+pub(super) const LIBCAMERA_SOURCE_PREFIX: &str = "libcamera:";
+
+pub fn parse_libcamera_spec(source: &str) -> Option<&str> {
+    source
+        .trim()
+        .strip_prefix(LIBCAMERA_SOURCE_PREFIX)
+        .map(str::trim)
+        .filter(|name| !name.is_empty())
+}
+
+pub(super) const PIPEWIRE_LIBCAMERA_NODE_PREFIX: &str = "libcamera_input.";
+
+pub(super) fn pipewire_libcamera_target(source: &str) -> Option<String> {
+    let V4l2Fallback::SameNode(target) = v4l2_fallback_for(source.trim()) else {
+        return None;
+    };
+    target
+        .starts_with(PIPEWIRE_LIBCAMERA_NODE_PREFIX)
+        .then_some(target)
+}
+
+/// Mirrors WirePlumber's Lua `gsub`, which turns each byte outside `[A-Za-z0-9_.-]` into `_`.
+pub(super) fn wireplumber_sanitize(name: &str) -> String {
+    name.bytes()
+        .map(|b| {
+            if b.is_ascii_alphanumeric() || matches!(b, b'_' | b'-' | b'.') {
+                b as char
+            } else {
+                '_'
+            }
+        })
+        .collect()
+}
+
+pub(super) fn libcamera_camera_for_target<'a>(
+    target: &str,
+    cameras: &'a [String],
+) -> Option<&'a str> {
+    let id = target.strip_prefix(PIPEWIRE_LIBCAMERA_NODE_PREFIX)?;
+    let find = |id: &str| {
+        cameras
+            .iter()
+            .find(|camera| wireplumber_sanitize(camera) == id)
+            .map(String::as_str)
+    };
+    find(id).or_else(|| without_dedup_suffix(id).and_then(find))
+}
+
+/// Accepts the `libcamera_input.<id>` target the GUI saves as well as `libcamera:<name>`. The
+/// daemon opens that camera with its own libcamera and never reads from the PipeWire session.
+pub(super) fn libcamera_camera_for_source(source: &str) -> Option<String> {
+    if let Some(name) = parse_libcamera_spec(source) {
+        return Some(name.to_string());
+    }
+    let target = pipewire_libcamera_target(source)?;
+    libcamera_camera_for_target(&target, &libcamera_camera_names()).map(str::to_string)
+}
+
+pub fn libcamera_camera_names() -> Vec<String> {
+    if gstreamer::init().is_err() {
+        return Vec::new();
+    }
+    // Probe the provider directly: in a session with PipeWire, a DeviceMonitor hides
+    // libcameraprovider behind pipewiredeviceprovider and reports only pipewiresrc devices.
+    let Some(provider) = gstreamer::DeviceProviderFactory::by_name("libcameraprovider") else {
+        return Vec::new();
+    };
+    provider
+        .devices()
+        .iter()
+        .filter_map(|device| {
+            let element = device.create_element(None).ok()?;
+            element.property::<Option<String>>("camera-name")
+        })
+        .collect()
 }
 
 pub(super) const V4L2_BY_PATH_DIR: &str = "/dev/v4l/by-path";
@@ -568,18 +828,26 @@ pub(super) fn pipewire_target_nodes(target: &str) -> Option<Vec<String>> {
     Some(nodes)
 }
 
-pub fn camera_disconnected(source: &str, want_color: bool) -> bool {
+pub fn camera_disconnected(source: &str, want_color: bool, allow_nonphysical: bool) -> bool {
     let source = source.trim();
+    if let Some(name) = parse_libcamera_spec(source) {
+        return !libcamera_eventually_lists(|cameras| cameras.iter().any(|camera| camera == name));
+    }
+    if let Some(target) = pipewire_libcamera_target(source) {
+        return !libcamera_eventually_lists(|cameras| {
+            libcamera_camera_for_target(&target, cameras).is_some()
+        });
+    }
     if let V4l2Fallback::SameNode(target) = v4l2_fallback_for(source) {
         return pipewire_target_nodes(&target).is_some_and(|nodes| nodes.is_empty());
     }
     if source.starts_with("/dev/video") {
-        return resolve_privileged_node(source, want_color)
+        return resolve_privileged_node(source, want_color, allow_nonphysical)
             .is_some_and(|node| !std::path::Path::new(&node).exists());
     }
     let names_device =
         source == DEFAULT_RGB_CAMERA || source == "pipewiresrc" || parse_usb_spec(source).is_some();
-    names_device && resolve_privileged_node(source, want_color).is_none()
+    names_device && resolve_privileged_node(source, want_color, allow_nonphysical).is_none()
 }
 
 /// Resolves a pinned PipeWire target to its V4L2 node. A device may link several nodes, including
@@ -666,10 +934,18 @@ mod tests {
             ("devices/pci0000:00/0000:00:14.0", "pci", true),
             ("devices/platform/soc/usb1/1-1/1-1:1.0", "usb", true),
             ("devices/platform/vivid.0", "platform", false),
+            ("devices/platform/soc/22a000000.isp", "platform", true),
+            ("devices/platform/INT3472:00", "platform", true),
         ] {
             let device = root.join(device);
             std::fs::create_dir_all(device.join("video4linux/video0")).unwrap();
             symlink(root.join("bus").join(bus), device.join("subsystem")).unwrap();
+            if device.ends_with("22a000000.isp") {
+                std::fs::create_dir_all(device.join("of_node")).unwrap();
+            }
+            if device.ends_with("INT3472:00") {
+                std::fs::create_dir_all(device.join("firmware_node")).unwrap();
+            }
             assert_eq!(has_physical_bus_ancestor(&device), expected);
             assert_eq!(
                 has_physical_bus_ancestor(&device.join("video4linux/video0")),
@@ -688,11 +964,106 @@ mod tests {
     fn automatic_selection_skips_virtual_nodes_and_preserves_order() {
         let nodes = || ["/dev/video0", "/dev/video2", "/dev/video4"].map(String::from);
         assert_eq!(
-            select_physical_node(nodes(), |node| node != "/dev/video0"),
+            select_physical_node(nodes(), |node| node != "/dev/video0", false),
             Some("/dev/video2".to_string())
         );
-        assert_eq!(select_physical_node(nodes(), |_| false), None);
-        assert_eq!(select_physical_node(Vec::new(), |_| true), None);
+        assert_eq!(select_physical_node(nodes(), |_| false, false), None);
+        assert_eq!(select_physical_node(Vec::new(), |_| true, false), None);
+    }
+
+    #[test]
+    fn the_nonphysical_opt_in_still_prefers_a_physical_node() {
+        let nodes = || ["/dev/video0", "/dev/video2", "/dev/video4"].map(String::from);
+        assert_eq!(
+            select_physical_node(nodes(), |node| node == "/dev/video4", true),
+            Some("/dev/video4".to_string())
+        );
+        assert_eq!(
+            select_physical_node(nodes(), |_| false, true),
+            Some("/dev/video0".to_string())
+        );
+        assert_eq!(select_physical_node(Vec::new(), |_| false, true), None);
+    }
+
+    #[test]
+    fn libcamera_specs_name_a_camera() {
+        assert_eq!(
+            parse_libcamera_spec("libcamera:\\_SB_.PC00.LNK0"),
+            Some("\\_SB_.PC00.LNK0")
+        );
+        assert_eq!(parse_libcamera_spec("  libcamera: cam1 "), Some("cam1"));
+        assert_eq!(parse_libcamera_spec("libcamera:"), None);
+        assert_eq!(parse_libcamera_spec("/dev/video0"), None);
+    }
+
+    #[test]
+    fn pipewire_libcamera_targets_map_back_to_their_camera() {
+        let cameras = vec![
+            "\\_SB_.PC00.LNK0".to_string(),
+            "\\_SB_.PC00.LNK1".to_string(),
+        ];
+        assert_eq!(
+            libcamera_camera_for_target("libcamera_input.__SB_.PC00.LNK1", &cameras),
+            Some("\\_SB_.PC00.LNK1")
+        );
+        assert_eq!(
+            libcamera_camera_for_target("libcamera_input.nope", &cameras),
+            None
+        );
+        assert_eq!(
+            libcamera_camera_for_target("v4l2_input.pci-0000_00_14.0", &cameras),
+            None
+        );
+        assert_eq!(
+            libcamera_camera_for_target("libcamera_input.__SB_.PC00.LNK1.2", &cameras),
+            Some("\\_SB_.PC00.LNK1")
+        );
+        assert_eq!(
+            wireplumber_sanitize("/base/i2c@1:cam 0"),
+            "_base_i2c_1_cam_0"
+        );
+        assert_eq!(wireplumber_sanitize("caméra"), "cam__ra");
+    }
+
+    #[test]
+    fn a_camera_libcamera_stops_listing_counts_as_missing() {
+        let detail = "Could not find a camera named '\\_SB_.LNK1'.: \
+                      libcamera::CameraMananger::get() returned nullptr";
+        assert!(libcamera_camera_missing(detail));
+        assert!(libcamera_missing_hint(detail).is_some());
+        let localized = "libcamera 未找到与 libcamera:camera0 对应的摄像头";
+        assert!(libcamera_camera_missing(localized));
+        assert!(libcamera_missing_hint(localized).is_some());
+        assert!(libcamera_camera_missing(
+            "Could not find a camera for \"pipewiresrc target-object=libcamera_input.x\" in libcamera"
+        ));
+        assert!(!libcamera_camera_missing(
+            "Internal data stream error: not-negotiated"
+        ));
+        assert!(libcamera_missing_hint("not-negotiated").is_none());
+    }
+
+    #[test]
+    fn only_pipewire_libcamera_targets_are_libcamera_targets() {
+        assert_eq!(
+            pipewire_libcamera_target("pipewiresrc target-object=libcamera_input.__SB_.LNK0"),
+            Some("libcamera_input.__SB_.LNK0".to_string())
+        );
+        assert_eq!(
+            pipewire_libcamera_target("pipewiresrc target-object=v4l2_input.pci-0000_00_14.0"),
+            None
+        );
+        assert_eq!(pipewire_libcamera_target("libcamera:\\_SB_.LNK0"), None);
+        assert_eq!(pipewire_libcamera_target("pipewiresrc"), None);
+    }
+
+    #[test]
+    fn libcamera_specs_classify_as_libcamerasrc() {
+        assert_eq!(
+            classify_source("libcamera:\\_SB_.PC00.LNK0", false).unwrap(),
+            SourceElement::Element("libcamerasrc camera-name=\"\\\\_SB_.PC00.LNK0\"".into())
+        );
+        assert!(classify_source("libcamera:", true).is_err());
     }
 
     #[test]
@@ -735,9 +1106,13 @@ mod tests {
     fn configured_sources_leave_ir_empty_when_no_ir_configured() {
         let cameras = CameraConfig {
             rgb: "primary".into(),
+            allow_nonphysical_rgb: false,
+            allow_untrusted_rgb_writers: false,
             ir: String::new(),
             ir_frame_width: None,
             ir_frame_height: None,
+            ir_source_marker: None,
+            ir_source_driver: None,
             emitter_enabled: false,
             dark_luma_threshold: 30,
             parallel_capture: "never".to_string(),
@@ -785,9 +1160,13 @@ mod tests {
     fn cameras_with(rgb: &str, ir: &str) -> CameraConfig {
         CameraConfig {
             rgb: rgb.into(),
+            allow_nonphysical_rgb: false,
+            allow_untrusted_rgb_writers: false,
             ir: ir.to_string(),
             ir_frame_width: None,
             ir_frame_height: None,
+            ir_source_marker: None,
+            ir_source_driver: None,
             emitter_enabled: false,
             dark_luma_threshold: 30,
             parallel_capture: "never".to_string(),
@@ -887,9 +1266,13 @@ mod tests {
     fn configured_sources_resolve_an_ir_device_node() {
         let cameras = CameraConfig {
             rgb: "primary".into(),
+            allow_nonphysical_rgb: false,
+            allow_untrusted_rgb_writers: false,
             ir: "/dev/video2".to_string(),
             ir_frame_width: None,
             ir_frame_height: None,
+            ir_source_marker: None,
+            ir_source_driver: None,
             emitter_enabled: true,
             dark_luma_threshold: 30,
             parallel_capture: "never".to_string(),
@@ -905,9 +1288,13 @@ mod tests {
     fn preferred_capture_source_falls_back_to_ir_when_rgb_is_unset() {
         let cameras = CameraConfig {
             rgb: "".into(),
+            allow_nonphysical_rgb: false,
+            allow_untrusted_rgb_writers: false,
             ir: "/dev/video2".to_string(),
             ir_frame_width: None,
             ir_frame_height: None,
+            ir_source_marker: None,
+            ir_source_driver: None,
             emitter_enabled: true,
             dark_luma_threshold: 30,
             parallel_capture: "never".to_string(),
@@ -1052,9 +1439,13 @@ mod tests {
     fn configured_sources_leave_the_node_empty_for_a_pipewire_ir_source() {
         let cameras = CameraConfig {
             rgb: "primary".into(),
+            allow_nonphysical_rgb: false,
+            allow_untrusted_rgb_writers: false,
             ir: "pipewiresrc target-object=device-name".to_string(),
             ir_frame_width: None,
             ir_frame_height: None,
+            ir_source_marker: None,
+            ir_source_driver: None,
             emitter_enabled: true,
             dark_luma_threshold: 30,
             parallel_capture: "auto".to_string(),
@@ -1072,11 +1463,11 @@ mod tests {
     #[test]
     fn privileged_capture_keeps_canonical_kernel_nodes() {
         assert_eq!(
-            resolve_privileged_node("/dev/video0", true),
+            resolve_privileged_node("/dev/video0", true, false),
             Some("/dev/video0".to_string())
         );
         assert_eq!(
-            resolve_privileged_node("  /dev/video2  ", false),
+            resolve_privileged_node("  /dev/video2  ", false, false),
             Some("/dev/video2".to_string())
         );
     }
@@ -1097,7 +1488,7 @@ mod tests {
             "pipewiresrc target-object=",
         ] {
             assert_eq!(
-                resolve_privileged_node(source, true),
+                resolve_privileged_node(source, true, false),
                 None,
                 "{source:?} must not resolve for privileged capture"
             );
@@ -1106,9 +1497,10 @@ mod tests {
 
     #[test]
     fn only_unplugged_v4l2_cameras_count_as_disconnected() {
-        assert!(camera_disconnected("/dev/video9999", false));
+        assert!(camera_disconnected("/dev/video9999", false, false));
         assert!(camera_disconnected(
             "pipewiresrc target-object=v4l2_input.pci-0000_ff_1f.7-usb-0_9.9.9_1.0.3",
+            false,
             false
         ));
         for source in [
@@ -1118,7 +1510,7 @@ mod tests {
             "/dev/videofoo",
             "",
         ] {
-            assert!(!camera_disconnected(source, false), "{source:?}");
+            assert!(!camera_disconnected(source, false, false), "{source:?}");
         }
     }
 
@@ -1192,5 +1584,99 @@ mod tests {
             libcamera_source_element("a \"b\""),
             "libcamerasrc camera-name=\"a \\\"b\\\"\""
         );
+    }
+
+    #[test]
+    fn a_virtual_node_without_a_bridge_marker_stays_refused() {
+        let missing = "/dev/video-gaze-test-missing";
+        let err = check_trusted_node(missing, None, NonphysicalRgbOptIn::default()).unwrap_err();
+        assert!(
+            err.to_string().contains("不是物理摄像头"),
+            "unexpected error: {err:#}"
+        );
+    }
+
+    #[test]
+    fn the_nonphysical_opt_in_gates_untrusted_writers_separately() {
+        use std::os::unix::fs::PermissionsExt;
+        let path =
+            std::env::temp_dir().join(format!("gaze-test-writable-node-{}", std::process::id()));
+        std::fs::write(&path, b"").unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o666)).unwrap();
+        let node = path.to_str().unwrap();
+        let nonphysical = NonphysicalRgbOptIn {
+            enabled: true,
+            allow_untrusted_writers: false,
+        };
+        let refused = check_trusted_node(node, None, nonphysical);
+        let accepted = check_trusted_node(
+            node,
+            None,
+            NonphysicalRgbOptIn {
+                enabled: true,
+                allow_untrusted_writers: true,
+            },
+        );
+        std::fs::remove_file(&path).unwrap();
+        let err = refused.unwrap_err();
+        assert!(
+            err.to_string().contains("非特权用户可写入"),
+            "unexpected error: {err:#}"
+        );
+        accepted.expect("the writer opt-in accepts a world-writable virtual node");
+    }
+
+    #[test]
+    fn acl_write_detection_covers_named_entries_only() {
+        fn entry(tag: u16, perm: u16) -> [u8; 8] {
+            let mut entry = [0u8; 8];
+            entry[0..2].copy_from_slice(&tag.to_le_bytes());
+            entry[2..4].copy_from_slice(&perm.to_le_bytes());
+            entry[4..8].copy_from_slice(&u32::MAX.to_le_bytes());
+            entry
+        }
+        let blob = |entries: &[[u8; 8]]| {
+            let mut blob = vec![2u8, 0, 0, 0];
+            for entry in entries {
+                blob.extend_from_slice(entry);
+            }
+            blob
+        };
+        // Owning user, owning group, mask, and other entries mirror the mode bits and
+        // are not untrusted access.
+        assert!(!acl_xattr_grants_named_write(&blob(&[
+            entry(0x01, 0x6),
+            entry(0x04, 0x6),
+            entry(0x10, 0x6),
+            entry(0x20, 0x4),
+        ])));
+        // A named user or group with write (for example the uaccess seat user) is.
+        assert!(acl_xattr_grants_named_write(&blob(&[
+            entry(0x01, 0x6),
+            entry(0x02, 0x6),
+            entry(0x10, 0x6),
+        ])));
+        assert!(acl_xattr_grants_named_write(&blob(&[
+            entry(0x01, 0x6),
+            entry(0x08, 0x2),
+            entry(0x10, 0x6),
+        ])));
+        // Named entries are limited by the mask.
+        assert!(!acl_xattr_grants_named_write(&blob(&[
+            entry(0x01, 0x6),
+            entry(0x02, 0x6),
+            entry(0x10, 0x4),
+        ])));
+        // Without a mask entry, named permissions apply directly.
+        assert!(acl_xattr_grants_named_write(&blob(&[
+            entry(0x01, 0x6),
+            entry(0x02, 0x2),
+        ])));
+        assert!(!acl_xattr_grants_named_write(&blob(&[
+            entry(0x02, 0x5),
+            entry(0x10, 0x6),
+        ])));
+        assert!(!acl_xattr_grants_named_write(&[2, 0, 0, 0]));
+        assert!(!acl_xattr_grants_named_write(&[2, 0, 0]));
     }
 }

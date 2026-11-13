@@ -93,6 +93,7 @@ pub async fn handle_list_faces(
         "人脸数据库",
         format!("正在获取 {user} 的人脸…"),
         Tone::Info,
+        true,
         proxy.list_faces(user),
     )
     .await?;
@@ -149,6 +150,7 @@ pub async fn handle_remove_face(
         "删除人脸",
         format!("正在删除人脸 {face}…"),
         Tone::Warn,
+        false,
         proxy.delete_face(user, face),
     )
     .await?;
@@ -180,6 +182,7 @@ pub async fn handle_rename_face(
         "重命名人脸",
         format!("正在重命名人脸 {from} -> {to}…"),
         Tone::Info,
+        false,
         proxy.rename_face(user, from, to),
     )
     .await?;
@@ -261,6 +264,7 @@ pub async fn handle_clear_user(proxy: &GazeProxy<'_>, user: &str, yes: bool) -> 
         "清除用户数据",
         format!("正在删除 {user} 的所有数据…"),
         Tone::Warn,
+        false,
         proxy.delete_faces(user),
     )
     .await?;

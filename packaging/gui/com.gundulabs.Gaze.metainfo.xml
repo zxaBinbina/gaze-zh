@@ -16,6 +16,9 @@
   <developer_name>Gundu Labs</developer_name>
   <content_rating type="oars-1.1"/>
   <releases>
+    <release version="0.5.3" date="2026-11-13">
+      <description><p>同步 libcamera 与桥接摄像头支持、认证诊断、oo7 密钥环和 Omarchy 4.5，保留并补齐简体中文提示。</p></description>
+    </release>
     <release version="0.5.2" date="2026-11-07">
       <description><p>同步上游相机来源回退、测试命令诊断和 Plasma 6.8 认证兼容更新，保留并补齐简体中文提示。</p></description>
     </release>

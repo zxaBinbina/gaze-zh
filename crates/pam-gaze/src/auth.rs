@@ -144,7 +144,7 @@ where
         deadline.saturating_duration_since(tokio::time::Instant::now())
     };
     let mut given_up = None;
-    // "No face detected" beats a bare timeout.
+    // "未检测到人脸" beats a bare timeout.
     let expired = |given_up: Option<_>| match given_up {
         Some(status) => Verdict::Reached(AuthOutcome::Unavailable, status),
         None => Verdict::Exhausted,
@@ -484,11 +484,6 @@ fn log_keyring_failure(
             message.as_ptr(),
         )
     };
-}
-
-// A non-null token must point to readable PAM-owned memory.
-unsafe fn existing_token_has_password(token: *const c_char) -> bool {
-    !token.is_null() && unsafe { *token } != 0
 }
 
 const PROMPT_RETIRE_TIMEOUT: Duration = Duration::from_secs(2);

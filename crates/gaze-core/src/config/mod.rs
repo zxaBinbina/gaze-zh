@@ -462,6 +462,10 @@ pub struct CameraConfig {
     #[serde(default = "default_rgb_device")]
     pub rgb: CameraSources,
     #[serde(default)]
+    pub allow_nonphysical_rgb: bool,
+    #[serde(default)]
+    pub allow_untrusted_rgb_writers: bool,
+    #[serde(default)]
     pub ir: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ir_frame_width: Option<u32>,
@@ -469,12 +473,35 @@ pub struct CameraConfig {
     pub ir_frame_height: Option<u32>,
     #[serde(default)]
     pub emitter_enabled: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ir_source_marker: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ir_source_driver: Option<String>,
     #[serde(default = "default_dark_luma_threshold")]
     pub dark_luma_threshold: u8,
     #[serde(default = "default_parallel_capture")]
     pub parallel_capture: String,
     #[serde(default = "default_true")]
     pub auto_rotate: bool,
+}
+
+/// Provenance an operator declares for a virtual IR capture node that a
+/// privileged userspace bridge (for example a v4l2loopback relay for an IPU6
+/// sensor) feeds. The marker is a root-owned file, writable only by root, that
+/// names the physical `/dev/video*` node the bridge relays. See
+/// `cameras.ir_source_marker` and `cameras.ir_source_driver`.
+#[derive(Clone, Copy, Debug)]
+pub struct BridgeSource<'a> {
+    /// Root-owned marker file naming the physical source node.
+    pub marker: &'a str,
+    /// Driver the source node must be bound to, when pinned.
+    pub source_driver: Option<&'a str>,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct NonphysicalRgbOptIn {
+    pub enabled: bool,
+    pub allow_untrusted_writers: bool,
 }
 
 fn default_rgb_device() -> CameraSources {
@@ -502,6 +529,12 @@ impl CameraConfig {
                 PARALLEL_CAPTURE_OPTIONS
             );
         }
+        self.validate_ir_bridge_source()?;
+        if self.allow_untrusted_rgb_writers && !self.allow_nonphysical_rgb {
+            anyhow::bail!(
+                "cameras.allow_untrusted_rgb_writers 需要启用 cameras.allow_nonphysical_rgb"
+            );
+        }
         match (self.ir_frame_width, self.ir_frame_height) {
             (None, None) => {}
             (Some(_), None) | (None, Some(_)) => {
@@ -523,6 +556,53 @@ impl CameraConfig {
         let height = self.ir_frame_height?;
         (ir_frame_dimension_valid(width) && ir_frame_dimension_valid(height))
             .then_some((width, height))
+    }
+
+    pub fn validate_ir_bridge_source(&self) -> anyhow::Result<()> {
+        match (&self.ir_source_marker, &self.ir_source_driver) {
+            (None, Some(_)) => {
+                anyhow::bail!("cameras.ir_source_driver 需要设置 cameras.ir_source_marker")
+            }
+            (Some(marker), _) if !Path::new(marker).is_absolute() => {
+                anyhow::bail!("cameras.ir_source_marker 必须为绝对路径，当前为 {marker:?}")
+            }
+            (_, Some(driver)) if driver.is_empty() || driver.trim() != driver => {
+                anyhow::bail!(
+                    "cameras.ir_source_driver 必须为两端不含空白的驱动名称，当前为 {driver:?}"
+                )
+            }
+            _ => Ok(()),
+        }
+    }
+
+    pub fn ir_bridge_source(&self) -> Option<BridgeSource<'_>> {
+        self.validate_ir_bridge_source().ok()?;
+        self.ir_source_marker.as_deref().map(|marker| BridgeSource {
+            marker,
+            source_driver: self.ir_source_driver.as_deref(),
+        })
+    }
+
+    /// Loading only warns on an invalid pair, so the writer key is masked here.
+    pub fn nonphysical_rgb_opt_in(&self) -> NonphysicalRgbOptIn {
+        NonphysicalRgbOptIn {
+            enabled: self.allow_nonphysical_rgb,
+            allow_untrusted_writers: self.allow_untrusted_rgb_writers && self.allow_nonphysical_rgb,
+        }
+    }
+
+    /// Copies the file-only bridge provenance keys from `current`. D-Bus config
+    /// updates cannot carry them; without this a GUI save would clear them.
+    pub fn inherit_ir_bridge_source(&mut self, current: &CameraConfig) {
+        let valid = current.validate_ir_bridge_source().is_ok();
+        self.ir_source_marker = current.ir_source_marker.clone().filter(|_| valid);
+        self.ir_source_driver = current.ir_source_driver.clone().filter(|_| valid);
+    }
+
+    pub fn inherit_nonphysical_rgb(&mut self, current: &CameraConfig) {
+        let opt_in = current.nonphysical_rgb_opt_in();
+        self.allow_nonphysical_rgb = opt_in.enabled;
+        self.allow_untrusted_rgb_writers = opt_in.allow_untrusted_writers;
     }
 
     pub fn set_ir_frame_size(&mut self, size: Option<(u32, u32)>) {
@@ -798,23 +878,36 @@ impl Default for CameraConfig {
     fn default() -> Self {
         Self {
             rgb: default_rgb_device(),
+            allow_nonphysical_rgb: false,
+            allow_untrusted_rgb_writers: false,
             ir: String::new(),
             emitter_enabled: false,
             dark_luma_threshold: default_dark_luma_threshold(),
             parallel_capture: default_parallel_capture(),
             ir_frame_width: None,
             ir_frame_height: None,
+            ir_source_marker: None,
+            ir_source_driver: None,
             auto_rotate: true,
         }
     }
 }
 
-const OPTIONAL_CONFIG_KEYS: [(&str, &str); 2] = [
+const OPTIONAL_CONFIG_KEYS: [(&str, &str); 4] = [
     ("cameras", "ir_frame_width"),
     ("cameras", "ir_frame_height"),
+    ("cameras", "ir_source_marker"),
+    ("cameras", "ir_source_driver"),
 ];
 
-const FILE_ONLY_CONFIG_KEYS: [&str; 2] = ["liveness.ir_model", "liveness.ir_threshold"];
+const FILE_ONLY_CONFIG_KEYS: [&str; 6] = [
+    "liveness.ir_model",
+    "liveness.ir_threshold",
+    "cameras.allow_nonphysical_rgb",
+    "cameras.allow_untrusted_rgb_writers",
+    "cameras.ir_source_marker",
+    "cameras.ir_source_driver",
+];
 const FILE_ONLY_CONFIG_SECTIONS: [&str; 1] = ["duress"];
 
 const LEGACY_CONFIG_KEYS: [&str; 3] = [
@@ -1353,6 +1446,16 @@ mod tests {
         assert!(config.to_toml().unwrap().contains("[duress]"));
         assert!(config.with_key("liveness.ir_model", "true").is_err());
         assert!(config.with_key("liveness.ir_threshold", "0.6").is_err());
+        assert!(
+            config
+                .with_key("cameras.allow_nonphysical_rgb", "true")
+                .is_err()
+        );
+        assert!(
+            config
+                .with_key("cameras.allow_untrusted_rgb_writers", "true")
+                .is_err()
+        );
         for (key, value) in [
             ("duress.enabled", "true"),
             ("duress.closed_threshold", "0.8"),
@@ -1468,6 +1571,26 @@ mod tests {
             cameras.validate().unwrap();
             assert_eq!(cameras.parallel_capture(), mode);
         }
+    }
+
+    #[test]
+    fn untrusted_rgb_writers_requires_the_nonphysical_opt_in() {
+        let mut cameras = CameraConfig {
+            allow_untrusted_rgb_writers: true,
+            ..CameraConfig::default()
+        };
+        assert!(cameras.validate().is_err());
+        assert!(!cameras.nonphysical_rgb_opt_in().allow_untrusted_writers);
+
+        cameras.allow_nonphysical_rgb = true;
+        cameras.validate().unwrap();
+        assert_eq!(
+            cameras.nonphysical_rgb_opt_in(),
+            NonphysicalRgbOptIn {
+                enabled: true,
+                allow_untrusted_writers: true,
+            }
+        );
     }
 
     #[test]
@@ -1937,6 +2060,8 @@ mod tests {
             security: SecurityLevel::high(),
             cameras: CameraConfig {
                 rgb: "primary".into(),
+                allow_nonphysical_rgb: true,
+                allow_untrusted_rgb_writers: true,
                 ir: "pipewiresrc target-object=some-ir-camera".to_string(),
                 emitter_enabled: true,
                 dark_luma_threshold: 55,
@@ -1944,6 +2069,8 @@ mod tests {
                 auto_rotate: false,
                 ir_frame_width: Some(340),
                 ir_frame_height: Some(340),
+                ir_source_marker: Some("/run/surface_ir_bridge_dev".to_string()),
+                ir_source_driver: None,
             },
             auth: AuthConfig {
                 abort_if_ssh: true,
@@ -1989,6 +2116,8 @@ mod tests {
             SecurityLevel::high().recognizer()
         );
         assert_eq!(loaded.cameras.rgb, "primary".into());
+        assert!(loaded.cameras.allow_nonphysical_rgb);
+        assert!(loaded.cameras.allow_untrusted_rgb_writers);
         assert_eq!(
             loaded.cameras.ir,
             "pipewiresrc target-object=some-ir-camera"
@@ -2569,6 +2698,94 @@ level = "low""#,
             assert!(cameras.validate().is_err(), "{width:?}x{height:?}");
             assert_eq!(cameras.ir_frame_size(), None, "{width:?}x{height:?}");
         }
+    }
+
+    #[test]
+    fn ir_bridge_source_is_parsed_as_known_keys() {
+        let contents = r#"
+            [cameras]
+            ir = "/dev/video42"
+            ir_source_marker = "/run/surface_ir_bridge_dev"
+            ir_source_driver = "ipu3-cio2"
+            "#;
+        let config: Config = toml_edit::de::from_str(contents).unwrap();
+
+        config.cameras.validate().unwrap();
+        let bridge = config.cameras.ir_bridge_source().unwrap();
+        assert_eq!(bridge.marker, "/run/surface_ir_bridge_dev");
+        assert_eq!(bridge.source_driver, Some("ipu3-cio2"));
+        assert!(unknown_config_keys(contents).is_empty());
+    }
+
+    #[test]
+    fn ir_bridge_source_defaults_to_none() {
+        let config: Config = toml_edit::de::from_str("[cameras]\nir = \"/dev/video2\"").unwrap();
+
+        config.cameras.validate().unwrap();
+        assert!(config.cameras.ir_bridge_source().is_none());
+    }
+
+    #[test]
+    fn validate_rejects_malformed_ir_bridge_source() {
+        for (marker, driver) in [
+            (None, Some("ipu3-cio2")),
+            (Some("relative/path"), None),
+            (Some("/run/marker"), Some("  ")),
+            (Some("/run/marker"), Some("ipu3-cio2 ")),
+        ] {
+            let cameras = CameraConfig {
+                ir_source_marker: marker.map(str::to_string),
+                ir_source_driver: driver.map(str::to_string),
+                ..CameraConfig::default()
+            };
+            assert!(cameras.validate().is_err(), "{marker:?} / {driver:?}");
+            assert!(
+                cameras.ir_bridge_source().is_none(),
+                "{marker:?} / {driver:?}"
+            );
+
+            let mut requested = CameraConfig::default();
+            requested.inherit_ir_bridge_source(&cameras);
+            requested.validate().unwrap();
+            assert!(requested.ir_source_marker.is_none());
+            assert!(requested.ir_source_driver.is_none());
+        }
+    }
+
+    #[test]
+    fn inherit_ir_bridge_source_keeps_a_valid_pair() {
+        let current = CameraConfig {
+            ir_source_marker: Some("/run/surface_ir_bridge_dev".to_string()),
+            ir_source_driver: Some("ipu3-cio2".to_string()),
+            ..CameraConfig::default()
+        };
+        let mut requested = CameraConfig::default();
+        requested.inherit_ir_bridge_source(&current);
+
+        assert_eq!(requested.ir_source_marker, current.ir_source_marker);
+        assert_eq!(requested.ir_source_driver, current.ir_source_driver);
+    }
+
+    #[test]
+    fn inherit_nonphysical_rgb_drops_an_invalid_pair() {
+        let invalid = CameraConfig {
+            allow_untrusted_rgb_writers: true,
+            ..CameraConfig::default()
+        };
+        let mut requested = CameraConfig::default();
+        requested.inherit_nonphysical_rgb(&invalid);
+        requested.validate().unwrap();
+        assert!(!requested.allow_nonphysical_rgb);
+        assert!(!requested.allow_untrusted_rgb_writers);
+
+        let valid = CameraConfig {
+            allow_nonphysical_rgb: true,
+            allow_untrusted_rgb_writers: true,
+            ..CameraConfig::default()
+        };
+        requested.inherit_nonphysical_rgb(&valid);
+        assert!(requested.allow_nonphysical_rgb);
+        assert!(requested.allow_untrusted_rgb_writers);
     }
 
     #[test]

@@ -59,6 +59,11 @@ const GDM_DCONF_OVERRIDE_CONTENT: &str =
     "[org/gnome/shell/extensions/gaze]\nenable-face-authentication=true\n";
 const CLAIM_TIMEOUT_SECS: u64 = 300;
 const VERIFY_TOO_DARK_TIMEOUT: Duration = Duration::from_secs(1);
+const DURESS_LOCKED_DIAGNOSTIC: &str =
+    "收到胁迫信号后，人脸认证已锁定。请使用密码登录，或运行 `gaze duress --clear`。";
+const LID_CLOSED_DIAGNOSTIC: &str = "笔记本盖已合上，已跳过人脸认证。";
+const DURESS_MODEL_MISSING_DIAGNOSTIC: &str =
+    "已启用胁迫检测，但眼部模型无法加载，因此闭眼不会锁定人脸认证。请查看 `journalctl -u gazed`。";
 const LIVENESS_GATE_DIAGNOSTIC: &str =
     "人脸匹配成功，但未通过活体检测。请稍微移动后重试，或降低 liveness.threshold。";
 const VERIFY_NO_FACE_TIMEOUT: Duration = Duration::from_secs(5);

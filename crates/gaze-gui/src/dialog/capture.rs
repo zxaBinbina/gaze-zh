@@ -398,8 +398,11 @@ pub fn show_capture_dialog(
                         start_failed(&format!("无法获取摄像头：{err}。请重试。"));
                         return;
                     }
-                    if proxy.enroll_start(&face_name).await.is_err() {
-                        start_failed("后台服务无法开始录入，请重试。");
+                    if let Err(err) = proxy.enroll_start(&face_name).await {
+                        start_failed(&format!(
+                            "无法开始录入：{}",
+                            gaze_core::dbus::dbus_error_message(&err)
+                        ));
                         let _ = proxy.release().await;
                         return;
                     }

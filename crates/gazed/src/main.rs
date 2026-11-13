@@ -91,6 +91,12 @@ fn main() -> anyhow::Result<()> {
     );
     Config::migrate_file(CONFIG_PATH);
     let config = Config::load()?;
+    let rgb_opt_in = config.cameras.nonphysical_rgb_opt_in();
+    if rgb_opt_in.allow_untrusted_writers {
+        warn!(
+            "已设置 cameras.allow_untrusted_rgb_writers：任何可写入 RGB 节点的进程都可能向其提供画面并通过人脸认证"
+        );
+    }
     let _store_lock = UserDatabase::lock_store(std::path::Path::new(USERS_DIR))?;
     if let Some(warning) = gaze_security::storage::encryption_warning(
         gaze_security::storage::disk_encryption_for_paths(&[

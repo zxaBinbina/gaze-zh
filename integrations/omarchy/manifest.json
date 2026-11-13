@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "com.gundulabs.gaze.lock",
   "name": "Gaze",
-  "version": "0.5.2",
+  "version": "0.5.3",
   "author": "Gundu Labs",
   "description": "与 Omarchy 密码和指纹解锁并行的人脸认证。",
   "kinds": [

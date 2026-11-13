@@ -92,7 +92,7 @@ pub(super) fn check_gstreamer_plugins(report: &mut Report) -> bool {
     }
 }
 
-pub(super) fn check_cameras(report: &mut Report, config: Option<&Config>) {
+pub(super) fn check_cameras(report: &mut Report, config: Option<&Config>, config_from_file: bool) {
     if !check_gstreamer_plugins(report) {
         return;
     }
@@ -153,6 +153,8 @@ pub(super) fn check_cameras(report: &mut Report, config: Option<&Config>) {
                         "RGB 摄像头",
                         format!("在运行时解析 USB {vid:04x}:{pid:04x} 的彩色节点"),
                     );
+                } else if let Some(name) = gaze_vision::camera::parse_libcamera_spec(rgb) {
+                    check_libcamera_camera(report, "RGB 摄像头", "cameras.rgb", name);
                 } else if rgb.starts_with("/dev/video") {
                     match fs::metadata(rgb) {
                         Ok(metadata) if metadata.file_type().is_char_device() => {
@@ -192,7 +194,7 @@ pub(super) fn check_cameras(report: &mut Report, config: Option<&Config>) {
     if ir.starts_with("/dev/video") {
         match fs::metadata(ir) {
             Ok(metadata) if metadata.file_type().is_char_device() => {
-                report.pass("红外摄像头", format!("{ir} 是字符设备"));
+                check_ir_node(report, &config.cameras, ir, config_from_file);
             }
             Ok(_) => report.error(
                 "红外摄像头",
@@ -226,6 +228,8 @@ pub(super) fn check_cameras(report: &mut Report, config: Option<&Config>) {
             "红外摄像头",
             format!("在运行时解析 USB {vid:04x}:{pid:04x} 的红外节点"),
         );
+    } else if let Some(name) = gaze_vision::camera::parse_libcamera_spec(ir) {
+        check_libcamera_camera(report, "红外摄像头", "cameras.ir", name);
     } else {
         report.warning(
             "红外摄像头",
@@ -236,6 +240,92 @@ pub(super) fn check_cameras(report: &mut Report, config: Option<&Config>) {
 
     if config.cameras.emitter_enabled {
         check_i2c_emitter(report, ir);
+    }
+}
+
+fn check_ir_node(
+    report: &mut Report,
+    cameras: &gaze_core::config::CameraConfig,
+    node: &str,
+    config_from_file: bool,
+) {
+    if gaze_vision::camera::is_physical_node(node) {
+        report.pass("红外摄像头", format!("{node} 是字符设备"));
+        return;
+    }
+    if !config_from_file {
+        // The daemon's D-Bus config cannot carry the file-only provenance keys, so their
+        // absence proves nothing when the config file itself was unreadable.
+        report.warning(
+            "红外摄像头",
+            format!("{node} 是虚拟设备，无法验证其桥接来源"),
+            "无法读取配置文件；请运行 `sudo gaze doctor` 检查 cameras.ir_source_marker。",
+        );
+        return;
+    }
+    if let Err(err) = cameras.validate_ir_bridge_source() {
+        report.error(
+            "红外摄像头",
+            format!("{node} 是虚拟设备，其桥接来源无效：{err:#}"),
+            "请修正配置文件中的 cameras.ir_source_marker 和 cameras.ir_source_driver。",
+        );
+        return;
+    }
+    let Some(bridge) = cameras.ir_bridge_source() else {
+        report.error(
+            "红外摄像头",
+            format!("{node} 是虚拟摄像头，认证时拒绝打开"),
+            "如果此节点由特权用户空间桥接提供，请将 cameras.ir_source_marker 设为 root 所有的标记文件，其中应记录物理 /dev/video* 来源（可用 cameras.ir_source_driver 限定驱动），或将 cameras.ir 指向物理节点。",
+        );
+        return;
+    };
+    if let Err(err) = fs::File::open(bridge.marker)
+        && err.kind() == std::io::ErrorKind::PermissionDenied
+    {
+        // A root-owned 0600 marker satisfies the trust rules but cannot be
+        // verified by an unprivileged doctor.
+        report.warning(
+            "红外摄像头",
+            format!("当前用户无法读取桥接标记 {}", bridge.marker),
+            "请运行 `sudo gaze doctor` 验证桥接来源。",
+        );
+        return;
+    }
+    match gaze_vision::camera::check_bridge_marker(node, &bridge) {
+        Ok(_) if gaze_vision::camera::node_grants_untrusted_write(node) => report.error(
+            "红外摄像头",
+            format!("非特权用户可写入 {node}，因此认证时拒绝使用"),
+            "录制的视频可能被回放至桥接节点。请限制其权限（移除 uaccess 标签，使用 root:video 0660）。",
+        ),
+        Ok(source) => report.pass(
+            "红外摄像头",
+            format!(
+                "桥接标记 {} 确认物理来源为 {source}",
+                bridge.marker
+            ),
+        ),
+        Err(err) => report.error(
+            "红外摄像头",
+            format!("{node} 的桥接来源验证失败：{err:#}"),
+            "请确认桥接服务正在运行，并已写入配置指定的标记文件。",
+        ),
+    }
+}
+
+fn check_libcamera_camera(report: &mut Report, check: &'static str, key: &str, name: &str) {
+    if gaze_vision::camera::libcamera_camera_names()
+        .iter()
+        .any(|camera| camera == name)
+    {
+        report.pass(check, format!("libcamera 已列出 {name}"));
+    } else {
+        report.error(
+            check,
+            format!("libcamera 未列出名为 {name:?} 的摄像头"),
+            format!(
+                "请关闭其他占用摄像头的程序、安装 libcamera GStreamer 插件，或将 {key} 设为 `cam --list` 中的名称。"
+            ),
+        );
     }
 }
 
