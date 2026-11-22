@@ -13,7 +13,7 @@
         class="copy"
         :class="{ copied }"
         :style="{ opacity: hovered || copied ? 1 : 0 }"
-        title="Copy Code"
+        title="复制命令"
         @click="copyCode"
       />
       <span class="lang">bash</span>

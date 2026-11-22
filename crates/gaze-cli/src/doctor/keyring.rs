@@ -255,17 +255,48 @@ pub(super) fn keyring_record_state(
     )
 }
 
+fn oo7_replaces_gnome_keyring() -> bool {
+    let installed = |module: &str| {
+        pam_search_dirs()
+            .iter()
+            .any(|dir| dir.join(module).exists())
+    };
+    installed("pam_oo7.so") && !installed("pam_gnome_keyring.so")
+}
+
+pub(super) fn report_keyring_off(report: &mut Report, oo7_stays_locked_at_face_login: bool) {
+    let enable = format!(
+        "在 {CONFIG_PATH} 的 [storage] 中设置 `unlock_gnome_keyring = true`（还需要 `encrypt_templates = true` 及 [liveness] 中的 `enabled = true`），重启 gazed，再运行 `sudo gaze keyring`。"
+    );
+    if oo7_stays_locked_at_face_login {
+        report.warning(
+            "密钥环",
+            "已启用 GDM 人脸登录，但登录后未解锁 oo7 密钥环，Chrome 及其他 Chromium 或 Electron 应用可能因此删除已保存的网站登录凭据",
+            format!(
+                "请在 {CONFIG_PATH} 的 [auth] 中设置 `abort_before_first_resume = true` 并重启 gazed，让开机后首次登录使用密码；也可启用密钥环解锁：{enable}"
+            ),
+        );
+    } else {
+        report.off(
+            "密钥环",
+            "GDM 或 greetd 人脸登录后的 GNOME 密钥环解锁已关闭",
+            format!("启用方法：{enable}"),
+        );
+    }
+}
+
 pub(super) fn check_keyring(report: &mut Report, username: &str, config: Option<&Config>) {
     let Some(config) = config else {
         return;
     };
     if !config.storage.unlock_gnome_keyring {
-        report.off(
-            "密钥环",
-            "GDM 或 greetd 人脸登录后的 GNOME 密钥环解锁已关闭",
-            format!(
-                "启用方式：在 {CONFIG_PATH} 的 [storage] 下设置 `unlock_gnome_keyring = true`（还需 `encrypt_templates = true` 及 [liveness] 下的 `enabled = true`），重启 gazed，再运行 `sudo gaze keyring`。"
-            ),
+        let gdm_face_login =
+            gdm_face_auth_from_dconf() == Some(true) || Path::new(GDM_FACE_OVERRIDE_PATH).exists();
+        report_keyring_off(
+            report,
+            gdm_face_login
+                && !config.auth.abort_before_first_resume
+                && oo7_replaces_gnome_keyring(),
         );
         return;
     }
@@ -514,6 +545,26 @@ pub(super) fn check_kwallet(report: &mut Report, username: &str, config: Option<
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn keyring_unlock_off_is_a_warning_only_when_oo7_stays_locked_at_face_login() {
+        let reported = |locked| {
+            let mut report = Report::default();
+            report_keyring_off(&mut report, locked);
+            let check = report.checks.into_iter().next().unwrap();
+            (check.level, check.message, check.fix.unwrap_or_default())
+        };
+
+        let (level, _, fix) = reported(false);
+        assert_eq!(level, Level::Off);
+        assert!(fix.contains("sudo gaze keyring"), "{fix}");
+
+        let (level, message, fix) = reported(true);
+        assert_eq!(level, Level::Warning);
+        assert!(message.contains("oo7"), "{message}");
+        assert!(fix.contains("abort_before_first_resume = true"), "{fix}");
+        assert!(fix.contains("sudo gaze keyring"), "{fix}");
+    }
 
     #[test]
     fn a_missing_keyring_policy_is_only_an_error_once_the_module_store_was_read() {

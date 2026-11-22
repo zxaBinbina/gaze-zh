@@ -1,111 +1,61 @@
 <!-- SPDX-FileCopyrightText: 2026 Gundu Labs -->
 <!-- SPDX-License-Identifier: GPL-3.0-or-later -->
 
-# GUI Guide
+# 图形界面指南
 
-::: tip On KDE Plasma
-`gaze-kde` adds a native **Gaze** page to System Settings with the same features as
-this app. See the [KDE Plasma guide](/guide/kde#system-settings).
+::: tip KDE Plasma
+安装 `gaze-kde` 后，系统设置中会出现原生 Gaze 页面。详见 [KDE 指南](/guide/kde#system-settings)。
 :::
 
-Use `gaze-gui` to enroll your face, test recognition, and adjust Gaze settings.
+运行 `gaze-gui`，按主窗口步骤检查摄像头预览、录入人脸、测试识别，再检查桌面集成。测试结果保留到下一次测试。
 
-Launch it:
+- **录入人脸**：按提示采集 RGB 与红外样本，可选择主组合或回退组合；失败后可重试，取消需确认。
+- **查看档案**：显示模板总数和 RGB、IR 标记。绿色表示已有样本；橙色表示配置了摄像头但缺少样本；灰色表示未配置该光谱，属于正常状态。
+- **改善人脸**：补充样本或缺少的光谱，例如为原有 RGB 档案追加红外样本。
+- **测试认证**：检查识别；不会授予权限，也不测试 PAM。
+- **删除人脸**：移除单份档案。
+- **修改设置**：管理安全级别、摄像头、活体检测、硬件加速及认证选项。
 
-```bash
-gaze-gui
-```
+## 配置窗口 {#configuration-dialog}
 
-- **Enroll a face:** Follow the camera prompts. If both RGB and IR cameras are configured, Gaze captures from both.
-- **View profiles:** The main window lists enrolled faces, their total template counts, and `RGB` and `IR` badges. A badge is green when the profile has captures for that spectrum, amber when a camera is configured but the profile has no captures, and grey when no camera is configured. An RGB-only machine therefore shows a green `RGB` badge and a grey `IR` badge; grey does not indicate a failure.
-- **Improve a face:** Select its improve icon to capture additional samples or add a missing spectrum. For example, you can add IR captures to an RGB-only face after configuring an IR camera.
-- **Test authentication:** Run a face scan to check whether Gaze recognizes you.
-- **Remove faces:** Delete individual faces.
-- **Change daemon settings:** Adjust the security level, cameras, liveness settings, and hybrid policy.
+点击“设置”。“常用”提供摄像头、识别和锁屏选项；“高级”提供模型、存储和数值调节。点击“解锁…”并输入密码后，每次更改都会通过后台自动保存，进度与结果显示在设置上方，无需保存按钮。
 
-## Configuration dialog
+管理人脸与设置始终需要密码。授权对话框打开时，后台会拒绝用人脸匹配授权修改 Gaze 自身。
 
-Open the config dialog from the header-bar settings button.
+更改识别模型需确认，并为已有档案重新采集。保存后逐一使用“改善此人脸”，再测试；旧样本仍保留在磁盘上。
 
-The dialog mirrors `/etc/gaze/config.toml`, grouped the same way. Saving writes
-the file through the daemon, so it needs a polkit authorization.
+密钥环开关显示是否存在密码记录。“设置密码…”提供录入命令与验证步骤。保存密码与启用登录集成都需完成；密码记录不代表已通过登录验证。
 
-That authorization always takes your password, as does changing your faces, so a
-face match can't change Gaze itself. The polkit dialog tells you this and waits
-for the password.
+**安全**：`low`、`medium`、`high`、`maximum` 和 `custom` 在界面显示中文名称。自定义级别可调检测器、识别器、RGB/IR 阈值及混合策略，配置值保持兼容。
 
-**Security**
+**硬件**：CPU、自动 NPU、Intel OpenVINO、AMD Ryzen AI。OpenVINO 支持 CPU/GPU/NPU，自动和 AMD 模式选择 NPU。安装[厂商运行库与驱动](/guide/acceleration)后，请重启后台，用 `gaze doctor --benchmark` 验证实际后端是否回退到 CPU。
 
-- Security level (`low`, `medium`, `high`, `maximum`, or `custom`)
-- For `custom`: detector level, recognizer level, RGB and IR similarity thresholds
+摄像头选项包括 RGB、红外、强制发射器、红外分辨率、并行采集和暗光阈值。部分摄像头无法同时采集两种光谱，默认顺序采集。其他摄像头组合可在 `[[cameras.fallback]]` 中设置。
 
-**Hardware**
+**录入**：模板上限与最小人脸占比；调低占比可从更远处录入。
 
-- Inference execution provider: CPU, automatic NPU selection, Intel OpenVINO, or AMD Vitis AI
-- OpenVINO inference device; automatic and AMD modes select NPU
+**活体检测**：防伪开关、阈值及检测时间，检查画面与自然动作以识别照片或屏幕伪装。
 
-The standard build exposes all providers. Install the vendor runtime and drivers
-using [Hardware Acceleration](/guide/acceleration), then restart the daemon after changing its provider.
+**认证**：SSH 或合盖时禁用、首次挂起恢复前要求密码、锁屏和提权确认、唤醒等待及启动延迟。KDE 生物认证通道无法回传确认响应，启用确认会改用密码。配置项 `auth.require_attention` 可启用睁眼正对摄像头检测，默认关闭。
 
-**Cameras**
+**存储**：TPM 模板加密、GNOME 密钥环及 KWallet 解锁。解锁需要活体检测与加密，并用 `gaze keyring` 或 `gaze keyring --kwallet` 录入密码。启用前请阅读[安全影响](/guide/gnome#what-this-changes-about-your-security)。
 
-- RGB camera source, IR camera source, and Force IR Emitter
-- Parallel RGB + IR Capture, which decides whether hybrid verification reads both
-  sensors at once. Some webcams cannot, so the default captures them one at a time
-- Darkness cutoff, the dark-frame rejection threshold
+## 常用操作 {#common-tasks}
 
-**Enrollment**
+1. 录入 `default` 档案。
+2. 在正常室内光线下多次测试。
+3. 为眼镜等经常变化的外观录入额外档案。
 
-- Max templates per face
-- Minimum face size ratio, where lower values allow enrollment from farther away
+## 图形界面与命令行 {#when-to-use-gui-vs-cli}
 
-**Liveness Anti-Spoofing**
+图形界面适合录入与快速验证。详细指标与诊断请用 `gaze test --verbose`。
 
-- Enable liveness spoof prevention, liveness threshold, liveness max seconds
-
-**Auth**
-
-- Abort if SSH, abort if lid closed
-- Require a suspend first, which refuses face authentication until the machine has suspended
-  and resumed once
-- Require confirmation on lock screen, require confirmation for elevated auth
-- Resume grace period and start delay, both in milliseconds
-- Start delay applies to, either every face authentication or screen lockers only
-- Hybrid combining policy, used when both RGB and IR are enrolled
-
-**Storage**
-
-- Encrypt face templates, which seals enrolled templates with the TPM. See
-  [How it works](/guide/how-it-works) for what that protects against.
-- Unlock GNOME Keyring, which replays an enrolled password after a
-  liveness-protected GDM or greetd face login. It needs template encryption and
-  liveness on, and each user still has to run `gaze keyring`. Read
-  [what it changes about your security](/guide/gnome#what-this-changes-about-your-security)
-  first.
-
-## Common tasks
-
-1. Enroll a profile named `default`.
-2. Run test authentication several times in normal room light.
-3. Add another profile if your appearance varies often (for example, glasses).
-
-## When to use GUI vs CLI
-
-- Use GUI for enrollment and quick pass/fail checks.
-- Use CLI (`gaze test`) when you want detailed authentication metrics and diagnostics.
-
-## If the GUI cannot authenticate
-
-Check daemon status:
+## 无法认证时 {#if-the-gui-cannot-authenticate}
 
 ```bash
+gaze doctor
 systemctl status gazed
+journalctl -u gazed -n 50
 ```
 
-If the service is stopped, enable and start it:
-
-```bash
-sudo systemctl enable --now gazed
-```
-
-Then retry from GUI.
+服务停止时运行 `sudo systemctl enable --now gazed`，等待首次模型准备完成后重试。界面显示可复制的恢复命令，并在后台可用后尝试恢复连接。

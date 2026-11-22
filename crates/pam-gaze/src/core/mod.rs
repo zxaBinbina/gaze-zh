@@ -85,11 +85,13 @@ pub const GREETD_PAM_SERVICE: &str = "greetd";
 /// Uses the resume delay as a conservative estimate because PAM cannot tell when resume is active.
 pub fn camera_auth_timeout(
     auth: &gaze_core::config::AuthConfig,
+    cameras: &gaze_core::config::CameraConfig,
     service: Option<&str>,
 ) -> std::time::Duration {
     let surface = gaze_core::config::classify_pam_service(service);
     std::time::Duration::from_secs(CAMERA_AUTH_TIMEOUT_SECS)
         + std::time::Duration::from_millis(auth.effective_start_delay_ms(true, surface))
+        + cameras.fallback_budget()
 }
 pub const CONFIRMATION_PROMPT: &str = "人脸已验证。按回车键确认，Esc 键取消。";
 
@@ -1267,32 +1269,58 @@ mod tests {
     #[test]
     fn pre_auth_delay_extends_the_camera_budget_instead_of_consuming_it() {
         let mut auth = gaze_core::config::AuthConfig::default();
+        let cameras = gaze_core::config::CameraConfig::default();
         let base = std::time::Duration::from_secs(CAMERA_AUTH_TIMEOUT_SECS);
 
-        assert_eq!(camera_auth_timeout(&auth, Some("hyprlock-gaze")), base);
+        assert_eq!(
+            camera_auth_timeout(&auth, &cameras, Some("hyprlock-gaze")),
+            base
+        );
 
         auth.start_delay_ms = 5000;
         assert_eq!(
-            camera_auth_timeout(&auth, Some("hyprlock-gaze")),
+            camera_auth_timeout(&auth, &cameras, Some("hyprlock-gaze")),
             base + std::time::Duration::from_millis(5000)
         );
 
         // The daemon waits for whichever delay is longer, so budget for that.
         auth.resume_grace_ms = 9000;
         assert_eq!(
-            camera_auth_timeout(&auth, Some("hyprlock-gaze")),
+            camera_auth_timeout(&auth, &cameras, Some("hyprlock-gaze")),
             base + std::time::Duration::from_millis(9000)
         );
 
         auth.start_delay_ms = 0;
         assert_eq!(
-            camera_auth_timeout(&auth, Some("hyprlock-gaze")),
+            camera_auth_timeout(&auth, &cameras, Some("hyprlock-gaze")),
             base + std::time::Duration::from_millis(9000)
         );
     }
 
     #[test]
+    fn each_fallback_camera_system_extends_the_camera_budget() {
+        let auth = gaze_core::config::AuthConfig::default();
+        let mut cameras = gaze_core::config::CameraConfig::default();
+        let base = camera_auth_timeout(&auth, &cameras, Some("sudo"));
+        let rear = gaze_core::config::CameraSystem {
+            rgb: "usb:045e:0991".into(),
+            ir: "/dev/video6".into(),
+            ir_frame_width: None,
+            ir_frame_height: None,
+            emitter_enabled: false,
+            ir_source_marker: None,
+            ir_source_driver: None,
+        };
+        cameras.fallback = vec![rear.clone(), rear];
+        assert_eq!(
+            camera_auth_timeout(&auth, &cameras, Some("sudo")),
+            base + gaze_core::config::CAMERA_FALLBACK_BUDGET * 2
+        );
+    }
+
+    #[test]
     fn scoped_away_prompts_keep_the_plain_camera_budget() {
+        let cameras = gaze_core::config::CameraConfig::default();
         let base = std::time::Duration::from_secs(CAMERA_AUTH_TIMEOUT_SECS);
         let auth = gaze_core::config::AuthConfig {
             start_delay_ms: 5000,
@@ -1300,9 +1328,9 @@ mod tests {
             ..Default::default()
         };
 
-        assert_eq!(camera_auth_timeout(&auth, Some("sudo")), base);
+        assert_eq!(camera_auth_timeout(&auth, &cameras, Some("sudo")), base);
         assert_eq!(
-            camera_auth_timeout(&auth, Some("hyprlock-gaze")),
+            camera_auth_timeout(&auth, &cameras, Some("hyprlock-gaze")),
             base + std::time::Duration::from_millis(5000)
         );
     }
@@ -1457,7 +1485,7 @@ mod tests {
     fn confirmation_accepts_empty_string_on_enter() {
         assert!(confirmation_accepted(Some("")));
         assert!(!confirmation_accepted(Some("hunter2")));
-        assert!(!confirmation_accepted(Some("confirm")));
+        assert!(!confirmation_accepted(Some("确认")));
         assert!(!confirmation_accepted(None));
     }
 
@@ -1474,7 +1502,7 @@ mod tests {
         assert!(typed_confirmation_accepted(Some("  yes\n")));
 
         assert!(!typed_confirmation_accepted(Some("y")));
-        assert!(!typed_confirmation_accepted(Some("confirm")));
+        assert!(!typed_confirmation_accepted(Some("确认")));
         assert!(!typed_confirmation_accepted(Some("hunter2")));
     }
 

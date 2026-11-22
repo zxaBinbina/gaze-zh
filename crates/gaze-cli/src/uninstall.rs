@@ -163,32 +163,36 @@ fn remove_arch_pam_configuration_cmd() -> String {
 }
 
 fn remove_rpm_ostree_packages_cmd() -> String {
-    "sudo rpm-ostree uninstall gaze-omarchy gaze gaze-gui gaze-gnome-extension gaze-cinnamon-extension gaze-hyprlock gaze-kde \
-      2>/dev/null || \
-      for pkg in gaze-omarchy gaze gaze-gui gaze-gnome-extension gaze-cinnamon-extension gaze-hyprlock gaze-kde; do \
-      sudo rpm-ostree uninstall \"$pkg\" 2>/dev/null || true; \
-      done"
+    // Missing layers are harmless, but transaction failures must stop removal.
+    "sudo rpm-ostree uninstall --idempotent gaze-omarchy gaze-zh gaze gaze-gui gaze-gnome-extension gaze-cinnamon-extension gaze-hyprlock gaze-kde"
         .into()
 }
 
 fn remove_pacman_packages_cmd() -> String {
     // AUR builds split off `-debug` packages; remove those first since they can
     // depend on the base package.
-    "for base in gaze-omarchy-bin gaze-omarchy gaze gaze-gui gaze-gnome-extension gaze-cinnamon-extension gaze-hyprlock gaze-kde \
+    "for base in gaze-omarchy-bin gaze-omarchy gaze-zh gaze gaze-gui gaze-gnome-extension gaze-cinnamon-extension gaze-hyprlock gaze-kde \
       gaze-bin gaze-gui-bin gaze-gnome-extension-bin gaze-cinnamon-extension-bin gaze-hyprlock-bin gaze-kde-bin; do \
       for pkg in \"$base-debug\" \"$base\"; do \
       if pacman -Q \"$pkg\" >/dev/null 2>&1; then \
-      sudo pacman -Rns --noconfirm \"$pkg\" || true; \
+      sudo pacman -Rns --noconfirm \"$pkg\" || exit $?; \
       fi; \
       done; \
       done"
         .into()
 }
 
+fn remove_installed_packages_cmd(query: &str, remove: &str) -> String {
+    format!(
+        "packages=''; for pkg in gaze-omarchy gaze-zh gaze gaze-gui gaze-gnome-extension gaze-cinnamon-extension gaze-hyprlock gaze-kde; do if {query}; then packages=\"$packages $pkg\"; fi; done; if [ -n \"$packages\" ]; then {remove} $packages; fi"
+    )
+}
+
 fn remove_zypper_packages_cmd() -> String {
-    // Include every optional openSUSE integration package.
-    "sudo zypper --non-interactive remove --no-confirm gaze-omarchy gaze gaze-gui gaze-gnome-extension gaze-cinnamon-extension gaze-hyprlock gaze-kde 2>/dev/null || true"
-        .into()
+    remove_installed_packages_cmd(
+        "rpm -q \"$pkg\" >/dev/null 2>&1",
+        "sudo zypper --non-interactive remove --no-confirm",
+    )
 }
 
 fn remove_suse_pam_configuration_cmd() -> String {
@@ -241,8 +245,7 @@ fn append_package_manager_uninstall_steps(
         PackageManager::Apt => {
             plan.push((
                 "移除 apt 软件包",
-                "sudo apt-get remove --purge -y gaze-omarchy gaze gaze-gui gaze-gnome-extension gaze-cinnamon-extension gaze-hyprlock gaze-kde 2>/dev/null || true"
-                    .into(),
+                remove_installed_packages_cmd("dpkg-query -W -f='${db:Status-Status}' \"$pkg\" 2>/dev/null | grep -qx installed", "sudo apt-get remove --purge -y"),
             ));
             plan.push((
                 "移除 apt 软件源和密钥",
@@ -264,8 +267,10 @@ fn append_package_manager_uninstall_steps(
         PackageManager::Dnf => {
             plan.push((
                 "移除 dnf 软件包",
-                "sudo dnf remove -y gaze-omarchy gaze gaze-gui gaze-gnome-extension gaze-cinnamon-extension gaze-hyprlock gaze-kde 2>/dev/null || true"
-                    .into(),
+                remove_installed_packages_cmd(
+                    "rpm -q \"$pkg\" >/dev/null 2>&1",
+                    "sudo dnf remove -y",
+                ),
             ));
             plan.push((
                 "移除 dnf 软件源",
@@ -402,7 +407,8 @@ fn build_uninstall_plan(keep_data: bool) -> Vec<(&'static str, String)> {
 
     plan.push((
         "停止并禁用后台服务",
-        "sudo systemctl disable --now gazed 2>/dev/null || true".into(),
+        "if systemctl cat gazed >/dev/null 2>&1; then sudo systemctl disable --now gazed; fi"
+            .into(),
     ));
 
     if let Some(package_manager) = detect_package_manager() {
@@ -492,14 +498,54 @@ pub fn handle_uninstall(yes: bool, keep_data: bool, dry_run: bool) -> anyhow::Re
         }
     }
 
-    for (desc, cmd) in &plan {
+    execute_uninstall_plan(&term, &plan, |cmd| {
+        std::process::Command::new("sh").arg("-c").arg(cmd).status()
+    })?;
+
+    term.write_line(&format!(
+        "\n{} 卸载步骤已完成。请重启以完成软件包移除并清除内存状态。部分桌面清理可能仍需手动处理。",
+        style("✓").green().bold()
+    ))?;
+    term.write_line(&format!(
+        "  {} 如 hyprlock.conf 曾引用 Gaze，已在该文件或其链接目标旁保留后缀为 .gaze-uninstall-bak 的备份。",
+        style("i").cyan().bold()
+    ))?;
+    Ok(())
+}
+
+fn execute_uninstall_plan(
+    term: &Term,
+    plan: &[(&str, String)],
+    mut run: impl FnMut(&str) -> std::io::Result<std::process::ExitStatus>,
+) -> anyhow::Result<()> {
+    let mut failures = Vec::new();
+    for (desc, cmd) in plan {
+        if !failures.is_empty()
+            && matches!(*desc, "移除模型缓存" | "移除配置" | "移除已录入的人脸数据")
+        {
+            anyhow::bail!(
+                "卸载未完成（{}）。已停止删除剩余配置和人脸数据。请解决上方错误；gaze uninstall --dry-run 可显示恢复命令。",
+                failures.join(", ")
+            );
+        }
         term.write_line(&format!("\n{} {}", style("▶").cyan().bold(), desc))?;
-        let status = std::process::Command::new("sh").arg("-c").arg(cmd).status();
+        let status = run(cmd);
         match status {
             Ok(s) if s.success() => {
-                term.write_line(&format!("  {} 完成", style("✓").green()))?;
+                let outcome = if cmd.contains("|| true") {
+                    "已尝试清理（可能需手动处理）"
+                } else {
+                    "完成"
+                };
+                term.write_line(&format!("  {} {outcome}", style("✓").green()))?;
             }
             Ok(s) => {
+                failures.push(*desc);
+                if desc.contains("软件包") || *desc == "停止并禁用后台服务" {
+                    anyhow::bail!(
+                        "{desc} 失败。已停止删除剩余配置和人脸数据。请解决上方错误后再次运行 gaze uninstall。"
+                    );
+                }
                 if *desc == RESTORE_OMARCHY_LOCK_STEP {
                     anyhow::bail!(
                         "还原 Omarchy 锁屏失败，尚未移除 Gaze。请先在已解锁的桌面运行 gaze-omarchy disable。"
@@ -512,6 +558,10 @@ pub fn handle_uninstall(yes: bool, keep_data: bool, dry_run: bool) -> anyhow::Re
                 ))?;
             }
             Err(e) => {
+                failures.push(*desc);
+                if desc.contains("软件包") || *desc == "停止并禁用后台服务" {
+                    anyhow::bail!("无法执行 {desc}：{e}。已停止删除剩余配置和人脸数据。");
+                }
                 if *desc == RESTORE_OMARCHY_LOCK_STEP {
                     anyhow::bail!("无法还原 Omarchy 锁屏：{e}。尚未移除 Gaze。");
                 }
@@ -524,14 +574,13 @@ pub fn handle_uninstall(yes: bool, keep_data: bool, dry_run: bool) -> anyhow::Re
         }
     }
 
-    term.write_line(&format!(
-        "\n{} Gaze 已卸载。建议重启以清除内存中的残留状态。",
-        style("✓").green().bold()
-    ))?;
-    term.write_line(&format!(
-        "  {} 如 hyprlock.conf 曾引用 Gaze，已在该文件或其链接目标旁保留后缀为 .gaze-uninstall-bak 的备份。",
-        style("i").cyan().bold()
-    ))?;
+    if !failures.is_empty() {
+        anyhow::bail!(
+            "卸载未完成。失败步骤：{}。请解决上方错误后再次运行 gaze uninstall；用 --dry-run 查看恢复命令。",
+            failures.join(", ")
+        );
+    }
+
     Ok(())
 }
 
@@ -541,6 +590,75 @@ mod tests {
 
     fn plan_has(plan: &[(&'static str, String)], label: &str) -> bool {
         plan.iter().any(|(candidate, _)| *candidate == label)
+    }
+
+    #[test]
+    fn failed_cleanup_never_reaches_data_deletion() {
+        for label in [
+            "移除 apt 软件包",
+            "移除分层软件包",
+            "停止并禁用后台服务",
+            "Remove desktop settings",
+        ] {
+            let plan = vec![
+                (label, "fail".into()),
+                ("移除配置", "delete config".into()),
+                ("移除已录入的人脸数据", "delete faces".into()),
+            ];
+            let mut executed = Vec::new();
+            let result = execute_uninstall_plan(&Term::buffered_stdout(), &plan, |cmd| {
+                executed.push(cmd.to_string());
+                std::process::Command::new("sh")
+                    .args(["-c", "exit 42"])
+                    .status()
+            });
+            assert!(result.is_err(), "{label}");
+            assert_eq!(executed, ["fail"], "{label}");
+        }
+    }
+
+    #[test]
+    fn failed_spawn_stops_package_removal() {
+        let plan = vec![
+            ("移除 apt 软件包", "remove".into()),
+            ("移除已录入的人脸数据", "delete".into()),
+        ];
+        let mut attempts = 0;
+        let result = execute_uninstall_plan(&Term::buffered_stdout(), &plan, |_| {
+            attempts += 1;
+            Err(std::io::Error::other("cannot spawn shell"))
+        });
+        assert!(result.is_err());
+        assert_eq!(attempts, 1);
+    }
+
+    #[test]
+    fn package_removal_commands_propagate_transaction_errors() {
+        for manager in [
+            PackageManager::Apt,
+            PackageManager::Dnf,
+            PackageManager::Zypper,
+            PackageManager::Pacman,
+            PackageManager::RpmOstree,
+        ] {
+            let mut plan = Vec::new();
+            append_package_manager_uninstall_steps(&mut plan, manager);
+            let (_, command) = plan
+                .iter()
+                .find(|(desc, _)| desc.contains("软件包"))
+                .unwrap();
+            // Shell functions isolate the package commands: no system changes or sudo.
+            // POSIX shell function names cannot contain the hyphen in dpkg-query.
+            let command = command.replace("dpkg-query", "dpkg_query");
+            let script = format!(
+                "sudo() {{ return 42; }}; rpm() {{ return 0; }}; pacman() {{ return 0; }}; dpkg_query() {{ printf installed; }}; {command}"
+            );
+            let status = std::process::Command::new("sh")
+                .args(["-c", &script])
+                .status()
+                .unwrap();
+            assert_eq!(status.code(), Some(42), "{manager:?}");
+        }
     }
 
     #[test]
@@ -600,7 +718,7 @@ mod tests {
     fn pacman_removal_covers_debug_split_packages() {
         let command = remove_pacman_packages_cmd();
         assert!(command.contains("gaze-bin"));
-        assert!(command.starts_with("for base in gaze-omarchy-bin gaze-omarchy gaze "));
+        assert!(command.starts_with("for base in gaze-omarchy-bin gaze-omarchy gaze-zh gaze "));
         assert!(command.contains("\"$base-debug\" \"$base\""));
 
         let output = std::process::Command::new("sh")

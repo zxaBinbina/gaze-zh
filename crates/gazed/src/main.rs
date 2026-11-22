@@ -194,7 +194,7 @@ async fn run(mut config: Config) -> anyhow::Result<()> {
         None
     };
 
-    let eye_state = if config.duress.enabled {
+    let eye_state = if config.duress.enabled || config.auth.require_attention {
         match daemon::load_eye_state(&config.inference) {
             Ok(classifier) => Some(classifier),
             Err(e) => {
@@ -310,7 +310,9 @@ async fn run(mut config: Config) -> anyhow::Result<()> {
     }
     db.use_recognizer(security.recognizer())?;
 
-    warn_on_ir_misconfig(&config.cameras);
+    for cameras in config.cameras.systems() {
+        warn_on_ir_misconfig(&cameras);
+    }
 
     let resume_pending = Arc::new(std::sync::atomic::AtomicBool::new(false));
     let resume_seen = Arc::new(std::sync::atomic::AtomicBool::new(

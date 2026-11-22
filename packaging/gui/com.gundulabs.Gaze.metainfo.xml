@@ -16,6 +16,9 @@
   <developer_name>Gundu Labs</developer_name>
   <content_rating type="oars-1.1"/>
   <releases>
+    <release version="0.5.4" date="2026-11-22">
+      <description><p>同步首次设置向导、注视检测、摄像头组合回退与桌面录入改进，补齐简体中文并保留中文分支功能。</p></description>
+    </release>
     <release version="0.5.3" date="2026-11-13">
       <description><p>同步 libcamera 与桥接摄像头支持、认证诊断、oo7 密钥环和 Omarchy 4.5，保留并补齐简体中文提示。</p></description>
     </release>

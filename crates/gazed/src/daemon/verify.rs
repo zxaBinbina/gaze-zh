@@ -51,6 +51,7 @@ pub(super) enum VerifyMsg {
     Success(Spectrum, ndarray::Array1<f32>),
     Duress(Spectrum),
     DuressHeld(Spectrum, f64),
+    AttentionBlocked(Spectrum, bool),
     Unavailable(Spectrum, String),
     Error(String),
 }
@@ -78,6 +79,21 @@ impl VerifyGiveUp {
             ),
         }
     }
+}
+
+pub(super) fn falls_back_to_next_system(
+    has_fallback: bool,
+    face_seen: bool,
+    give_up: Option<VerifyGiveUp>,
+) -> bool {
+    has_fallback && !face_seen && matches!(give_up, None | Some(VerifyGiveUp::NoFace))
+}
+
+struct VerifySystem {
+    cameras: gaze_core::config::CameraConfig,
+    sources: gaze_vision::camera::ConfiguredCameraSources,
+    run_rgb: bool,
+    run_ir: bool,
 }
 
 /// Bound both missing faces and unusable frames: `Clipped` and `Ready` refresh only
@@ -275,11 +291,31 @@ pub fn load_ir_liveness(
     IrLivenessDetector::new_with_inference(&path, inference)
 }
 
-pub(super) fn eyes_closed_in_frame(
+pub(super) const ATTENTION_CLOSED_THRESHOLD: f32 = 0.5;
+// One frame of eye state is too noisy to trust with glasses or distance; a run of
+// attentive frames keeps a single misread closed eye from unlocking.
+pub(super) const ATTENTION_REQUIRED_FRAMES: u32 = 3;
+
+#[derive(Default)]
+pub(super) struct AttentionTracker {
+    streak: u32,
+}
+
+impl AttentionTracker {
+    pub(super) fn observe(&mut self, attentive: bool) -> bool {
+        self.streak = if attentive {
+            self.streak.saturating_add(1)
+        } else {
+            0
+        };
+        self.streak >= ATTENTION_REQUIRED_FRAMES
+    }
+}
+
+pub(super) fn eye_closed_probabilities(
     eye_state: &Mutex<Option<EyeStateClassifier>>,
     data: &FaceData,
-    threshold: f32,
-) -> anyhow::Result<bool> {
+) -> anyhow::Result<[f32; 2]> {
     let frame = data
         .liveness_frame
         .as_ref()
@@ -289,10 +325,38 @@ pub(super) fn eyes_closed_in_frame(
     let mut guard = eye_state.blocking_lock();
     let classifier = guard
         .as_mut()
-        .ok_or_else(|| anyhow::anyhow!("已启用胁迫检测，但眼部状态模型不可用"))?;
+        .ok_or_else(|| anyhow::anyhow!("已启用眼部状态检测，但眼部状态模型不可用"))?;
     let probabilities = classifier.closed_probabilities(&rgb, [eyes[0], eyes[1]])?;
-    tracing::debug!(?probabilities, threshold, "胁迫检测眼部状态");
-    Ok(crate::duress::any_eye_closed(probabilities, threshold))
+    tracing::debug!(?probabilities, "眼部状态概率");
+    Ok(probabilities)
+}
+
+pub(super) fn frame_is_attentive(
+    eye_state: &Mutex<Option<EyeStateClassifier>>,
+    data: &FaceData,
+    known_eye_probabilities: Option<[f32; 2]>,
+) -> anyhow::Result<bool> {
+    if !gaze_vision::face::is_front_facing(data.yaw, data.pitch) {
+        tracing::debug!(
+            yaw = data.yaw,
+            pitch = data.pitch,
+            "注视检测拒绝了画面：未正对摄像头"
+        );
+        return Ok(false);
+    }
+    let probabilities = match known_eye_probabilities {
+        Some(probabilities) => probabilities,
+        None => eye_closed_probabilities(eye_state, data)?,
+    };
+    if crate::duress::any_eye_closed(probabilities, ATTENTION_CLOSED_THRESHOLD) {
+        tracing::debug!(
+            ?probabilities,
+            threshold = ATTENTION_CLOSED_THRESHOLD,
+            "注视检测拒绝了画面：眼睛闭合"
+        );
+        return Ok(false);
+    }
+    Ok(true)
 }
 
 /// One row per enrolled face, holding (name, rgb_sim, rgb_pct, rgb_passed, ir_sim, ir_pct,
@@ -413,12 +477,15 @@ impl AuthDaemon {
             "已收到人脸认证请求"
         );
         let abort_if_lid_closed = config.auth.abort_if_lid_closed;
-        let sources = resolve_configured_sources(&config.cameras);
-        let rgb_device = sources.rgb;
-        let ir_device = sources.ir;
-        let ir_node = sources.ir_node;
-        let emitter_enabled = config.cameras.emitter_enabled;
-        let serial_capture = sources.serial_capture;
+        let camera_systems = config
+            .cameras
+            .systems()
+            .into_iter()
+            .map(|cameras| {
+                let sources = resolve_configured_sources(&cameras);
+                (cameras, sources)
+            })
+            .collect::<Vec<_>>();
         let liveness_cfg = config.liveness.clone();
         validate_keyring_verification(
             require_keyring,
@@ -427,8 +494,9 @@ impl AuthDaemon {
         )?;
         let hybrid_policy = config.security.hybrid_policy().to_string();
         let duress_cfg = config.duress.clone();
+        let require_attention = config.auth.require_attention;
         // D-Bus handlers run on zbus's runtime, so model retries must use the stored Tokio handle.
-        if duress_cfg.enabled && self.eye_state.lock().await.is_none() {
+        if (duress_cfg.enabled || require_attention) && self.eye_state.lock().await.is_none() {
             let inference = config.inference.clone();
             let loading = self
                 .rt_handle
@@ -485,6 +553,19 @@ impl AuthDaemon {
             if duress_cfg.enabled && eye_state_arc.lock().await.is_none() {
                 let _ = Self::verify_diagnostic(&ctxt, DURESS_MODEL_MISSING_DIAGNOSTIC).await;
             }
+            if require_attention && eye_state_arc.lock().await.is_none() {
+                error!("已启用注视检测，但眼部状态模型不可用");
+                let _ = Self::verify_diagnostic(&ctxt, ATTENTION_MODEL_MISSING_DIAGNOSTIC).await;
+                let _ = Self::verify_status(
+                    &ctxt,
+                    VerifyResult::VerifyNoMatch,
+                    Vec::new(),
+                    CaptureStatus::Unused,
+                    CaptureStatus::Unused,
+                )
+                .await;
+                return;
+            }
 
             if duress_locked {
                 info!(
@@ -510,25 +591,39 @@ impl AuthDaemon {
             }
             drop(db);
 
-            let (run_rgb, run_ir) = auth_streams(
-                rgb_device.first(),
-                &ir_device,
-                has_rgb_templates,
-                has_ir_templates,
-            );
+            let mut any_streams = false;
+            let mut systems = Vec::new();
+            for (index, (cameras, sources)) in camera_systems.into_iter().enumerate() {
+                let (run_rgb, run_ir) = auth_streams(
+                    sources.rgb.first(),
+                    &sources.ir,
+                    has_rgb_templates,
+                    has_ir_templates,
+                );
+                if !run_rgb && !run_ir {
+                    continue;
+                }
+                any_streams = true;
+                if and_policy_unsatisfiable(&hybrid_policy, sources.rgb.first(), &sources.ir, run_rgb, run_ir) {
+                    warn!(
+                        camera_system = index,
+                        "此摄像头组合无法满足混合策略“and”；跳过该组合"
+                    );
+                    continue;
+                }
+                systems.push(VerifySystem { cameras, sources, run_rgb, run_ir });
+            }
 
-            if !run_rgb && !run_ir {
+            if !any_streams {
                 error!("没有可用于认证的匹配模板或摄像头配置");
-                let _ = Self::verify_diagnostic(&ctxt, "已录入的人脸与配置的摄像头不匹配。请录入人脸，或在 `gaze config` 中检查摄像头。").await;
+                let _ = Self::verify_diagnostic(&ctxt, "已录入人脸与配置的摄像头不匹配。请录入人脸，或检查摄像头设置。").await;
                 // Idle rather than no-face: nothing a retry could change.
                 let _ = Self::verify_status(&ctxt, VerifyResult::VerifyNoMatch, Vec::new(), CaptureStatus::Unused, CaptureStatus::Unused).await;
                 return;
             }
 
-            if and_policy_unsatisfiable(&hybrid_policy, rgb_device.first(), &ir_device, run_rgb, run_ir) {
+            if systems.is_empty() {
                 error!(
-                    run_rgb,
-                    run_ir,
                     has_rgb_templates,
                     has_ir_templates,
                     "混合策略 and 要求同时使用两种光谱，但 {} 没有 {} 模板；拒绝仅凭单一光谱认证。请重新录入两种光谱的模板。",
@@ -546,6 +641,7 @@ impl AuthDaemon {
             let mut delay = delay;
             let mut lid_wait = lid_wait;
             let mut held = false;
+            let mut system_index = 0usize;
             loop {
                 match hold_for_sleep(&mut sleeping, &mut rx, lid_wait).await {
                     SleepHold::Awake => {}
@@ -634,8 +730,17 @@ impl AuthDaemon {
                     delay = Duration::from_millis(config.auth.resume_grace_ms);
                     continue;
                 }
-                let mut run_rgb = run_rgb;
-                let mut run_ir = run_ir;
+                let system = &systems[system_index];
+                let has_fallback = system_index + 1 < systems.len();
+                let rgb_device = system.sources.rgb.clone();
+                let ir_device = system.sources.ir.clone();
+                let ir_node = system.sources.ir_node.clone();
+                let serial_capture = system.sources.serial_capture;
+                let emitter_enabled = system.cameras.emitter_enabled;
+                let mut system_config: Config = (*config).clone();
+                system_config.cameras = system.cameras.clone();
+                let mut run_rgb = system.run_rgb;
+                let mut run_ir = system.run_ir;
                 if run_ir && rgb_verifies_without_ir(&hybrid_policy, run_rgb) {
                     let source = ir_device.clone();
                     let disconnected = tokio::task::spawn_blocking(move || {
@@ -659,6 +764,7 @@ impl AuthDaemon {
                     run_rgb = run_rgb,
                     run_ir = run_ir,
                     serial_capture = serial_capture,
+                    camera_system = system_index,
                     "开始验证：正在检测用户 {} 的人脸",
                     username
                 );
@@ -674,7 +780,7 @@ impl AuthDaemon {
                     let stop_clone = stop_flag.clone();
                     let tx = result_tx.clone();
                     let detector_arc = detector_arc.clone();
-                    let config_clone = config.clone();
+                    let config_clone = system_config.clone();
                     let recognizer_rgb_arc = recognizer_rgb_arc.clone();
                     let liveness_arc = liveness_arc.clone();
                     let db_arc = db_arc.clone();
@@ -687,6 +793,7 @@ impl AuthDaemon {
                     let orientation_clone = orientation.clone();
                     let eye_state_arc = eye_state_arc.clone();
                     let duress_enabled = duress_cfg.enabled;
+                    let require_attention = require_attention;
                     let duress_threshold = duress_cfg.effective_closed_threshold();
                     let duress_hold = duress_cfg.effective_hold();
 
@@ -730,6 +837,8 @@ impl AuthDaemon {
                         let mut live_scores: Vec<f32> = Vec::new();
                         let mut landmark_seq: Vec<[(f32, f32); 5]> = Vec::new();
                         let mut duress = DuressTracker::new(duress_hold);
+                        let mut attention = AttentionTracker::default();
+                        let mut attention_blocked = false;
 
                         while let Some(frame) = cam.next_interruptible(&stop_clone) {
                             if stop_clone.load(std::sync::atomic::Ordering::Relaxed) {
@@ -772,7 +881,7 @@ impl AuthDaemon {
                             let frame = checker.orient(frame);
                             let (status, embed_opt) = {
                                 let mut recognizer = recognizer_rgb_arc.blocking_lock();
-                                match process_frame_sync(&mut checker, &mut recognizer, &frame, liveness_enabled || duress_enabled) {
+                                match process_frame_sync(&mut checker, &mut recognizer, &frame, liveness_enabled || duress_enabled || require_attention) {
                                     Ok(res) => res,
                                     Err(error) => {
                                         let message = format!("RGB 推理失败：{error:#}");
@@ -835,22 +944,45 @@ impl AuthDaemon {
 
                                 let matched = scores.iter().any(|(_, _, _, passed, _)| *passed);
                                 if matched {
+                                    let mut eye_probabilities = None;
                                     if duress_enabled {
-                                        let closed = match eyes_closed_in_frame(&eye_state_arc, &data, duress_threshold) {
-                                            Ok(closed) => closed,
+                                        let probabilities = match eye_closed_probabilities(&eye_state_arc, &data) {
+                                            Ok(probabilities) => probabilities,
                                             Err(e) => {
                                                 let _ = tx.blocking_send(VerifyMsg::Error(format!("胁迫检查失败：{e}")));
                                                 return;
                                             }
                                         };
+                                        eye_probabilities = Some(probabilities);
+                                        let closed = crate::duress::any_eye_closed(probabilities, duress_threshold);
                                         if duress.observe(closed, Instant::now()) {
                                             let _ = tx.blocking_send(VerifyMsg::Duress(Spectrum::Rgb));
                                             return;
                                         }
                                         if closed {
+                                            attention.observe(false);
                                             if status_sent {
                                                 let _ = tx.blocking_send(VerifyMsg::DuressHeld(Spectrum::Rgb, cam.fps()));
                                             }
+                                            continue;
+                                        }
+                                    }
+
+                                    if require_attention {
+                                        let attentive = match frame_is_attentive(&eye_state_arc, &data, eye_probabilities) {
+                                            Ok(attentive) => attentive,
+                                            Err(e) => {
+                                                let _ = tx.blocking_send(VerifyMsg::Error(format!("注视检测失败：{e}")));
+                                                return;
+                                            }
+                                        };
+                                        let passed = attention.observe(attentive);
+                                        let blocked = !passed && (attention_blocked || !attentive);
+                                        if blocked != attention_blocked {
+                                            attention_blocked = blocked;
+                                            let _ = tx.blocking_send(VerifyMsg::AttentionBlocked(Spectrum::Rgb, blocked));
+                                        }
+                                        if !passed {
                                             continue;
                                         }
                                     }
@@ -925,7 +1057,7 @@ impl AuthDaemon {
                     let stop_clone = stop_flag.clone();
                     let tx = result_tx.clone();
                     let detector_arc = ir_models.detector;
-                    let config_clone = config.clone();
+                    let config_clone = system_config.clone();
                     let recognizer_ir_arc = ir_models.recognizer;
                     let db_arc = db_arc.clone();
                     let username_clone = username.clone();
@@ -935,12 +1067,11 @@ impl AuthDaemon {
                     let ir_liveness_arc = ir_liveness_arc.clone();
                     let ir_device_clone = ir_device.clone();
                     let ir_node_clone = ir_node.clone();
-                    let emitter_enabled = emitter_enabled;
-                    let serial_capture = serial_capture;
                     let rgb_phase_done_clone = rgb_phase_done.clone();
                     let orientation_clone = orientation.clone();
                     let eye_state_arc = eye_state_arc.clone();
                     let duress_enabled = duress_cfg.enabled;
+                    let require_attention = require_attention;
                     let duress_threshold = duress_cfg.effective_closed_threshold();
                     let duress_hold = duress_cfg.effective_hold();
 
@@ -996,6 +1127,8 @@ impl AuthDaemon {
                         let mut landmark_seq: Vec<[(f32, f32); 5]> = Vec::new();
                         let mut ir_live_scores: Vec<f32> = Vec::new();
                         let mut duress = DuressTracker::new(duress_hold);
+                        let mut attention = AttentionTracker::default();
+                        let mut attention_blocked = false;
 
                         while let Some(frame) = cam.next_interruptible(&stop_clone) {
                             if stop_clone.load(std::sync::atomic::Ordering::Relaxed) {
@@ -1040,7 +1173,7 @@ impl AuthDaemon {
                             let frame = checker.orient(frame);
                             let (status, embed_opt) = {
                                 let mut recognizer = recognizer_ir_arc.blocking_lock();
-                                match process_frame_sync(&mut checker, &mut recognizer, &frame, ir_model || duress_enabled) {
+                                match process_frame_sync(&mut checker, &mut recognizer, &frame, ir_model || duress_enabled || require_attention) {
                                     Ok(res) => res,
                                     Err(error) => {
                                         let message = format!("红外推理失败：{error:#}");
@@ -1074,22 +1207,45 @@ impl AuthDaemon {
 
                                 let matched = scores.iter().any(|(_, _, _, passed, _)| *passed);
                                 if matched {
+                                    let mut eye_probabilities = None;
                                     if duress_enabled {
-                                        let closed = match eyes_closed_in_frame(&eye_state_arc, &data, duress_threshold) {
-                                            Ok(closed) => closed,
+                                        let probabilities = match eye_closed_probabilities(&eye_state_arc, &data) {
+                                            Ok(probabilities) => probabilities,
                                             Err(e) => {
                                                 let _ = tx.blocking_send(VerifyMsg::Error(format!("胁迫检查失败：{e}")));
                                                 return;
                                             }
                                         };
+                                        eye_probabilities = Some(probabilities);
+                                        let closed = crate::duress::any_eye_closed(probabilities, duress_threshold);
                                         if duress.observe(closed, Instant::now()) {
                                             let _ = tx.blocking_send(VerifyMsg::Duress(Spectrum::Ir));
                                             return;
                                         }
                                         if closed {
+                                            attention.observe(false);
                                             if status_sent {
                                                 let _ = tx.blocking_send(VerifyMsg::DuressHeld(Spectrum::Ir, cam.fps()));
                                             }
+                                            continue;
+                                        }
+                                    }
+
+                                    if require_attention {
+                                        let attentive = match frame_is_attentive(&eye_state_arc, &data, eye_probabilities) {
+                                            Ok(attentive) => attentive,
+                                            Err(e) => {
+                                                let _ = tx.blocking_send(VerifyMsg::Error(format!("注视检测失败：{e}")));
+                                                return;
+                                            }
+                                        };
+                                        let passed = attention.observe(attentive);
+                                        let blocked = !passed && (attention_blocked || !attentive);
+                                        if blocked != attention_blocked {
+                                            attention_blocked = blocked;
+                                            let _ = tx.blocking_send(VerifyMsg::AttentionBlocked(Spectrum::Ir, blocked));
+                                        }
+                                        if !passed {
                                             continue;
                                         }
                                     }
@@ -1167,6 +1323,8 @@ impl AuthDaemon {
 
                 let mut last_emitted_status: Option<CaptureStatus> = None;
                 let mut suspended = false;
+                let mut fallback_reason: Option<String> = None;
+                let mut face_seen = false;
                 let mut rgb_status = CaptureStatus::Unused;
                 let mut ir_status = CaptureStatus::Unused;
                 let mut rgb_attempted = false;
@@ -1174,6 +1332,9 @@ impl AuthDaemon {
                 let mut last_face_at = Instant::now();
                 let mut last_usable_at = Instant::now();
                 let mut frame_budget = VerifyFrameBudget::default();
+                let mut rgb_attention_blocked = false;
+                let mut ir_attention_blocked = false;
+                let mut attention_hinted = false;
 
                 let mut rgb_success_embed = None;
                 let mut ir_success_embed = None;
@@ -1244,7 +1405,11 @@ impl AuthDaemon {
                             if let Some(give_up) = verify_give_up(last_face_at.elapsed(), last_usable_at.elapsed()) {
                                 info!("VerifyStart: {}", give_up.reason());
                                 stop_flag.store(true, std::sync::atomic::Ordering::Relaxed);
-                                let _ = Self::verify_status(&ctxt, VerifyResult::VerifyNoMatch, Vec::new(), rgb_status, ir_status).await;
+                                if falls_back_to_next_system(has_fallback, face_seen, Some(give_up)) {
+                                    fallback_reason = Some("未检测到人脸".to_string());
+                                } else {
+                                    let _ = Self::verify_status(&ctxt, VerifyResult::VerifyNoMatch, Vec::new(), rgb_status, ir_status).await;
+                                }
                                 break;
                             }
                         }
@@ -1286,6 +1451,7 @@ impl AuthDaemon {
 
                                     if status.indicates_face() {
                                         last_face_at = Instant::now();
+                                        face_seen = true;
                                     }
 
                                     if has_face {
@@ -1298,7 +1464,12 @@ impl AuthDaemon {
                                                 .any(|face| face.3 || face.6);
                                             info!(matched, "开始验证：已达到最大采集帧数");
                                             if matched {
-                                                let _ = Self::verify_diagnostic(&ctxt, LIVENESS_GATE_DIAGNOSTIC).await;
+                                                let diagnostic = if rgb_attention_blocked || ir_attention_blocked {
+                                                    ATTENTION_GATE_DIAGNOSTIC
+                                                } else {
+                                                    LIVENESS_GATE_DIAGNOSTIC
+                                                };
+                                                let _ = Self::verify_diagnostic(&ctxt, diagnostic).await;
                                             }
                                             let _ = Self::verify_status(&ctxt, VerifyResult::VerifyNoMatch, final_scores, rgb_status, ir_status).await;
                                             break;
@@ -1327,7 +1498,11 @@ impl AuthDaemon {
                                                 VERIFY_TOO_DARK_TIMEOUT.as_millis()
                                             );
                                             stop_flag.store(true, std::sync::atomic::Ordering::Relaxed);
-                                            let _ = Self::verify_status(&ctxt, VerifyResult::VerifyNoMatch, Vec::new(), rgb_status, ir_status).await;
+                                            if falls_back_to_next_system(has_fallback, face_seen, None) {
+                                                fallback_reason = Some("摄像头画面过暗".to_string());
+                                            } else {
+                                                let _ = Self::verify_status(&ctxt, VerifyResult::VerifyNoMatch, Vec::new(), rgb_status, ir_status).await;
+                                            }
                                             break;
                                         }
                                     } else {
@@ -1337,7 +1512,11 @@ impl AuthDaemon {
                                     if let Some(give_up) = verify_give_up(last_face_at.elapsed(), last_usable_at.elapsed()) {
                                         info!("VerifyStart: {}", give_up.reason());
                                         stop_flag.store(true, std::sync::atomic::Ordering::Relaxed);
-                                        let _ = Self::verify_status(&ctxt, VerifyResult::VerifyNoMatch, Vec::new(), rgb_status, ir_status).await;
+                                        if falls_back_to_next_system(has_fallback, face_seen, Some(give_up)) {
+                                            fallback_reason = Some("未检测到人脸".to_string());
+                                        } else {
+                                            let _ = Self::verify_status(&ctxt, VerifyResult::VerifyNoMatch, Vec::new(), rgb_status, ir_status).await;
+                                        }
                                         break;
                                     }
 
@@ -1370,6 +1549,16 @@ impl AuthDaemon {
                                 VerifyMsg::DuressHeld(spectrum, fps) => {
                                     frame_budget.duress_frame_held(spectrum, duress_cfg.effective_hold_frames(fps));
                                 }
+                                VerifyMsg::AttentionBlocked(spectrum, blocked) => {
+                                    match spectrum {
+                                        Spectrum::Rgb => rgb_attention_blocked = blocked,
+                                        Spectrum::Ir => ir_attention_blocked = blocked,
+                                    }
+                                    if blocked && !attention_hinted {
+                                        attention_hinted = true;
+                                        let _ = Self::verify_diagnostic(&ctxt, ATTENTION_HELD_DIAGNOSTIC).await;
+                                    }
+                                }
                                 VerifyMsg::Unavailable(Spectrum::Rgb, reason)
                                     if run_rgb && ir_continues_without_rgb(&hybrid_policy, run_ir) =>
                                 {
@@ -1393,6 +1582,14 @@ impl AuthDaemon {
                                     if finish_if_auth_passed!() {
                                         break;
                                     }
+                                }
+                                VerifyMsg::Unavailable(_, reason)
+                                    if falls_back_to_next_system(has_fallback, face_seen, None) =>
+                                {
+                                    warn!("VerifyStart: {reason}");
+                                    stop_flag.store(true, std::sync::atomic::Ordering::Relaxed);
+                                    fallback_reason = Some(reason);
+                                    break;
                                 }
                                 VerifyMsg::Error(e) | VerifyMsg::Unavailable(_, e) => {
                                     error!("验证循环错误：{e}");
@@ -1422,9 +1619,17 @@ impl AuthDaemon {
                 })
                 .await;
 
+                if let Some(reason) = fallback_reason {
+                    system_index += 1;
+                    info!(camera_system = system_index, "VerifyStart：{reason}；正在尝试下一组摄像头");
+                    let _ = Self::verify_diagnostic(&ctxt, &format!("{reason}；正在尝试下一个摄像头")).await;
+                    delay = Duration::ZERO;
+                    continue;
+                }
                 if !suspended {
                     break;
                 }
+                system_index = 0;
                 held = true;
                 delay = Duration::from_millis(config.auth.resume_grace_ms);
             }
@@ -1451,6 +1656,49 @@ mod tests {
         budget.duress_frame_held(Spectrum::Rgb, 10);
         assert!(!budget.frame_spent(Spectrum::Rgb, 2));
         assert!(budget.frame_spent(Spectrum::Rgb, 2));
+    }
+
+    fn test_face_data(yaw: f32, pitch: f32) -> FaceData {
+        FaceData {
+            embedding: ndarray::Array1::zeros(0),
+            liveness_frame: None,
+            frame_size: (300, 300),
+            bbox: [0.0, 0.0, 300.0, 300.0],
+            kpss: ndarray::Array3::zeros((1, 5, 2)),
+            yaw,
+            pitch,
+        }
+    }
+
+    #[test]
+    fn attention_check_rejects_turned_head_and_fails_closed_without_eye_state() {
+        let empty_eye_state: Mutex<Option<EyeStateClassifier>> = Mutex::new(None);
+        let turned = test_face_data(0.40, 0.5);
+        assert!(!frame_is_attentive(&empty_eye_state, &turned, None).unwrap());
+        let unknown_pose = test_face_data(f32::NAN, f32::NAN);
+        assert!(!frame_is_attentive(&empty_eye_state, &unknown_pose, None).unwrap());
+
+        let straight = test_face_data(0.0, 0.5);
+        assert!(frame_is_attentive(&empty_eye_state, &straight, None).is_err());
+        assert!(frame_is_attentive(&empty_eye_state, &straight, Some([0.1, 0.2])).unwrap());
+        // Rejects moderate closed-eye probabilities (>= 0.5) even below the 0.9 duress threshold.
+        assert!(!frame_is_attentive(&empty_eye_state, &straight, Some([0.65, 0.2])).unwrap());
+        assert!(!frame_is_attentive(&empty_eye_state, &straight, Some([0.95, 0.1])).unwrap());
+    }
+
+    #[test]
+    fn attention_needs_consecutive_attentive_frames() {
+        let mut attention = AttentionTracker::default();
+        for _ in 1..ATTENTION_REQUIRED_FRAMES {
+            assert!(!attention.observe(true));
+        }
+        assert!(!attention.observe(false));
+        for _ in 1..ATTENTION_REQUIRED_FRAMES {
+            assert!(!attention.observe(true));
+        }
+        assert!(attention.observe(true));
+        assert!(attention.observe(true));
+        assert!(!attention.observe(false));
     }
 
     #[test]
@@ -1532,6 +1780,51 @@ mod tests {
         assert!(VERIFY_WATCHDOG_POLL < VERIFY_TOO_DARK_TIMEOUT);
         assert!(VERIFY_WATCHDOG_POLL < VERIFY_NO_USABLE_TIMEOUT);
         assert!(!VERIFY_WATCHDOG_POLL.is_zero());
+    }
+
+    #[test]
+    fn only_a_missing_face_moves_on_to_the_next_camera_system() {
+        use super::{VerifyGiveUp, falls_back_to_next_system};
+
+        assert!(falls_back_to_next_system(
+            true,
+            false,
+            Some(VerifyGiveUp::NoFace)
+        ));
+        assert!(falls_back_to_next_system(true, false, None));
+        assert!(!falls_back_to_next_system(
+            true,
+            false,
+            Some(VerifyGiveUp::NoUsableFrame)
+        ));
+        assert!(!falls_back_to_next_system(
+            false,
+            false,
+            Some(VerifyGiveUp::NoFace)
+        ));
+        assert!(!falls_back_to_next_system(false, false, None));
+    }
+
+    #[test]
+    fn a_face_seen_on_one_camera_system_never_earns_a_second_attempt() {
+        use super::{VerifyGiveUp, falls_back_to_next_system};
+
+        assert!(!falls_back_to_next_system(
+            true,
+            true,
+            Some(VerifyGiveUp::NoFace)
+        ));
+        assert!(!falls_back_to_next_system(true, true, None));
+    }
+
+    #[test]
+    fn a_camera_system_gives_up_on_a_missing_face_within_its_client_budget() {
+        use super::{VERIFY_NO_FACE_TIMEOUT, VERIFY_SERIAL_RGB_BUDGET};
+
+        assert!(
+            VERIFY_SERIAL_RGB_BUDGET + VERIFY_NO_FACE_TIMEOUT
+                < gaze_core::config::CAMERA_FALLBACK_BUDGET
+        );
     }
 
     #[test]

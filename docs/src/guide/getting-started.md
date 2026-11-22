@@ -1,95 +1,58 @@
 <!-- SPDX-FileCopyrightText: 2026 Gundu Labs -->
 <!-- SPDX-License-Identifier: GPL-3.0-or-later -->
 
-# Getting Started
+# 快速开始
 
-Get Gaze up and running in under 10 minutes. Install it, enroll your face, and test authentication.
+安装后先检查摄像头、录入人脸并测试识别，再检查桌面解锁集成。
 
-## Before you begin
+## 开始之前 {#before-you-begin}
 
-- Linux desktop with a working PipeWire/GStreamer webcam
-- `sudo` access
-- Internet connection for first-time model download
+需要具有可用摄像头和 sudo 权限的 Linux 桌面。x86_64 CPU 需支持 AVX2；默认模板加密需要 TPM 2.0，首次下载模型需要联网。没有 TPM 时，需启用 TPM 或明确选择不加密存储，程序不会自动关闭加密。
 
-## Step 1: Install Gaze
-
-The recommended option is the one-line installer:
+## 安装 {#install}
 
 ```bash
-curl -fsSL https://gaze.gundulabs.com/install.sh | sh
+curl -fsSL https://zxabinbina.cc.cd/projects/gaze/install.sh | sh
 ```
 
-If you prefer manual package setup, use the [installation guide](/guide/installation).
+中文安装器只下载本项目对应系统与架构的发行包，显示组件菜单并标记推荐选项。最后一项仅安装命令行；无人值守可指定 `--profile=cli` 等方案，`--yes` 不会代选。
 
-## Step 2: Check daemon status
+如果安装器要求重启，请先重启；GNOME 需要新会话加载扩展，Cinnamon 按提示重新加载桌面。首次启动可能下载模型，安装器最多等待 3 分钟。后台未就绪时，请先处理错误再录入。手动安装见[安装指南](/guide/installation)。
+
+## 设置人脸 {#set-up-your-face}
+
+在桌面会话中以普通用户身份运行：
 
 ```bash
-systemctl status gazed
+gaze setup
 ```
 
-If the service is not running, enable and start it:
+向导依次检查摄像头画面、选择摄像头、录入档案、测试识别并检查桌面集成。默认安全设置适合日常使用，无需先调整阈值。
+
+需要预览时，打开 `gaze-gui`，按照主窗口步骤操作：在“设置 → 常用”中选择摄像头，录入人脸，点击“测试”，再“检查桌面集成”。参考采集时自然正对摄像头，随后按方向提示小幅移动，保持人脸居中和光线充足。
+
+可用 `gaze add-face <name> --camera 1` 录入其他摄像头组合；0 表示主组合，1 至 3 表示对应回退组合。
+
+## 测试锁屏解锁 {#try-screen-unlock}
+
+识别通过表示可以匹配人脸，桌面集成需单独验证。尝试锁屏前请处理设置检查中的错误和警告。
+
+KDE 或 hyprlock 锁屏后立即解锁时，可设置 3–5 秒启动延迟，留出离开摄像头的时间。登录界面和密钥环解锁是独立的可选功能，详见[桌面认证指南](/guide/pam)。
+
+## 日后修改 {#change-something-later}
 
 ```bash
-sudo systemctl enable --now gazed
+gaze config                         # 选择设置类别，检查并保存
+gaze config get security.level      # 读取单项设置
+gaze config set auth.start_delay_ms 3000
+gaze test                           # 简洁识别结果
+gaze test --verbose                 # 详细指标
+gaze doctor                         # 需要处理的设置问题
+gaze doctor --verbose               # 所有检查，包括可选功能
 ```
 
-## Step 3: Enroll your first face
+切换识别模型后，需要为已有档案重新采集。使用“改善此人脸”或 `gaze refine-face default`，然后测试。
 
-```bash
-gaze add-face default
-```
+## 设置无法开始 {#if-setup-cannot-start}
 
-Tips while enrolling:
-
-- Keep your face centered and well lit.
-- Face the camera naturally for the first capture; the remaining direction
-  prompts are measured relative to that pose.
-- Use small, deliberate movements and hold each prompted angle still.
-- Remove strong backlight if possible.
-
-## Step 4: Test authentication
-
-```bash
-gaze test
-```
-
-The test shows detailed diagnostics and match metrics by default. It does not grant privileges or test PAM integration.
-
-## Step 5: Open the GUI (optional)
-
-```bash
-gaze-gui
-```
-
-Use the GUI to enroll additional faces (for example, with glasses and without glasses).
-
-## Step 6: Verify GNOME lock screen auth (optional)
-
-Follow these steps only if you use GNOME and want face unlock on the lock screen. The one-line installer enables the extension for your current GNOME user when possible. If you installed the packages manually, or automatic enablement failed, run:
-
-```bash
-gnome-extensions enable gaze@gundulabs.com
-gsettings set org.gnome.shell.extensions.gaze enable-face-authentication true
-```
-
-Run these commands from a GNOME session that started **after** the package was installed. GNOME Shell scans extension directories when a session starts and drops extension IDs it has not seen. If you enable the extension in the session where you installed it, the setting may appear to work but disappear after you log out. Reboot, then run the commands again. `gaze doctor` reports this as `GNOME extension: installed, but not enabled for the current user` and prints the same steps. See [The extension disappears again after a logout](/guide/gnome#the-extension-disappears-again-after-a-logout).
-
-Hands-free lock screen and GDM login authentication through this extension are specific to GNOME. Cinnamon has a separate extension for its lock screen and PolKit prompts; see the [Cinnamon guide](/guide/cinnamon). KDE Plasma uses the biometric PAM slot that KScreenLocker starts in advance; see the [KDE Plasma guide](/guide/kde). Other login surfaces use PAM integrations. See the guides for [Hyprland](/guide/hyprland), [LightDM](/guide/lightdm), [console login (TTY)](/guide/console), and [PAM](/guide/pam).
-GDM login face authentication is separate and disabled by default due to GNOME keyring behavior.
-See [GNOME Extension](/guide/gnome) for details and optional login enablement, including the optional TPM-backed keyring unlock that removes that caveat.
-
-## If something fails
-
-Go to the [troubleshooting guide](/guide/troubleshooting) for camera, daemon, PAM, and low-match issues.
-
-## Next
-
-- Tune behavior in the [configuration guide](/guide/configuration)
-- Learn commands in the [CLI guide](/guide/cli)
-- Use the desktop app via the [GUI guide](/guide/gui)
-- Review PAM setup in [PAM](/guide/pam)
-- Review lock/login behavior in [GNOME Extension](/guide/gnome)
-- Set up the [Cinnamon Extension](/guide/cinnamon) for the Cinnamon lock screen and PolKit prompts
-- Set up the [KDE Plasma](/guide/kde) lock screen and System Settings page
-- Enable face unlock for [Hyprland (hyprlock)](/guide/hyprland)
-- Add face authentication to [LightDM](/guide/lightdm) or a [console login (TTY)](/guide/console)
+运行 `gaze doctor`；服务无法启动时，查看 `journalctl -u gazed -n 50`。用 `sudoedit /etc/gaze/config.toml` 修复 TPM 或明文存储设置后，重启服务。后台未启动时无法用 `gaze config` 修复它。详见[故障排查](/guide/troubleshooting)与[加密说明](/guide/configuration#encrypt-face-templates-with-the-tpm)。

@@ -3,6 +3,7 @@
 
 #include "gazebus.h"
 
+#include <KLocalizedString>
 #include <QDBusConnection>
 #include <QDBusPendingCallWatcher>
 
@@ -20,6 +21,15 @@ void call(QObject *owner, const QString &service, const QString &path, const QSt
             done(self->reply());
         }
     });
+}
+
+QString errorText(const QDBusMessage &reply)
+{
+    const QString name = reply.errorName();
+    if (name == QLatin1String("org.freedesktop.DBus.Error.ServiceUnknown") || name == QLatin1String("org.freedesktop.DBus.Error.NameHasNoOwner")) {
+        return i18n("Gaze 后台服务尚未运行。首次启动会下载人脸模型，可能需要几分钟。服务就绪后此页面将自动更新。");
+    }
+    return reply.errorMessage();
 }
 
 void callGaze(QObject *owner, const QString &method, const QVariantList &args, Reply done)

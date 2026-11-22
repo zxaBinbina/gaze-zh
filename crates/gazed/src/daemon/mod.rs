@@ -64,6 +64,10 @@ const DURESS_LOCKED_DIAGNOSTIC: &str =
 const LID_CLOSED_DIAGNOSTIC: &str = "笔记本盖已合上，已跳过人脸认证。";
 const DURESS_MODEL_MISSING_DIAGNOSTIC: &str =
     "已启用胁迫检测，但眼部模型无法加载，因此闭眼不会锁定人脸认证。请查看 `journalctl -u gazed`。";
+const ATTENTION_MODEL_MISSING_DIAGNOSTIC: &str = "已启用注视检测，但眼部模型无法加载，模型加载成功前人脸认证将保持禁用。请查看 `journalctl -u gazed`。";
+const ATTENTION_HELD_DIAGNOSTIC: &str = "人脸已匹配。请睁眼看向摄像头以继续。";
+const ATTENTION_GATE_DIAGNOSTIC: &str =
+    "人脸已匹配，但未检测到睁眼正对摄像头。请看向屏幕后重试，或关闭 auth.require_attention。";
 const LIVENESS_GATE_DIAGNOSTIC: &str =
     "人脸匹配成功，但未通过活体检测。请稍微移动后重试，或降低 liveness.threshold。";
 const VERIFY_NO_FACE_TIMEOUT: Duration = Duration::from_secs(5);
@@ -451,7 +455,7 @@ pub struct ModelSessions {
 }
 
 fn ir_models_needed(config: &Config) -> bool {
-    !config.cameras.ir.trim().is_empty()
+    config.cameras.has_ir()
 }
 
 impl ModelSessions {
@@ -567,6 +571,18 @@ mod tests {
             config.cameras.ir = source.into();
             assert!(ir_models_needed(&config));
         }
+
+        config.cameras.ir = String::new();
+        config.cameras.fallback = vec![gaze_core::config::CameraSystem {
+            rgb: "usb:045e:0991".into(),
+            ir: "/dev/video6".into(),
+            ir_frame_width: None,
+            ir_frame_height: None,
+            emitter_enabled: false,
+            ir_source_marker: None,
+            ir_source_driver: None,
+        }];
+        assert!(ir_models_needed(&config));
     }
 
     #[test]

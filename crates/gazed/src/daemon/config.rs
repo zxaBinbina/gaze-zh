@@ -299,10 +299,12 @@ impl AuthDaemon {
                 move |current| {
                     let mut requested = update(current.clone())?;
                     requested.duress = current.duress.clone();
+                    requested.auth.require_attention = current.auth.require_attention;
                     requested.liveness.ir_model = current.liveness.ir_model;
                     requested.liveness.ir_threshold = current.liveness.ir_threshold;
                     requested.cameras.inherit_nonphysical_rgb(&current.cameras);
                     requested.cameras.inherit_ir_bridge_source(&current.cameras);
+                    requested.cameras.inherit_fallback(&current.cameras);
                     requested
                         .security
                         .validate()

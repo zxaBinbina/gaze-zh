@@ -4,7 +4,7 @@
 // Exercise the actual PAM messages and extension handlers together. In particular,
 // moving PAM source files upstream must not silently restore English prompts.
 import assert from 'node:assert/strict';
-import {readFile} from 'node:fs/promises';
+import {readFile, readdir} from 'node:fs/promises';
 import {test} from 'node:test';
 import vm from 'node:vm';
 
@@ -131,10 +131,34 @@ test('Omarchy recognizes the actual localized PAM confirmation and still require
 test('daemon refusal diagnostics shown by GUI and CLI stay Chinese', async () => {
     const source = await read('crates/gazed/src/daemon/mod.rs');
     for (const name of ['DURESS_LOCKED_DIAGNOSTIC', 'LID_CLOSED_DIAGNOSTIC',
-        'DURESS_MODEL_MISSING_DIAGNOSTIC', 'LIVENESS_GATE_DIAGNOSTIC']) {
+        'DURESS_MODEL_MISSING_DIAGNOSTIC', 'LIVENESS_GATE_DIAGNOSTIC',
+        'ATTENTION_MODEL_MISSING_DIAGNOSTIC', 'ATTENTION_HELD_DIAGNOSTIC',
+        'ATTENTION_GATE_DIAGNOSTIC']) {
         const message = source.match(new RegExp(`const ${name}: &str =\\s*"([^"]+)"`));
         assert.ok(message, name);
         assert.match(message[1], /[\u4e00-\u9fff]/, name);
+    }
+});
+
+test('new and existing GTK, KDE and GNOME settings keep visible labels Chinese', async () => {
+    const roots = ['crates/gaze-gui/src', 'integrations/kde/kcm/ui', 'integrations/gnome-shell'];
+    const paths = [];
+    const visit = async path => {
+        for (const entry of await readdir(new URL(`../${path}/`, import.meta.url), {withFileTypes: true})) {
+            const child = `${path}/${entry.name}`;
+            if (entry.isDirectory()) await visit(child);
+            else if (/\.(rs|qml)$/.test(child) || child.endsWith('/prefs.js')) paths.push(child);
+        }
+    };
+    await Promise.all(roots.map(visit));
+    const technical = /^(Gaze|RGB|IR|TPM|CPU|NPU|GPU|OpenVINO|KWallet|Intel OpenVINO|AMD Ryzen AI|Gaze \{\}|RGB \{\}|IR \{\})$/;
+    for (const path of paths) {
+        const source = (await read(path)).split('#[cfg(test)]')[0];
+        const labels = source.matchAll(/(?:\.(?:title|subtitle|label|placeholder_text|set_title|set_subtitle|set_label)\s*\(\s*|\b(?:i18n|qsTr)\s*\(\s*)(["'])([^"'\n]*)\1/g);
+        for (const [, , label] of labels) {
+            if (!label || /[\u4e00-\u9fff]/.test(label) || technical.test(label) || !/[A-Za-z]/.test(label)) continue;
+            assert.fail(`${path}: untranslated visible label ${label}`);
+        }
     }
 });
 

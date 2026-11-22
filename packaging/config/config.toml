@@ -55,6 +55,13 @@ dark_luma_threshold = 20
 # 使用自动旋转传感器（iio-sensor-proxy）将二合一设备竖持或倒置时的画面转正。
 # 没有传感器的设备不受影响。
 auto_rotate = true
+# 上述摄像头未检测到人脸时，按顺序尝试更多 RGB 与红外组合（例如二合一设备的后置摄像头）。
+# 每个条目独立设置摄像头，仅继承 dark_luma_threshold、parallel_capture 和 auto_rotate。
+# 最多三个条目。用 gaze add-face <name> --camera 1 等命令分别录入。
+# [[cameras.fallback]]
+# rgb = "usb:045e:0991"
+# ir = "/dev/video6"
+# emitter_enabled = true
 
 [auth]
 abort_if_ssh = true
@@ -63,14 +70,16 @@ abort_if_lid_closed = true
 # 从而解锁 GNOME 会话钥匙环；之后每次挂起恢复可使用人脸解锁。
 # gazed 重启后此状态会重置。
 abort_before_first_resume = false
-# 锁屏或登录界面的人脸匹配成功后要求明确确认。
-# KDE 生物识别服务 kde-fingerprint、kde-smartcard、plasmalogin-fingerprint
-# 无法返回确认回复，因此会忽略此开关，避免认证服务一直等待。
-# 参见 gaze doctor 和 KDE 指南。
+# 锁屏或登录界面匹配人脸后要求明确确认。
+# KDE 生物认证通道（kde-fingerprint、kde-smartcard、plasmalogin-fingerprint）
+# 无法回传确认响应，因此在这些界面要求确认会改用密码认证。
+# 请查看 gaze doctor 和 KDE 指南。
 require_confirmation_lock_screen = false
 require_confirmation_elevation = false
-# 挂起恢复后的首次解锁延迟指定毫秒数，让显示器有时间恢复，避免黑屏时解锁。
-# 0 表示禁用。显卡恢复较慢时可增加此值，例如 3000。
+# 人脸匹配解锁前，要求用户睁眼正对摄像头。
+require_attention = false
+# 休眠恢复后的首次解锁延迟指定毫秒数，让显示器先恢复，避免黑屏时解锁。
+# 0 表示禁用。显卡恢复画面较慢时可增大（例如 3000）。
 resume_grace_ms = 0
 # 人脸认证开始前等待的毫秒数。hyprlock 等锁屏器启动后立即认证，
 # 设置延迟可避免手动锁屏后因仍在摄像头前而立即再次解锁。0 表示禁用。
@@ -115,9 +124,9 @@ unlock_gnome_keyring = false
 # sudo gaze-kde-pam enable-login，并安装发行版的 KWallet PAM 软件包。
 unlock_kwallet = false
 
-# 胁迫信号：人脸可见时持续闭上一只或双眼，Gaze 会拒绝匹配并关闭该用户的人脸解锁，
-# 直到使用密码登录或运行 gaze duress --clear。使用下载到 /var/cache/gaze 的
-# 小型本地眼部状态模型。修改此文件后，下次人脸认证即生效。
+# 胁迫信号：人脸出现在画面中时持续闭合一只或双眼，Gaze 会拒绝匹配并禁用
+# 此用户的人脸解锁，直到密码登录（或运行 gaze duress --clear）。
+# 使用下载到 /var/cache/gaze 的本地小型眼部状态模型。编辑此文件后请重启 gazed。
 [duress]
 enabled = false
 # 将眼睛判定为闭合的概率阈值（0.5–0.99）。

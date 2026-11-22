@@ -3,7 +3,13 @@
 
 # Configuration
 
-Gaze is configured with `/etc/gaze/config.toml`.
+Gaze is configured with `/etc/gaze/config.toml`. For first-time setup, run `gaze setup`; configuration tuning is optional.
+
+`gaze config` opens a section menu. Edit only the sections you need, then choose **Review and save**. You can revisit sections or discard the draft. Failed saves leave the draft available for correction. In the GUI, **Everyday** contains camera and lock-screen settings; **Advanced** contains hardware and numerical tuning. GUI changes save automatically after unlocking.
+
+Changing the recognition model, including Medium → High security, requires re-enrollment of existing profiles. Existing captures remain on disk but cannot match with the new model. Use `gaze refine-face default` or **Improve this face**, then test.
+
+Acceleration changes may need `sudo systemctl restart gazed` to load the selected vendor runtime. Verify the effective provider with `gaze doctor --benchmark`; a saved preference can still use CPU fallback.
 
 The defaults work for many setups. Common adjustments include choosing a camera
 source or changing the security level.
@@ -16,7 +22,7 @@ the running daemon keeps its applied configuration if the file is edited or remo
 
 ::: tip Editing config requires admin privileges
 The daemon requires authorization before saving changes. `gaze config` prompts
-for your password through `sudo`, while `gaze config --show` is read-only and
+for your password through PolicyKit, while `gaze config --show` is read-only and
 needs no privileges. The GUI asks for authorization through PolicyKit and uses
 your desktop's password dialog, so make sure the `polkit` package is installed.
 :::
@@ -47,6 +53,7 @@ abort_if_lid_closed = true
 abort_before_first_resume = false
 require_confirmation_lock_screen = false
 require_confirmation_elevation = false
+require_attention = false
 resume_grace_ms = 0
 start_delay_ms = 0
 start_delay_scope = "screen_lock"
@@ -246,7 +253,8 @@ camera outside your list. The list is retried on each new capture, so docking
 and undocking do not require editing the config or restarting `gazed`.
 
 Fallback is only for opening the camera: dark frames, no face, a non-match, or a
-liveness failure do not switch to another source. Existing single-string values
+liveness failure do not switch to another source. To move on when a camera sees
+no face, use [multiple camera systems](#multiple-camera-systems). Existing single-string values
 keep their behavior. An empty list (like `rgb = ""`) disables RGB; omitting the
 key still defaults to `"primary"`.
 
@@ -261,6 +269,58 @@ For lid-closed use, also set `abort_if_lid_closed = false` in `[auth]`; camera
 fallback does not override that authentication policy. `primary` still means
 the first color node, not necessarily the built-in camera; pin the fallback
 explicitly if you need a particular device.
+
+### Multiple camera systems
+
+Convertible laptops such as the Surface Book have a front and a rear camera,
+each with its own RGB and IR sensor. List the extra pairs as
+`[[cameras.fallback]]` entries after the `[cameras]` keys:
+
+```toml
+[cameras]
+rgb = "usb:045e:0990"   # front
+ir = "/dev/video2"
+emitter_enabled = true
+
+[[cameras.fallback]]
+rgb = "usb:045e:0991"   # rear
+ir = "/dev/video6"
+emitter_enabled = true
+```
+
+Authentication starts with the `[cameras]` pair. If it never sees a face, only
+dark frames, or cannot be opened, Gaze releases it and tries the next entry, in
+order. Once a camera system has seen a face, Gaze does not move on: a non-match,
+a liveness failure, or a face that stays badly framed ends the attempt as before,
+so a fallback never gives an impostor extra tries.
+
+- Each entry sets its own `rgb` (a single source or an ordered list), `ir`,
+  `emitter_enabled`, `ir_frame_width`/`ir_frame_height`, and
+  `ir_source_marker`/`ir_source_driver`. None of these are copied from
+  `[cameras]`, so a front RGB camera is never paired with a rear IR camera.
+  Leave `rgb` out for an IR-only entry.
+- `dark_luma_threshold`, `parallel_capture`, `auto_rotate`, and the nonphysical
+  RGB opt-ins come from `[cameras]` and apply to every entry.
+- An entry needs at least one of `rgb` or `ir`. Up to three entries are tried.
+- Each entry adds up to 10 seconds before a scan gives up, and PAM, `gaze test`,
+  and the GUI wait that much longer. A face found on the first pair is matched as
+  quickly as before.
+
+Different sensors can produce different images, especially in IR. Enroll a face
+on each camera system so every one has its own templates:
+
+```bash
+gaze add-face front
+gaze add-face rear --camera 1   # 1 is the first [[cameras.fallback]] entry
+```
+
+`gaze refine-face` takes `--camera` too, and the GUI's Add Face dialog shows a
+Camera choice when fallback systems are configured. Faces from all camera
+systems are matched together, so either camera can unlock.
+
+Fallback systems can only be set in `/etc/gaze/config.toml`. `gaze config set`
+cannot change them, and saving settings from the GUI keeps them. Restart `gazed`
+after editing them. `gaze doctor` checks every camera system.
 
 ### Dark-frame rejection
 
@@ -504,6 +564,7 @@ abort_if_lid_closed = true
 abort_before_first_resume = false
 require_confirmation_lock_screen = false
 require_confirmation_elevation = false
+require_attention = false
 resume_grace_ms = 0
 start_delay_ms = 0
 start_delay_scope = "screen_lock"
@@ -516,6 +577,8 @@ Aborting face authentication when you type a password is not a key in this file.
 `abort_before_first_resume` refuses face authentication until the machine has suspended and woken at least once, so the first authentication of a boot always falls through to the password. On GNOME that password is what unlocks the login keyring; authenticating with your face instead leaves the keyring locked and GNOME asks for the password again a moment later. With this enabled you type the password once at the GDM login and then unlock with your face for the rest of the session.
 
 Gaze arms the gate from logind's `PrepareForSleep` signal, the same signal `resume_grace_ms` uses, so hibernation counts as well as suspend. The state lives in `gazed` and is not persisted: if the daemon restarts, the next authentication is blocked again until the next resume. It applies to every surface, including `gaze test` and the GUI's test button, so a test right after boot will report a failure until you suspend once.
+
+`require_attention` holds a face match until you face the camera with both eyes open for several frames in a row, so face authentication does not pass while you are looking away or asleep. It checks head pose and the duress eye-state model, not where your pupils point. The eye model loads even with `[duress]` off; if it cannot load, face authentication fails closed and falls through to the password. The setting is only read from `config.toml`, and saving from the GUI keeps it.
 
 `require_confirmation_lock_screen` and `require_confirmation_elevation` each add a manual intent check step after a successful face match, and can be toggled independently. `require_confirmation_lock_screen` covers the lock screen and login/greeter screens (e.g. GDM); `require_confirmation_elevation` covers elevated auth prompts (`sudo`, `su`, `doas`, `run0`, polkit, `pkexec`). Both PAM modules honor them.
 
@@ -823,7 +886,7 @@ The duress table lives only in `/etc/gaze/config.toml`. The GUI and `gaze config
 Limits to be aware of:
 
 - Close your eye before the camera sees you. Any matched frame with both eyes open unlocks as usual.
-- Another non-face login method, such as a fingerprint, also clears the lock.
+- Fingerprint and other password-free logins do not clear the lock; use the password or `gaze duress --clear` as described above.
 - The classifier works on RGB and IR frames, but it is not perfect. Test it with `gaze test` before relying on it: a held wink should end in a lockout, and `gaze duress --clear` resets it. Running `gazed` with `RUST_LOG=debug` logs the per-eye scores.
 
 ## Recommended tuning workflow

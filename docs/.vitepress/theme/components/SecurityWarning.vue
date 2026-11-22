@@ -4,11 +4,10 @@
 <template>
   <div class="container">
       <div class="security-warning" role="alert">
-        <div class="security-warning-title">Security & Liveness</div>
+        <div class="security-warning-title">安全与活体检测</div>
         <p>
-          Gaze uses local liveness checks and supports infrared (IR) cameras to help protect
-          against spoofing. If you use Gaze in a high-security environment, we recommend
-          keeping your usual system authentication available as a fallback.
+          Gaze 在本机进行活体检测，并支持红外（IR）摄像头，以降低伪装冒用风险。
+          在高安全要求的环境中使用时，请保留常规系统认证方式作为备用。
         </p>
       </div>
   </div>

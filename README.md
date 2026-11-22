@@ -26,15 +26,15 @@ Gaze 在本机完成 RGB／红外人脸识别与活体检测，通过 PAM 接入
 
 本仓库基于 [GunduLabs/gaze](https://github.com/GunduLabs/gaze)，持续合并上游，并保留中文界面、PAM 提示及 KRDP 登录兼容逻辑。KRDP 6.7.5 画面冻结修复的历史构建说明见 [docs/krdp-fix.md](docs/krdp-fix.md)。
 
-当前源码版本为 **0.5.3**，采用中文分支独立版本号；上游版本仅作为同步信息记录。源码已同步至上游 `3223094`（2026-11-13），包含 libcamera 与桥接摄像头支持、认证失败诊断、oo7 密钥环及 Omarchy 4.5 兼容更新，并保留 PAM 认证、后台错误、安装器和软件包提示的中文；GUI、CLI 与桌面集成均使用简体中文。窗口尺寸、控件排列和终端界面结构沿用上游；中文表格按终端显示宽度对齐。命令名称、选项、配置键值和 JSON 字段保持兼容。
+当前源码版本为 **0.5.4**，采用中文分支独立版本号；上游版本仅作为同步信息记录。源码已同步至上游 `d0e4622`（2026-11-22），新增首次设置向导、可选注视检测、摄像头组合回退，以及 GUI、GNOME、KDE 的录入和错误处理改进，并保留 PAM 认证、后台错误、安装器和软件包提示的中文；GUI、CLI 与桌面集成均使用简体中文。窗口尺寸、控件排列和终端界面结构沿用上游；中文表格按终端显示宽度对齐。命令名称、选项、配置键值和 JSON 字段保持兼容。
 
-本版变更详见 [v0.5.3 中文发行版说明](docs/releases/v0.5.3.md)。
+本版变更详见 [v0.5.4 中文发行版说明](docs/releases/v0.5.4.md)。
 
 ## 下载与安装
 
 [最新发行版](https://github.com/zxaBinbina/gaze-zh/releases/latest) · [中文安装指南](https://zxabinbina.cc.cd/projects/gaze/guide/installation)
 
-本版为 **v0.5.3**：软件版本 `0.5.3`、安装包修订号 `1`。附件按发行版和 CPU 架构整理为八个压缩包，另附 `SHA256SUMS`；每份包含核心程序、GUI、KDE、GNOME、Cinnamon、Hyprlock、Omarchy 七个独立组件。
+本版为 **v0.5.4**：软件版本 `0.5.4`、安装包修订号 `1`。附件按发行版和 CPU 架构整理为八个压缩包，另附 `SHA256SUMS`；每份包含核心程序、GUI、KDE、GNOME、Cinnamon、Hyprlock、Omarchy 七个独立组件。
 
 | 附件标识                     | 构建环境 / 架构                           | 内含格式       |
 | ---------------------------- | ----------------------------------------- | -------------- |
@@ -53,7 +53,7 @@ ARM64（AArch64）与 x86_64（amd64）分别打包，不混放在同一下载�
 
 `gaze-zh` 核心包与 GUI、桌面集成的文件不重复。标准发行包保留中文提示与 KRDP 登录兼容逻辑，但不包含 Fedora 44 专用的 KRDP 6.7.5 私有修复库；该历史合并包的构建方式单列于 [KRDP 文档](docs/krdp-fix.md)。
 
-中文版采用独立版本号，可从 `0.5.2-1` 升级至 `0.5.3-1`；升级无需清空人脸数据。[本版更新说明](docs/releases/v0.5.3.md)
+中文版采用独立版本号，可从 `0.5.3-1` 升级至 `0.5.4-1`；升级无需清空人脸数据。[本版更新说明](docs/releases/v0.5.4.md)
 
 上游安装器和上游软件源提供原版 Gaze。安装中文版请使用上述下载入口或以下命令。
 
@@ -68,9 +68,9 @@ curl -fsSL https://zxabinbina.cc.cd/projects/gaze/install.sh | sh
 安装后重启一次，使 PAM 和桌面集成生效，然后在本地终端运行：
 
 ```bash
-gaze doctor                 # 检查安装、配置和设备
-gaze add-face default       # 按提示录入人脸
-gaze test                   # 测试人脸验证并显示各光谱的匹配指标
+gaze setup                  # 检查摄像头、录入、测试并检查桌面集成
+gaze doctor                 # 检查需要处理的问题；--verbose 显示全部检查
+gaze test --verbose         # 测试识别并显示各光谱的匹配指标
 ```
 
 录入和修改设置时会请求管理员授权。命令默认操作发起调用的用户；需要指定用户时加 `--user <用户名>`。
@@ -104,6 +104,7 @@ x86_64 推理需要支持 AVX2 的 CPU；ARM64 不使用 AVX2 检查。摄像头
 
 | 命令                                      | 用途                                       |
 | ----------------------------------------- | ------------------------------------------ |
+| `gaze setup`                            | 首次设置向导，检查摄像头、录入、测试和桌面集成 |
 | `gaze --help`                             | 查看命令帮助；各子命令也支持 `--help`      |
 | `gaze list-faces`                         | 列出已录入人脸及 RGB / IR 采集情况         |
 | `gaze refine-face <名称>`                 | 补充采集，改善识别效果                     |
@@ -120,7 +121,7 @@ x86_64 推理需要支持 AVX2 的 CPU；ARM64 不使用 AVX2 检查。摄像头
 | `gaze keyring` / `gaze keyring --kwallet` | 录入对应密钥环或钱包凭据                   |
 | `gaze uninstall --dry-run`                | 预览卸载计划                               |
 
-`gaze test` 的退出码：`0` 表示人脸验证成功，`1` 表示失败，`130` 表示用户取消。旧命令 `gaze auth` 和 `--verbose` 选项继续兼容，默认已显示详细指标；`--verbose` 和 `--silent` 互斥。此命令不授予权限，也不测试 PAM 集成；已启用的胁迫检测可能触发持续锁定。JSON 字段、配置文件格式及补全命令不因界面汉化而改变。
+`gaze test` 的退出码：`0` 表示人脸验证成功，`1` 表示失败，`130` 表示用户取消。旧命令 `gaze auth` 继续兼容；默认显示简洁结果，用 `--verbose` 查看详细指标；`--verbose` 和 `--silent` 互斥。此命令不授予权限，也不测试 PAM 集成；已启用的胁迫检测可能触发持续锁定。JSON 字段、配置文件格式及补全命令不因界面汉化而改变。
 
 完整说明：[CLI](https://zxabinbina.cc.cd/projects/gaze/guide/cli) · [GUI](https://zxabinbina.cc.cd/projects/gaze/guide/gui) · [配置参考](https://zxabinbina.cc.cd/projects/gaze/guide/configuration)
 

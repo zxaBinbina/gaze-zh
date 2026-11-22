@@ -167,10 +167,12 @@ pub(super) fn config_findings(config: &Config) -> Vec<Check> {
         );
     }
     if let Err(err) = config.cameras.validate() {
-        error(
-            err.to_string(),
-            "将 cameras.parallel_capture 设为 never、auto 或 always。",
-        );
+        let fix = if format!("{err:#}").contains("cameras.fallback") {
+            "请为每个 [[cameras.fallback]] 条目设置独立的 rgb 或 ir 摄像头，最多三个条目。"
+        } else {
+            "将 cameras.parallel_capture 设为 never、auto 或 always。"
+        };
+        error(format!("{err:#}"), fix);
     }
     if let Err(err) = config.inference.validate() {
         let fix = "在 [inference] 中使用 cpu/cpu、auto/npu、openvino/cpu、openvino/gpu、openvino/npu 或 vitis/npu。";
@@ -185,7 +187,8 @@ pub(super) fn config_findings(config: &Config) -> Vec<Check> {
             "将 cameras.rgb 设为 \"primary\"，或配置红外摄像头。",
         );
     }
-    for rgb in rgb.iter() {
+    let systems = config.cameras.systems();
+    for rgb in systems.iter().flat_map(|system| system.rgb.iter()) {
         if let Some(index) = rgb.strip_prefix("/dev/video") {
             if index.is_empty() || !index.chars().all(|c| c.is_ascii_digit()) {
                 error(
@@ -265,7 +268,20 @@ pub(super) fn config_findings(config: &Config) -> Vec<Check> {
             fix: Some("配置 cameras.ir 或禁用 emitter_enabled。".to_string()),
         });
     }
-    if config.cameras.parallel_capture() == "always" && !ir.is_empty() {
+    for (index, system) in config.cameras.fallback.iter().enumerate() {
+        if system.emitter_enabled && system.ir.trim().is_empty() {
+            findings.push(Check {
+                level: Level::Warning,
+                name: "红外发射器",
+                message: format!(
+                    "cameras.fallback 条目 {} 启用了 emitter_enabled，但未设置 ir 摄像头",
+                    index + 1
+                ),
+                fix: Some("请在该条目中设置 ir，或禁用 emitter_enabled。".to_string()),
+            });
+        }
+    }
+    if config.cameras.parallel_capture() == "always" && config.cameras.has_ir() {
         findings.push(Check {
             level: Level::Warning,
             name: "并行采集",
@@ -313,7 +329,7 @@ pub(super) fn config_findings(config: &Config) -> Vec<Check> {
             message: "liveness.ir_model 为 true，但活体检测已禁用，因此不会运行".to_string(),
             fix: Some("启用 [liveness] 或移除 ir_model。".to_string()),
         });
-    } else if config.liveness.ir_model && ir.is_empty() {
+    } else if config.liveness.ir_model && !config.cameras.has_ir() {
         findings.push(Check {
             level: Level::Warning,
             name: "红外防伪模型",

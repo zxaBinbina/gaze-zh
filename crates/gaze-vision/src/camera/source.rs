@@ -1117,6 +1117,7 @@ mod tests {
             dark_luma_threshold: 30,
             parallel_capture: "never".to_string(),
             auto_rotate: true,
+            fallback: Vec::new(),
         };
         let sources = resolve_configured_sources(&cameras);
         assert_eq!(sources.rgb, "primary".into());
@@ -1171,6 +1172,7 @@ mod tests {
             dark_luma_threshold: 30,
             parallel_capture: "never".to_string(),
             auto_rotate: true,
+            fallback: Vec::new(),
         }
     }
 
@@ -1277,6 +1279,7 @@ mod tests {
             dark_luma_threshold: 30,
             parallel_capture: "never".to_string(),
             auto_rotate: true,
+            fallback: Vec::new(),
         };
         let sources = resolve_configured_sources(&cameras);
         assert_eq!(sources.rgb, "primary".into());
@@ -1299,6 +1302,7 @@ mod tests {
             dark_luma_threshold: 30,
             parallel_capture: "never".to_string(),
             auto_rotate: true,
+            fallback: Vec::new(),
         };
         assert_eq!(
             preferred_capture_source(&cameras),
@@ -1450,6 +1454,7 @@ mod tests {
             dark_luma_threshold: 30,
             parallel_capture: "auto".to_string(),
             auto_rotate: true,
+            fallback: Vec::new(),
         };
         let sources = resolve_configured_sources(&cameras);
         assert_eq!(sources.ir, "pipewiresrc target-object=device-name");

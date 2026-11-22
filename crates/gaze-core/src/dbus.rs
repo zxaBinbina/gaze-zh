@@ -120,6 +120,7 @@ impl From<DbusAuthConfig> for AuthConfig {
             abort_before_first_resume: auth.abort_before_first_resume,
             require_confirmation_lock_screen: auth.require_confirmation_lock_screen,
             require_confirmation_elevation: auth.require_confirmation_elevation,
+            require_attention: false,
             resume_grace_ms: auth.resume_grace_ms,
             start_delay_ms: auth.start_delay_ms,
             start_delay_scope: auth.start_delay_scope,
@@ -227,6 +228,7 @@ impl From<DbusCameraConfig> for CameraConfig {
             dark_luma_threshold: cameras.dark_luma_threshold,
             parallel_capture: cameras.parallel_capture,
             auto_rotate: true,
+            fallback: Vec::new(),
         }
     }
 }
@@ -447,7 +449,7 @@ pub fn dbus_is_file_not_found(err: &zbus::Error) -> bool {
 
 pub fn dbus_is_not_activatable(err: &zbus::Error) -> bool {
     let s = err.to_string();
-    s.contains("not activatable") || s.contains("ServiceUnknown")
+    s.contains("not activatable") || s.contains("ServiceUnknown") || s.contains("NameHasNoOwner")
 }
 
 pub fn dbus_is_unknown_method(err: &zbus::Error) -> bool {
@@ -554,6 +556,10 @@ pub async fn gazed_unit_state_on(connection: &zbus::Connection) -> anyhow::Resul
 /// Verification client deadline; the daemon expires first.
 /// Reaching this deadline means it stopped answering, not that it rejected a face.
 pub const VERIFY_CLIENT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(20);
+
+pub fn verify_client_timeout(cameras: &CameraConfig) -> std::time::Duration {
+    VERIFY_CLIENT_TIMEOUT + cameras.fallback_budget()
+}
 
 pub async fn connect_gaze() -> zbus::Result<GazeProxy<'static>> {
     // PAM hosts must never interpret caller-controlled bus addresses, including unixexec.
@@ -969,10 +975,12 @@ pub trait Gaze {
     ) -> zbus::Result<()>;
 
     async fn enroll_start(&self, face_name: &str) -> zbus::Result<()>;
+    async fn enroll_start_on(&self, face_name: &str, camera_system: u32) -> zbus::Result<()>;
     async fn enroll_stop(&self) -> zbus::Result<()>;
 
     async fn list_faces(&self, username: &str) -> zbus::Result<Vec<(String, u32, bool, bool)>>;
     async fn has_enrolled_faces(&self, username: &str) -> zbus::Result<bool>;
+    async fn credential_status(&self, username: &str) -> zbus::Result<(bool, bool)>;
     async fn is_camera_available(&self) -> zbus::Result<bool>;
     async fn benchmark(&self) -> zbus::Result<Vec<BenchmarkResult>>;
     async fn delete_face(&self, username: &str, face_name: &str) -> zbus::Result<bool>;

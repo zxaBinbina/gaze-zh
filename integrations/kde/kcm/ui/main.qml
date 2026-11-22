@@ -13,6 +13,10 @@ KCM.ScrollViewKCM {
     readonly property bool enrolling: kcm.enrollState === "running"
     readonly property bool testing: kcm.testState === "running"
 
+    function spectrumConfigured(key) {
+        return !kcm.settings.loaded || String(kcm.settings.values[key] ?? "").trim().length > 0;
+    }
+
     title: i18n("已录入的人脸")
     implicitWidth: Kirigami.Units.gridUnit * 36
     implicitHeight: Kirigami.Units.gridUnit * 30
@@ -74,7 +78,7 @@ KCM.ScrollViewKCM {
                 case "running": return i18n("请看向摄像头…");
                 case "success": return i18n("人脸识别成功");
                 case "timeout": return i18n("测试超时，未检测到人脸");
-                default: return i18n("未识别人脸");
+                default: return kcm.testMessage.length > 0 ? kcm.testMessage : i18n("未识别人脸");
             }
         }
     }
@@ -120,19 +124,21 @@ KCM.ScrollViewKCM {
                 }
                 Repeater {
                     model: [
-                        { label: i18n("RGB"), on: row.rgb },
-                        { label: i18n("IR"), on: row.ir }
+                        { label: i18n("RGB"), on: row.rgb, missing: !row.rgb && root.spectrumConfigured("cameras.rgb") },
+                        { label: i18n("IR"), on: row.ir, missing: !row.ir && root.spectrumConfigured("cameras.ir") }
                     ]
                     delegate: QQC2.Label {
                         required property var modelData
                         text: modelData.label
                         font.pointSize: Kirigami.Theme.smallFont.pointSize
                         font.bold: modelData.on
-                        color: modelData.on ? Kirigami.Theme.highlightedTextColor : Kirigami.Theme.disabledTextColor
+                        color: modelData.on || modelData.missing ? Kirigami.Theme.highlightedTextColor : Kirigami.Theme.disabledTextColor
                         padding: Kirigami.Units.smallSpacing
                         background: Rectangle {
                             radius: Kirigami.Units.cornerRadius
-                            color: modelData.on ? Kirigami.Theme.positiveTextColor : Kirigami.Theme.alternateBackgroundColor
+                            color: modelData.on ? Kirigami.Theme.positiveTextColor
+                                : modelData.missing ? Kirigami.Theme.neutralTextColor
+                                : Kirigami.Theme.alternateBackgroundColor
                         }
                     }
                 }
@@ -295,7 +301,7 @@ KCM.ScrollViewKCM {
                     visible: kcm.enrollState === "running"
                     icon.name: "dialog-cancel"
                     text: i18n("取消")
-                    onClicked: enrollDialog.close()
+                    onClicked: cancelEnrollDialog.open()
                 }
                 QQC2.Button {
                     visible: kcm.enrollState === "done" || kcm.enrollState === "failed"
@@ -306,6 +312,28 @@ KCM.ScrollViewKCM {
                 }
             }
         }
+    }
+
+    Kirigami.PromptDialog {
+        id: cancelEnrollDialog
+        title: i18n("取消录入？")
+        subtitle: i18n("这将丢弃尚未完成的采集样本。")
+        standardButtons: Kirigami.Dialog.NoButton
+        customFooterActions: [
+            Kirigami.Action {
+                text: i18n("继续")
+                icon.name: "media-playback-start"
+                onTriggered: cancelEnrollDialog.close()
+            },
+            Kirigami.Action {
+                text: i18n("放弃")
+                icon.name: "edit-delete"
+                onTriggered: {
+                    cancelEnrollDialog.close();
+                    enrollDialog.close();
+                }
+            }
+        ]
     }
 
     Kirigami.PromptDialog {

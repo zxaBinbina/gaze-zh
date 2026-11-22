@@ -3,7 +3,7 @@
 
 # Linux build environment for hosts that lack the platform APIs Gaze needs (V4L2, PAM, TPM2,
 # polkit, GTK4). Mirrors the CD workflow toolchain and is driven by `just docker <target>`.
-FROM ubuntu:26.04@sha256:065aa8626841f16057b78b027b464cd59c4fac36c204c72dcbf48d66f5fa8a96
+FROM ubuntu:26.04@sha256:d66b366dac61b575bee2aef07e9c26e8070096fbe84a3d4d3eb0da069b5d76db
 
 # amd64 | arm64. Auto-populated by buildkit; on the legacy builder it is empty,
 # so the RUN steps below fall back to `dpkg --print-architecture`.
@@ -19,6 +19,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         git \
         ca-certificates \
         curl \
+        unzip \
         build-essential \
         dpkg-dev \
         clang \
@@ -40,6 +41,14 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         libgtk-4-dev \
         libadwaita-1-dev \
         libssl-dev \
+        cmake \
+        extra-cmake-modules \
+        qt6-base-dev \
+        qt6-declarative-dev \
+        libkf6coreaddons-dev \
+        libkf6i18n-dev \
+        libkf6kcmutils-dev \
+        libkirigami-dev \
         gnupg \
         devscripts \
         gettext-base \

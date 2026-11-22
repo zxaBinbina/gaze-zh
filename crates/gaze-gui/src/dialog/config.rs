@@ -118,6 +118,7 @@ fn set_inference_device_row_visible(
 }
 
 type SharedProxy = Rc<RefCell<Option<Rc<GazeProxy<'static>>>>>;
+type ReloadCallback = Rc<dyn Fn()>;
 
 async fn shared_proxy(cell: &SharedProxy) -> zbus::Result<Rc<GazeProxy<'static>>> {
     if let Some(proxy) = cell.borrow().clone() {
@@ -308,8 +309,9 @@ fn populate_config_rows(cfg: &Config, rows: &ConfigRows, choices: CameraChoices<
     rows.inference_device
         .set_selected(cfg.inference.device_index());
     if cfg.inference.is_representable() {
-        rows.inference_execution_provider
-            .set_subtitle("CPU、自动选择 NPU、Intel OpenVINO 或 AMD Ryzen AI");
+        rows.inference_execution_provider.set_subtitle(
+            "可选 CPU、自动 NPU、Intel OpenVINO 或 AMD Ryzen AI。更改后请重启 Gaze 后台服务",
+        );
     } else {
         rows.inference_execution_provider.set_subtitle(&format!(
             "当前配置为 {}/{}，此版本无法显示",
@@ -409,12 +411,17 @@ fn populate_config_rows(cfg: &Config, rows: &ConfigRows, choices: CameraChoices<
     );
 }
 
+thread_local! {
+    static CAMERA_SCAN_RUNNING: Cell<bool> = const { Cell::new(false) };
+}
+
 pub fn show_config_dialog(
     parent: &libadwaita::ApplicationWindow,
     overlay: &libadwaita::ToastOverlay,
 ) {
-    let config = Rc::new(RefCell::new(Config::default()));
-
+    if CAMERA_SCAN_RUNNING.replace(true) {
+        return;
+    }
     let window = libadwaita::Window::builder()
         .transient_for(parent)
         .modal(true)
@@ -422,6 +429,63 @@ pub fn show_config_dialog(
         .default_width(600)
         .default_height(700)
         .build();
+    let loading = libadwaita::StatusPage::builder()
+        .title("正在查找摄像头…")
+        .description("摄像头扫描完成后将显示设置。")
+        .build();
+    let toolbar = libadwaita::ToolbarView::new();
+    toolbar.add_top_bar(&libadwaita::HeaderBar::new());
+    toolbar.set_content(Some(&loading));
+    window.set_content(Some(&toolbar));
+    window.present();
+    glib::MainContext::default().spawn_local(glib::clone!(
+        #[strong]
+        window,
+        #[weak]
+        parent,
+        #[weak]
+        overlay,
+        async move {
+            let scan = gtk4::gio::spawn_blocking(|| {
+                let cameras = gaze_vision::camera::rgb_choices().unwrap_or_else(|_| {
+                    vec![
+                        ("主摄像头".to_string(), DEFAULT_RGB_CAMERA.to_string()),
+                        (
+                            gaze_vision::camera::RGB_NONE_DISPLAY_NAME.to_string(),
+                            String::new(),
+                        ),
+                    ]
+                });
+                (cameras, gaze_vision::camera::ir_choices())
+            })
+            .await;
+            CAMERA_SCAN_RUNNING.set(false);
+            if !window.is_visible() {
+                return;
+            }
+            match scan {
+                Ok((cameras, ir_options)) => {
+                    build_config_dialog(window, &overlay, cameras, ir_options);
+                }
+                Err(_) => {
+                    window.close();
+                    crate::window::show_error(&parent, "无法列出摄像头", "请关闭其他使用摄像头的应用，再打开设置。若问题仍存在，请运行 gaze doctor。");
+                }
+            }
+        }
+    ));
+}
+
+fn build_config_dialog(
+    window: libadwaita::Window,
+    overlay: &libadwaita::ToastOverlay,
+    cameras: Vec<(String, String)>,
+    ir_options: Vec<(String, String)>,
+) {
+    let config = Rc::new(RefCell::new(Config::default()));
+
+    let parent_overlay = overlay.clone();
+    let overlay = libadwaita::ToastOverlay::new();
 
     let toolbar_view = libadwaita::ToolbarView::new();
     let header_bar = libadwaita::HeaderBar::new();
@@ -436,9 +500,23 @@ pub fn show_config_dialog(
         .build();
 
     let page = libadwaita::PreferencesPage::new();
-    scrolled.set_child(Some(&page));
+    let basic_page = libadwaita::PreferencesPage::new();
+    let pages = gtk4::Stack::new();
+    pages.add_titled(&basic_page, Some("everyday"), "常用");
+    pages.add_titled(&page, Some("advanced"), "高级");
+    let switcher = gtk4::StackSwitcher::new();
+    switcher.set_stack(Some(&pages));
+    header_bar.set_title_widget(Some(&switcher));
+    scrolled.set_child(Some(&pages));
+    let save_status = gtk4::Label::new(Some("解锁后，更改会自动保存。"));
+    save_status.set_wrap(true);
+    save_status.set_selectable(true);
+    save_status.set_margin_start(12);
+    save_status.set_margin_end(12);
+    toolbar_view.add_top_bar(&save_status);
     toolbar_view.set_content(Some(&scrolled));
-    window.set_content(Some(&toolbar_view));
+    overlay.set_child(Some(&toolbar_view));
+    window.set_content(Some(&overlay));
 
     scrolled.set_sensitive(false);
     banner.set_revealed(true);
@@ -449,7 +527,9 @@ pub fn show_config_dialog(
 
     let level_row = libadwaita::ComboRow::new();
     level_row.set_title("安全级别");
-    level_row.set_subtitle("调整速度与安全性的平衡");
+    level_row.set_subtitle(
+        "推荐中等安全级别。更改识别模型后需要重新录入已有档案。自定义选项位于高级设置中",
+    );
     let level_model = gtk4::StringList::new(&SECURITY_LEVEL_LABELS);
     level_row.set_model(Some(&level_model));
     security_group.add(&level_row);
@@ -490,8 +570,9 @@ pub fn show_config_dialog(
 
     let inference_execution_provider_row = libadwaita::ComboRow::new();
     inference_execution_provider_row.set_title("推理执行后端");
-    inference_execution_provider_row
-        .set_subtitle("CPU、自动选择 NPU、Intel OpenVINO 或 AMD Ryzen AI");
+    inference_execution_provider_row.set_subtitle(
+        "可选 CPU、自动 NPU、Intel OpenVINO 或 AMD Ryzen AI。更改后请重启 Gaze 后台服务",
+    );
     let inference_execution_provider_model =
         gtk4::StringList::new(&INFERENCE_EXECUTION_PROVIDER_LABELS);
     inference_execution_provider_row.set_model(Some(&inference_execution_provider_model));
@@ -504,15 +585,6 @@ pub fn show_config_dialog(
     inference_device_row.set_model(Some(&inference_device_model));
     hardware_group.add(&inference_device_row);
 
-    let cameras = gaze_vision::camera::rgb_choices().unwrap_or_else(|_| {
-        vec![
-            ("主摄像头".to_string(), DEFAULT_RGB_CAMERA.to_string()),
-            (
-                gaze_vision::camera::RGB_NONE_DISPLAY_NAME.to_string(),
-                String::new(),
-            ),
-        ]
-    });
     let cam_names = cameras.iter().map(|(n, _)| n.clone()).collect::<Vec<_>>();
 
     let camera_row = libadwaita::ComboRow::new();
@@ -522,7 +594,6 @@ pub fn show_config_dialog(
     camera_row.set_model(Some(&cam_model));
     hardware_group.add(&camera_row);
 
-    let ir_options = gaze_vision::camera::ir_choices();
     let ir_names = ir_options
         .iter()
         .map(|(n, _)| n.clone())
@@ -601,7 +672,7 @@ pub fn show_config_dialog(
 
     let liveness_enabled_row = libadwaita::ActionRow::new();
     liveness_enabled_row.set_title("启用活体防伪");
-    liveness_enabled_row.set_subtitle("分析人脸深度与反射特征，防止照片冒用");
+    liveness_enabled_row.set_subtitle("检查摄像头画面与自然动作，识别照片或屏幕伪装");
     let liveness_enabled_switch = gtk4::Switch::new();
     liveness_enabled_switch.set_valign(gtk4::Align::Center);
     liveness_enabled_row.add_suffix(&liveness_enabled_switch);
@@ -621,7 +692,7 @@ pub fn show_config_dialog(
         libadwaita::SpinRow::with_range(MIN_LIVENESS_MAX_SECONDS, MAX_LIVENESS_MAX_SECONDS, 0.1);
     liveness_max_seconds_row.set_digits(1);
     liveness_max_seconds_row.set_title("活体检测最长时长");
-    liveness_max_seconds_row.set_subtitle("活体检测最多分析的秒数");
+    liveness_max_seconds_row.set_subtitle("每组摄像头用于有效人脸检测的时间，超时后改用密码");
     liveness_group.add(&liveness_max_seconds_row);
 
     let auth_group = libadwaita::PreferencesGroup::new();
@@ -654,7 +725,8 @@ pub fn show_config_dialog(
 
     let require_confirm_lock_screen_row = libadwaita::ActionRow::new();
     require_confirm_lock_screen_row.set_title("锁屏认证需确认");
-    require_confirm_lock_screen_row.set_subtitle("锁屏或登录界面匹配人脸后，需按回车或点击确定");
+    require_confirm_lock_screen_row
+        .set_subtitle("在支持的界面中，匹配后需确认。在 KDE 锁屏或登录界面，此设置会改用密码认证");
     let require_confirm_lock_screen_switch = gtk4::Switch::new();
     require_confirm_lock_screen_switch.set_valign(gtk4::Align::Center);
     require_confirm_lock_screen_row.add_suffix(&require_confirm_lock_screen_switch);
@@ -678,7 +750,8 @@ pub fn show_config_dialog(
     let start_delay_row = libadwaita::SpinRow::with_range(0.0, 10000.0, 500.0);
     start_delay_row.set_digits(0);
     start_delay_row.set_title("启动延迟（毫秒）");
-    start_delay_row.set_subtitle("人脸认证开始前的等待时间");
+    start_delay_row
+        .set_subtitle("在 KDE 或 hyprlock 中可设为 3000–5000 毫秒，以便锁屏后离开摄像头");
     auth_group.add(&start_delay_row);
 
     let start_delay_scope_row = libadwaita::ComboRow::new();
@@ -712,7 +785,7 @@ pub fn show_config_dialog(
     unlock_gnome_keyring_row.set_visible(false);
     unlock_gnome_keyring_row.set_title("解锁 GNOME 密钥环");
     unlock_gnome_keyring_row
-        .set_subtitle("在通过活体检测的 GDM 或 greetd 人脸登录后使用已录入的密码");
+        .set_subtitle("在通过活体检测的 GDM 或 greetd 人脸登录后使用已录入的密码。需要活体检测和模板加密，启用期间会保持两者开启");
     let unlock_gnome_keyring_switch = gtk4::Switch::new();
     unlock_gnome_keyring_switch.set_valign(gtk4::Align::Center);
     unlock_gnome_keyring_row.add_suffix(&unlock_gnome_keyring_switch);
@@ -721,13 +794,44 @@ pub fn show_config_dialog(
     let unlock_kwallet_row = libadwaita::ActionRow::new();
     unlock_kwallet_row.set_visible(false);
     unlock_kwallet_row.set_title("解锁 KWallet");
-    unlock_kwallet_row.set_subtitle(
-        "在通过活体检测的 KDE 人脸登录后使用已录入的密码；运行 gaze keyring --kwallet 录入",
-    );
+    unlock_kwallet_row.set_subtitle("在通过活体检测的 KDE 登录后使用已录入的密码；用 gaze keyring --kwallet 录入。需要活体检测和模板加密，启用期间会保持两者开启");
     let unlock_kwallet_switch = gtk4::Switch::new();
     unlock_kwallet_switch.set_valign(gtk4::Align::Center);
     unlock_kwallet_row.add_suffix(&unlock_kwallet_switch);
     storage_group.add(&unlock_kwallet_row);
+
+    for (row, switch, command) in [
+        (
+            &unlock_gnome_keyring_row,
+            &unlock_gnome_keyring_switch,
+            "gaze keyring",
+        ),
+        (
+            &unlock_kwallet_row,
+            &unlock_kwallet_switch,
+            "gaze keyring --kwallet",
+        ),
+    ] {
+        let setup = gtk4::Button::with_label("设置密码…");
+        setup.set_valign(gtk4::Align::Center);
+        switch
+            .bind_property("active", &setup, "sensitive")
+            .sync_create()
+            .build();
+        row.add_suffix(&setup);
+        setup.connect_clicked(glib::clone!(#[weak] window, move |_| {
+            let dialog = libadwaita::MessageDialog::builder().transient_for(&window)
+                .heading("完成密码解锁设置")
+                .body("开关用于启用此功能。请以桌面用户身份在终端中录入密码，再检查登录集成。密码保存在本机，由 TPM 保护。").build();
+            let steps = gtk4::Label::new(Some(&format!("1. 等待设置显示“已保存”。\n2. 运行：{command}\n3. 运行：gaze doctor\n4. 重新打开设置以刷新密码状态。")));
+            steps.set_wrap(true);
+            steps.set_selectable(true);
+            dialog.set_extra_child(Some(&steps));
+            dialog.add_response("close", "关闭");
+            dialog.set_close_response("close");
+            dialog.present();
+        }));
+    }
 
     liveness_enabled_switch.connect_active_notify(glib::clone!(
         #[weak]
@@ -775,15 +879,67 @@ pub fn show_config_dialog(
     let camera_touched = Rc::new(Cell::new(false));
     let ir_touched = Rc::new(Cell::new(false));
     let proxy_cell: SharedProxy = Rc::new(RefCell::new(None));
+    let basic_cameras = libadwaita::PreferencesGroup::new();
+    basic_cameras.set_title("摄像头");
+    basic_cameras.set_description(Some("请选择摄像头，再使用“录入人脸”预览并检查画面。"));
+    for row in [&camera_row, &ir_row] {
+        hardware_group.remove(row);
+        basic_cameras.add(row);
+    }
+    basic_page.add(&basic_cameras);
+    let basic_security = libadwaita::PreferencesGroup::new();
+    basic_security.set_title("识别");
+    security_group.remove(&level_row);
+    basic_security.add(&level_row);
+    liveness_group.remove(&liveness_enabled_row);
+    basic_security.add(&liveness_enabled_row);
+    basic_page.add(&basic_security);
+    let basic_auth = libadwaita::PreferencesGroup::new();
+    basic_auth.set_title("锁屏与密码提示");
+    for row in [
+        &require_confirm_lock_screen_row,
+        &require_confirm_elevation_row,
+    ] {
+        auth_group.remove(row);
+        basic_auth.add(row);
+    }
+    auth_group.remove(&start_delay_row);
+    basic_auth.add(&start_delay_row);
+    auth_group.remove(&start_delay_scope_row);
+    basic_auth.add(&start_delay_scope_row);
+    basic_page.add(&basic_auth);
+
+    let reload_after_error: Rc<RefCell<Option<ReloadCallback>>> = Rc::new(RefCell::new(None));
     let apply_queue = new_apply_queue(
         Rc::new({
+            let save_status = save_status.clone();
+            let window = window.downgrade();
             let proxy_cell = proxy_cell.clone();
             let keyring_supported = keyring_supported.clone();
             move |cfg: Config| {
+                let save_status = save_status.clone();
+                let window = window.clone();
                 let proxy_cell = proxy_cell.clone();
                 let keyring_supported = keyring_supported.clone();
                 Box::pin(async move {
+                    save_status.set_text("正在准备并保存设置… 模型下载可能需要几分钟。");
                     let proxy = shared_proxy(&proxy_cell).await?;
+                    let before = gaze_core::dbus::load_config_from_daemon(&proxy).await?;
+                    if before.security.recognizer() != cfg.security.recognizer() {
+                        let Some(window) = window.upgrade() else {
+                            anyhow::bail!("已取消识别模型更改；请重新打开设置以确认");
+                        };
+                        let dialog = libadwaita::MessageDialog::builder().transient_for(&window)
+                            .heading("更改后重新录入人脸？")
+                            .body("现有样本无法与新的识别模型匹配，仍会保留在磁盘上。保存后，请用“改善此人脸”为每份使用中的档案采集新样本。").build();
+                        dialog.add_response("cancel", "保留当前模型");
+                        dialog.add_response("change", "更改模型");
+                        dialog.set_default_response(Some("cancel"));
+                        dialog.set_close_response("cancel");
+                        if dialog.choose_future().await != "change" {
+                            anyhow::bail!("已取消模型更改。已恢复当前设置");
+                        }
+                    }
                     let result = if keyring_supported.get() {
                         apply_config_with_keyring_to_daemon(&proxy, &cfg).await
                     } else {
@@ -794,14 +950,41 @@ pub fn show_config_dialog(
                         // restarted would fail every later write too, silently losing each edit.
                         *proxy_cell.borrow_mut() = None;
                     }
+                    if result.is_ok() {
+                        let message = if before.inference.execution_provider
+                            != cfg.inference.execution_provider
+                            || before.inference.device != cfg.inference.device
+                        {
+                            "已保存。请重启 gazed，再运行 gaze doctor --benchmark 验证加速；程序可能仍在使用 CPU 回退。"
+                        } else if before.security.recognizer() != cfg.security.recognizer() {
+                            "已保存。请用“改善此人脸”为每份已有档案重新录入，再测试识别。"
+                        } else {
+                            "已保存。更改已生效。"
+                        };
+                        save_status.set_text(message);
+                    }
                     result
                 }) as ConfigWriteFuture
             }
         }),
         Rc::new({
+            let save_status = save_status.clone();
             let overlay = overlay.clone();
+            let parent_overlay = parent_overlay.clone();
+            let window = window.downgrade();
+            let reload_after_error = reload_after_error.clone();
             move |message: String| {
-                overlay.add_toast(libadwaita::Toast::new(&message));
+                save_status.set_text(&message);
+                let toast = libadwaita::Toast::new(&message);
+                if window.upgrade().is_some_and(|w| w.is_visible()) {
+                    overlay.add_toast(toast);
+                } else {
+                    parent_overlay.add_toast(toast);
+                }
+                let reload = reload_after_error.borrow().clone();
+                if let Some(reload) = reload {
+                    reload();
+                }
             }
         }),
     );
@@ -1222,9 +1405,12 @@ pub fn show_config_dialog(
         rows,
         #[strong]
         apply_queue,
+        #[strong]
+        reload_after_error,
         move |win| {
             commit_focused_spin_row(win, &rows);
             flush_config_apply(&apply_queue);
+            reload_after_error.borrow_mut().take();
             glib::Propagation::Proceed
         }
     ));
@@ -1306,6 +1492,17 @@ pub fn show_config_dialog(
                             keyring_supported.set(supported.gnome || supported.kwallet);
                             unlock_gnome_keyring_row.set_visible(supported.gnome);
                             unlock_kwallet_row.set_visible(supported.kwallet);
+                            if let Ok(proxy) = shared_proxy(&proxy_cell).await {
+                                let user = std::env::var("USER").unwrap_or_default();
+                                let status = proxy.credential_status(&user).await.ok();
+                                for (row, present, command) in [
+                                    (&unlock_gnome_keyring_row, status.map(|s| s.0), "gaze keyring"),
+                                    (&unlock_kwallet_row, status.map(|s| s.1), "gaze keyring --kwallet"),
+                                ] {
+                                    let state = match present { Some(true) => "密码已保存", Some(false) => "尚未录入密码", None => "无法获取密码状态" };
+                                    row.set_subtitle(&format!("{state}。启用后，请在终端中运行 {command} 录入或更换密码。运行 gaze doctor 检查登录集成。需要活体检测和加密。"));
+                                }
+                            }
                             populate_config_rows(
                                 &cfg,
                                 &rows,
@@ -1333,6 +1530,8 @@ pub fn show_config_dialog(
             ));
         }
     ));
+
+    *reload_after_error.borrow_mut() = Some(load_config.clone());
 
     banner.connect_button_clicked(glib::clone!(
         #[strong]
