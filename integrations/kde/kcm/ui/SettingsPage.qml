@@ -22,20 +22,20 @@ KCM.SimpleKCM {
     readonly property bool walletReady: livenessOn && encryptOn
 
     readonly property var levels: [
-        { text: i18n("标准"), value: "standard" },
-        { text: i18n("精确"), value: "accurate" }
+        { text: i18n("Standard"), value: "standard" },
+        { text: i18n("Accurate"), value: "accurate" }
     ]
 
-    title: i18n("设置")
+    title: i18n("Settings")
 
     actions: [
         Kirigami.Action {
-            text: page.advanced ? i18n("常用设置") : i18n("高级设置")
+            text: page.advanced ? i18n("Everyday settings") : i18n("Advanced settings")
             icon.name: "configure"
             onTriggered: page.advanced = !page.advanced
         },
         Kirigami.Action {
-            text: i18n("重启服务")
+            text: i18n("Restart Service")
             icon.name: "view-refresh"
             enabled: kcm.settings.restartState !== "restarting"
             onTriggered: kcm.settings.restartService()
@@ -49,10 +49,10 @@ KCM.SimpleKCM {
             Layout.fillWidth: true
             visible: kcm.settings.loaded && !kcm.settings.unlocked
             type: Kirigami.MessageType.Information
-            text: i18n("设置已锁定")
+            text: i18n("Settings are locked")
             actions: [
                 Kirigami.Action {
-                    text: i18n("解锁…")
+                    text: i18n("Unlock…")
                     icon.name: "unlock"
                     onTriggered: kcm.settings.unlock()
                 }
@@ -62,13 +62,13 @@ KCM.SimpleKCM {
             Layout.fillWidth: true
             visible: ["suggested", "restarting", "done"].includes(kcm.settings.restartState)
             type: kcm.settings.restartState === "done" ? Kirigami.MessageType.Positive : Kirigami.MessageType.Information
-            text: kcm.settings.restartState === "suggested" ? i18n("设置已保存。请重启 Gaze 服务以使用新的推理后端。")
-                : kcm.settings.restartState === "restarting" ? i18n("正在重启 Gaze 服务…")
-                : i18n("Gaze 服务已重启")
+            text: kcm.settings.restartState === "suggested" ? i18n("Settings saved. Restart the Gaze service to use the new inference provider.")
+                : kcm.settings.restartState === "restarting" ? i18n("Restarting the Gaze service…")
+                : i18n("Gaze service restarted")
             actions: [
                 Kirigami.Action {
                     visible: kcm.settings.restartState === "suggested"
-                    text: i18n("重启服务")
+                    text: i18n("Restart Service")
                     icon.name: "view-refresh"
                     onTriggered: kcm.settings.restartService()
                 }
@@ -78,7 +78,7 @@ KCM.SimpleKCM {
             Layout.fillWidth: true
             visible: kcm.settings.restartState === "failed"
             type: Kirigami.MessageType.Error
-            text: i18n("重启 Gaze 服务失败")
+            text: i18n("Restarting the Gaze service failed")
         }
         Kirigami.InlineMessage {
             Layout.fillWidth: true
@@ -87,23 +87,23 @@ KCM.SimpleKCM {
             text: kcm.settings.error
         }
 
-        SectionHeader { text: i18n("安全") }
+        SectionHeader { text: i18n("Security") }
         SettingRow {
-            title: i18n("安全级别")
-            hint: i18n("推荐中等安全级别。更改识别模型后需要为已有档案重新采集")
+            title: i18n("Security level")
+            hint: i18n("Medium is recommended. Changing the recognition model requires new captures for existing profiles")
             OptionCombo {
                 key: "security.level"
                 options: [
-                    { text: i18n("低"), value: "low" },
-                    { text: i18n("中"), value: "medium" },
-                    { text: i18n("高"), value: "high" },
-                    { text: i18n("最高"), value: "maximum" },
-                    { text: i18n("自定义"), value: "custom" }
+                    { text: i18n("Low"), value: "low" },
+                    { text: i18n("Medium"), value: "medium" },
+                    { text: i18n("High"), value: "high" },
+                    { text: i18n("Maximum"), value: "maximum" },
+                    { text: i18n("Custom"), value: "custom" }
                 ]
             }
         }
         SettingRow {
-            title: i18n("检测器级别")
+            title: i18n("Detector level")
             visible: page.advanced && (page.custom)
             OptionCombo {
                 key: "security.detector"
@@ -111,7 +111,7 @@ KCM.SimpleKCM {
             }
         }
         SettingRow {
-            title: i18n("识别器级别")
+            title: i18n("Recognizer level")
             visible: page.advanced && (page.custom)
             OptionCombo {
                 key: "security.recognizer"
@@ -119,9 +119,9 @@ KCM.SimpleKCM {
             }
         }
         SettingRow {
-            title: i18n("RGB 识别阈值")
+            title: i18n("RGB recognizer threshold")
             visible: page.advanced && (page.custom)
-            hint: i18n("RGB 匹配所需的最低相似度")
+            hint: i18n("Minimum RGB similarity for a match")
             NumberField {
                 key: "security.rgb_threshold"
                 realFrom: 0.1
@@ -131,9 +131,9 @@ KCM.SimpleKCM {
             }
         }
         SettingRow {
-            title: i18n("红外识别阈值")
+            title: i18n("IR recognizer threshold")
             visible: page.advanced && (page.custom)
-            hint: i18n("红外匹配所需的最低相似度")
+            hint: i18n("Minimum IR similarity for a match")
             NumberField {
                 key: "security.ir_threshold"
                 realFrom: 0.1
@@ -143,39 +143,39 @@ KCM.SimpleKCM {
             }
         }
         SettingRow {
-            title: i18n("混合匹配策略")
+            title: i18n("Hybrid combining policy")
             visible: page.advanced && (page.custom)
-            hint: i18n("同时启用 RGB 与红外摄像头时的匹配策略")
+            hint: i18n("Combining policy when both RGB and IR cameras are active")
             OptionCombo {
                 key: "security.hybrid_policy"
                 options: [
-                    { text: i18n("默认"), value: "default" },
-                    { text: i18n("任一匹配"), value: "or" },
-                    { text: i18n("暗光时回退"), value: "fallback_on_dark" },
-                    { text: i18n("全部匹配"), value: "and" }
+                    { text: i18n("Default"), value: "default" },
+                    { text: i18n("Or"), value: "or" },
+                    { text: i18n("Fallback on dark"), value: "fallback_on_dark" },
+                    { text: i18n("And"), value: "and" }
                 ]
             }
         }
 
-        SectionHeader { text: i18n("硬件") }
+        SectionHeader { text: i18n("Hardware") }
         SettingRow {
             visible: page.advanced
-            title: i18n("推理执行后端")
-            hint: i18n("CPU、自动选择 NPU、Intel OpenVINO 或 AMD Ryzen AI")
+            title: i18n("Inference execution provider")
+            hint: i18n("CPU, automatic NPU, Intel OpenVINO, or AMD Ryzen AI")
             OptionCombo {
                 key: "inference.execution_provider"
                 options: [
                     { text: i18n("CPU"), value: "cpu" },
-                    { text: i18n("自动（NPU）"), value: "auto" },
+                    { text: i18n("Automatic (NPU)"), value: "auto" },
                     { text: i18n("Intel OpenVINO"), value: "openvino" },
                     { text: i18n("AMD Ryzen AI"), value: "vitis" }
                 ]
             }
         }
         SettingRow {
-            title: i18n("OpenVINO 推理设备")
+            title: i18n("OpenVINO inference device")
             visible: page.advanced && (values["inference.execution_provider"] === "openvino")
-            hint: i18n("所有 ONNX 模型使用的 Intel 设备")
+            hint: i18n("The Intel device used for all ONNX models")
             OptionCombo {
                 key: "inference.device"
                 options: [
@@ -186,28 +186,28 @@ KCM.SimpleKCM {
             }
         }
         SettingRow {
-            title: i18n("RGB 摄像头来源")
+            title: i18n("RGB camera source")
             OptionCombo {
                 key: "cameras.rgb"
-                options: [{ text: i18n("主摄像头"), value: "primary" }]
+                options: [{ text: i18n("Primary camera"), value: "primary" }]
                     .concat(kcm.cameraSources())
-                    .concat([{ text: i18n("无（仅红外）"), value: "" }])
+                    .concat([{ text: i18n("None (IR only)"), value: "" }])
             }
         }
         SettingRow {
-            title: i18n("红外摄像头来源")
+            title: i18n("IR camera source")
             OptionCombo {
                 key: "cameras.ir"
-                options: [{ text: i18n("无"), value: "" }].concat(kcm.cameraSources())
+                options: [{ text: i18n("None"), value: "" }].concat(kcm.cameraSources())
             }
         }
         SettingRow {
             visible: page.advanced
-            title: i18n("指定红外画面尺寸")
-            hint: i18n("自动模式下红外画面偏绿或损坏时，指定固定分辨率")
+            title: i18n("IR frame size override")
+            hint: i18n("Force one resolution if the IR feed is green or corrupted on auto")
             QQC2.Label {
                 visible: frameOverride.checked
-                text: i18n("宽度")
+                text: i18n("Width")
             }
             NumberField {
                 visible: frameOverride.checked
@@ -217,7 +217,7 @@ KCM.SimpleKCM {
             }
             QQC2.Label {
                 visible: frameOverride.checked
-                text: i18n("高度")
+                text: i18n("Height")
             }
             NumberField {
                 visible: frameOverride.checked
@@ -239,27 +239,27 @@ KCM.SimpleKCM {
         }
         SwitchRow {
             visible: page.advanced
-            title: i18n("强制开启红外发射器")
+            title: i18n("Force IR emitter")
             key: "cameras.emitter_enabled"
-            hint: i18n("仅在红外发射器无法自动开启时使用")
+            hint: i18n("Override emitter control, only if the IR emitter stays off on its own")
         }
         SettingRow {
             visible: page.advanced
-            title: i18n("并行采集 RGB 与红外")
-            hint: i18n("加快混合认证，但部分摄像头无法同时使用两个传感器")
+            title: i18n("Parallel RGB + IR capture")
+            hint: i18n("Faster hybrid authentication, but some webcams cannot stream both sensors at once")
             OptionCombo {
                 key: "cameras.parallel_capture"
                 options: [
-                    { text: i18n("从不（先 RGB，后红外）"), value: "never" },
-                    { text: i18n("自动（摄像头允许时并行）"), value: "auto" },
-                    { text: i18n("始终（同时采集 RGB 与红外）"), value: "always" }
+                    { text: i18n("Never (capture RGB, then IR)"), value: "never" },
+                    { text: i18n("Auto (parallel when the camera allows it)"), value: "auto" },
+                    { text: i18n("Always (capture RGB and IR at once)"), value: "always" }
                 ]
             }
         }
         SettingRow {
             visible: page.advanced
-            title: i18n("暗光阈值")
-            hint: i18n("拒绝平均亮度低于此值的画面（0–255）")
+            title: i18n("Darkness cutoff")
+            hint: i18n("Reject frames below this mean brightness (0–255)")
             NumberField {
                 key: "cameras.dark_luma_threshold"
                 realFrom: 0
@@ -269,11 +269,11 @@ KCM.SimpleKCM {
             }
         }
 
-        SectionHeader { visible: page.advanced; text: i18n("录入") }
+        SectionHeader { visible: page.advanced; text: i18n("Enrollment") }
         SettingRow {
             visible: page.advanced
-            title: i18n("模板上限")
-            hint: i18n("每张人脸保存的采集组数")
+            title: i18n("Maximum templates")
+            hint: i18n("Number of capture sets stored per face")
             NumberField {
                 key: "enrollment.max_templates"
                 realFrom: 1
@@ -284,8 +284,8 @@ KCM.SimpleKCM {
         }
         SettingRow {
             visible: page.advanced
-            title: i18n("最小人脸占比")
-            hint: i18n("录入时允许的最小人脸比例；调低可在更远处录入")
+            title: i18n("Minimum face size ratio")
+            hint: i18n("Smallest accepted face during enrollment; lower allows more distance")
             NumberField {
                 key: "enrollment.min_face_size_ratio"
                 realFrom: 0.1
@@ -295,17 +295,17 @@ KCM.SimpleKCM {
             }
         }
 
-        SectionHeader { text: i18n("活体防伪") }
+        SectionHeader { text: i18n("Liveness Anti-Spoofing") }
         SwitchRow {
-            title: i18n("启用活体防伪")
+            title: i18n("Enable liveness spoof prevention")
             key: "liveness.enabled"
             allowed: !page.walletOn
-            hint: i18n("检查摄像头画面与自然动作，识别照片或屏幕伪装")
+            hint: i18n("Check camera images and natural movement for signs of a photo or screen")
         }
         SettingRow {
-            title: i18n("活体检测阈值")
+            title: i18n("Liveness threshold")
             visible: page.advanced && (page.livenessOn)
-            hint: i18n("防伪检测所需的最低置信度")
+            hint: i18n("Minimum spoof prevention confidence")
             NumberField {
                 key: "liveness.threshold"
                 realFrom: 0.1
@@ -315,9 +315,9 @@ KCM.SimpleKCM {
             }
         }
         SettingRow {
-            title: i18n("活体检测最长时长")
+            title: i18n("Maximum liveness duration")
             visible: page.advanced && (page.livenessOn)
-            hint: i18n("活体检测最多分析的秒数")
+            hint: i18n("Maximum seconds analyzed for liveness verification")
             NumberField {
                 key: "liveness.max_seconds"
                 realFrom: 0.2
@@ -327,39 +327,39 @@ KCM.SimpleKCM {
             }
         }
 
-        SectionHeader { text: i18n("认证") }
+        SectionHeader { text: i18n("Authentication") }
         SwitchRow {
             visible: page.advanced
-            title: i18n("SSH 连接时禁用")
+            title: i18n("Abort if SSH")
             key: "auth.abort_if_ssh"
-            hint: i18n("阻止通过 SSH 连接进行人脸认证")
+            hint: i18n("Prevent authentication over SSH connections")
         }
         SwitchRow {
             visible: page.advanced
-            title: i18n("合盖时禁用")
+            title: i18n("Abort if lid closed")
             key: "auth.abort_if_lid_closed"
-            hint: i18n("笔记本合盖时禁止人脸认证")
+            hint: i18n("Prevent authentication when the laptop lid is closed")
         }
         SwitchRow {
             visible: page.advanced
-            title: i18n("需先休眠一次")
+            title: i18n("Require a suspend first")
             key: "auth.abort_before_first_resume"
-            hint: i18n("系统至少完成一次休眠唤醒后才允许人脸认证")
+            hint: i18n("Prevent authentication until the system has suspended and resumed once")
         }
         SwitchRow {
-            title: i18n("锁屏认证需确认")
+            title: i18n("Require confirmation on lock screen")
             key: "auth.require_confirmation_lock_screen"
-            hint: i18n("在 KDE 锁屏或登录界面，此设置会改用密码认证。其他支持的界面可在匹配后进行确认")
+            hint: i18n("On KDE lock/login screens this requires your password instead of face unlock. Confirmation after a match is available on other supported surfaces")
         }
         SwitchRow {
-            title: i18n("提权认证需确认")
+            title: i18n("Require confirmation for elevated authentication")
             key: "auth.require_confirmation_elevation"
-            hint: i18n("sudo、polkit 等提权提示匹配人脸后，需按回车或点击确定")
+            hint: i18n("Require pressing Enter or clicking OK to authorize after face matches for sudo, polkit, and similar prompts")
         }
         SettingRow {
             visible: page.advanced
-            title: i18n("唤醒等待时间（毫秒）")
-            hint: i18n("从休眠唤醒后延迟人脸认证")
+            title: i18n("Resume grace period (ms)")
+            hint: i18n("Delay face authentication on wake from suspend")
             NumberField {
                 key: "auth.resume_grace_ms"
                 realFrom: 0
@@ -369,8 +369,8 @@ KCM.SimpleKCM {
             }
         }
         SettingRow {
-            title: i18n("启动延迟（毫秒）")
-            hint: i18n("可设为 3000–5000 毫秒，以便锁屏后离开摄像头")
+            title: i18n("Start delay (ms)")
+            hint: i18n("Use 3000–5000 ms to give yourself time to step away after locking")
             NumberField {
                 key: "auth.start_delay_ms"
                 realFrom: 0
@@ -380,39 +380,39 @@ KCM.SimpleKCM {
             }
         }
         SettingRow {
-            title: i18n("启动延迟适用范围")
+            title: i18n("Start delay applies to")
             visible: Number(values["auth.start_delay_ms"]) > 0
-            hint: i18n("哪些认证提示需要等待启动延迟")
+            hint: i18n("Which prompts wait for the start delay")
             OptionCombo {
                 key: "auth.start_delay_scope"
                 options: [
-                    { text: i18n("所有人脸认证（含 sudo）"), value: "all" },
-                    { text: i18n("仅锁屏"), value: "screen_lock" }
+                    { text: i18n("All face authentication (including sudo)"), value: "all" },
+                    { text: i18n("Screen lockers only"), value: "screen_lock" }
                 ]
             }
         }
 
-        SectionHeader { visible: page.advanced; text: i18n("存储") }
+        SectionHeader { visible: page.advanced; text: i18n("Storage") }
         SwitchRow {
             visible: page.advanced
-            title: i18n("加密人脸模板")
+            title: i18n("Encrypt face templates")
             key: "storage.encrypt_templates"
             allowed: !page.walletOn
-            hint: i18n("使用 TPM 密封密钥加密存储人脸模板")
+            hint: i18n("Encrypt face templates at rest with a TPM-sealed key")
         }
         SwitchRow {
             visible: page.advanced
-            title: i18n("解锁 GNOME 密钥环")
+            title: i18n("Unlock GNOME Keyring")
             key: "storage.unlock_gnome_keyring"
             allowed: (page.keyringOn || page.walletReady)
-            hint: i18n("在通过活体检测的 GDM 或 greetd 人脸登录后使用已录入的密码")
+            hint: i18n("Use an enrolled password after liveness-protected GDM or greetd face login")
         }
         SwitchRow {
             visible: page.advanced
-            title: i18n("解锁 KWallet")
+            title: i18n("Unlock KWallet")
             key: "storage.unlock_kwallet"
             allowed: (page.kwalletOn || page.walletReady)
-            hint: i18n("在通过活体检测的 KDE 人脸登录后使用已录入的密码；运行 gaze keyring --kwallet 录入")
+            hint: i18n("Use an enrolled password after liveness-protected KDE login; enroll with gaze keyring --kwallet")
         }
     }
 }

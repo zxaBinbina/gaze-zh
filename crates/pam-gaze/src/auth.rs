@@ -659,10 +659,15 @@ fn retire_prompt(
     // Nothing to unblock if the user already answered, and an injected newline would be left
     // for the confirmation prompt, which takes a bare newline as the confirmation.
     let mut retired = prompt_is_finished(state);
+    let mut newline_left = false;
 
     if !retired {
         retired = match unblock_terminal() {
-            PromptUnblock::Injected => wait_for_prompt_finish_within(state, PROMPT_RETIRE_TIMEOUT),
+            PromptUnblock::Injected => {
+                let consumed = wait_for_prompt_finish_within(state, PROMPT_RETIRE_TIMEOUT);
+                newline_left = !consumed;
+                consumed
+            }
             PromptUnblock::SignalOnly | PromptUnblock::NoTerminal if no_signals => false,
             // Signalling interrupts the blocking read itself, so it needs no terminal and is the
             // only lever left when there is none.
@@ -686,6 +691,24 @@ fn retire_prompt(
     }
 
     let _ = prompt_thread.join();
+
+    if newline_left {
+        discard_terminal_input();
+    }
+}
+
+fn discard_terminal_input() {
+    let Ok(tty) = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open("/dev/tty")
+    else {
+        return;
+    };
+    let fd = tty.as_raw_fd();
+    if unsafe { libc::tcgetpgrp(fd) == libc::getpgrp() } {
+        unsafe { libc::tcflush(fd, libc::TCIFLUSH) };
+    }
 }
 
 /// Push a newline into the tty's input queue to unblock the PAM conversation read. TIOCSTI is
@@ -941,6 +964,16 @@ pub unsafe fn do_authenticate(pamh: PamHandle, flags: c_int, options: PamOptions
             service.as_deref(),
             unsafe { get_pam_tty(pamh) }.as_deref(),
             options.local,
+        )
+    {
+        return PAM_IGNORE;
+    }
+    if unsafe { libc::geteuid() } == 0
+        && invoked_by_another_user(
+            unsafe { libc::getuid() },
+            unsafe { get_username(pamh) }
+                .as_deref()
+                .and_then(account_uid),
         )
     {
         return PAM_IGNORE;

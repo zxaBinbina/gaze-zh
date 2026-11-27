@@ -136,81 +136,12 @@ pub(super) fn check_desktop_integration(report: &mut Report) {
 
         let override_exists = Path::new(GDM_FACE_OVERRIDE_PATH).exists();
         let dconf_face_auth = gdm_face_auth_from_dconf();
-        match (dconf_face_auth, override_exists) {
-            (Some(false), true) => report.warning(
-                "GDM 登录人脸认证",
-                format!(
-                    "{GDM_FACE_OVERRIDE_PATH} 已启用此功能，但编译后的 GDM dconf 数据库仍显示为禁用"
-                ),
-                "运行 `sudo dconf update`，然后重启 GDM 或系统。",
-            ),
-            (Some(true), false) => report.pass(
-                "GDM 登录人脸认证",
-                "系统配置已在 GDM dconf 中启用此功能，并非由 Gaze 启用（NixOS 对应 `services.gaze.gnome.gdmFaceLogin`）",
-            ),
-            (_, true) => match gdm_greeter_readiness() {
-                GdmGreeterReadiness::Ready => report.pass(
-                    "GDM 登录人脸认证",
-                    format!(
-                        "已通过 {GDM_FACE_OVERRIDE_PATH} 全局启用；运行 `gnome-extensions prefs {GNOME_EXTENSION_ID}`，在「行为 → GDM 登录界面」中切换"
-                    ),
-                ),
-                GdmGreeterReadiness::ProfileMissingSystemDb(profile) => report.error(
-                    "GDM 登录人脸认证",
-                    format!(
-                        "{GDM_FACE_OVERRIDE_PATH} 已存在，但登录界面的 dconf 配置 {profile} 未包含 `system-db:{GDM_DCONF_PROFILE}`，GDM 因此不会读取它"
-                    ),
-                    format!(
-                        "重新安装 Gaze GNOME 扩展包，或在 {profile} 的 `user-db:user` 后添加 `system-db:{GDM_DCONF_PROFILE}`（文件不存在时先从 {VENDOR_DCONF_PROFILE_DIR} 复制），运行 `sudo dconf update` 后重启。"
-                    ),
-                ),
-                GdmGreeterReadiness::CompiledDbMissing => report.error(
-                    "GDM 登录人脸认证",
-                    format!(
-                        "{GDM_FACE_OVERRIDE_PATH} 已存在，但编译后的数据库 {GDM_COMPILED_DB_PATH} 不存在"
-                    ),
-                    "运行 `sudo dconf update` 后重启。",
-                ),
-                GdmGreeterReadiness::ExtensionNotEnabled => report.error(
-                    "GDM 登录人脸认证",
-                    format!(
-                        "GDM 数据库未为登录界面启用 {GNOME_EXTENSION_ID}，因此不会启动 {GDM_FACE_PAM_SERVICE} PAM 服务"
-                    ),
-                    "重新安装 Gaze GNOME 扩展包，运行 `sudo dconf update` 后重启。",
-                ),
-                GdmGreeterReadiness::ExtensionsDisabled(source) => report.error(
-                    "GDM 登录人脸认证",
-                    format!(
-                        "登录界面的 `org.gnome.shell disable-user-extensions` 为 true，禁用了包括 {GNOME_EXTENSION_ID} 在内的全部 GNOME Shell 扩展"
-                    ),
-                    match source {
-                        Some(path) => format!(
-                            "{} 中的此设置优先于 /etc/dconf/db/gdm.d 下的所有文件，需在此处清除：\n    sudo rm -f {}\n然后重启，GDM 会使用默认值重新生成此文件。",
-                            path.display(),
-                            path.display()
-                        ),
-                        None => format!(
-                            "在 {GDM_FACE_OVERRIDE_PATH} 的 `[org/gnome/shell]` 下设置 `disable-user-extensions=false`，运行 `sudo dconf update` 后重启。"
-                        ),
-                    },
-                ),
-                GdmGreeterReadiness::Unverifiable(why) => report.warning(
-                    "GDM 登录人脸认证",
-                    format!(
-                        "{GDM_FACE_OVERRIDE_PATH} 已启用此功能，但无法验证登录界面配置：{why}"
-                    ),
-                    "安装 `dconf` 命令行工具后重新运行 `gaze doctor`。",
-                ),
-            },
-            (_, false) => report.off(
-                "GDM 登录人脸认证",
-                "已关闭，登录界面仅接受密码（锁屏使用独立开关）",
-                format!(
-                    "启用方式：{}，然后重启。此操作需要管理员授权，并写入 {GDM_FACE_OVERRIDE_PATH}。\n手动启用：在 {GDM_FACE_OVERRIDE_PATH} 的 `[org/gnome/shell/extensions/gaze]` 下设置 `enable-face-authentication=true`，运行 `sudo dconf update` 后重启。\n详情：{GNOME_DOCS_URL}#optional-enable-face-at-gdm-login",
-                    gnome_prefs_path("GDM 登录界面", "启用 GDM 登录人脸认证")
-                ),
-            ),
-        }
+        report_gdm_face_login(
+            report,
+            dconf_face_auth,
+            override_exists,
+            gdm_greeter_readiness,
+        );
 
         if dconf_face_auth == Some(true) || override_exists {
             check_gdm_selinux(report);
@@ -265,6 +196,115 @@ pub(super) fn check_desktop_integration(report: &mut Report) {
             report,
             read_pam_service(PLASMALOGIN_FACE_PAM_FILE).as_deref(),
         );
+    }
+}
+
+/// The greeter checks run however face login was turned on: a hand-edited keyfile or a NixOS
+/// option is as easily defeated by GDM's own db as Gaze's override is.
+pub(super) fn report_gdm_face_login(
+    report: &mut Report,
+    dconf_face_auth: Option<bool>,
+    override_exists: bool,
+    readiness: impl FnOnce(bool) -> GdmGreeterReadiness,
+) {
+    const CHECK: &str = "GDM 登录人脸认证";
+    if dconf_face_auth == Some(false) && override_exists {
+        report.warning(
+            CHECK,
+            format!(
+                "{GDM_FACE_OVERRIDE_PATH} 已启用此功能，但编译后的 GDM dconf 数据库仍显示为禁用"
+            ),
+            "运行 `sudo dconf update`，然后重启 GDM 或系统。",
+        );
+        return;
+    }
+    if dconf_face_auth != Some(true) && !override_exists {
+        report.off(
+            CHECK,
+            "已关闭，登录界面仅接受密码（锁屏使用独立开关）",
+            format!(
+                "启用方式：{}，然后重启。此操作需要管理员授权，并写入 {GDM_FACE_OVERRIDE_PATH}。\n\
+                 手动启用：在 {GDM_FACE_OVERRIDE_PATH} 的 `[org/gnome/shell/extensions/gaze]` 下设置 `enable-face-authentication=true`，运行 `sudo dconf update` 后重启。\n\
+                 详情：{GNOME_DOCS_URL}#optional-enable-face-at-gdm-login",
+                gnome_prefs_path("GDM 登录界面", "启用 GDM 登录人脸认证")
+            ),
+        );
+        return;
+    }
+
+    let enabled_by = if override_exists {
+        format!("已通过 {GDM_FACE_OVERRIDE_PATH} 全局启用")
+    } else {
+        "已由系统配置在 GDM dconf 中启用（NixOS 对应 `services.gaze.gnome.gdmFaceLogin`）"
+            .to_string()
+    };
+    let clear_greeter_db = |path: &Path| {
+        format!(
+            "{} 中的此设置优先于 /etc/dconf/db/gdm.d 下的所有文件，需在此处清除：\n\
+             sudo rm -f {}\n\
+             然后重启，GDM 会使用默认值重新生成此文件。",
+            path.display(),
+            path.display()
+        )
+    };
+    match readiness(override_exists) {
+        GdmGreeterReadiness::Ready if override_exists => report.pass(
+            CHECK,
+            format!(
+                "{enabled_by}；运行 `gnome-extensions prefs {GNOME_EXTENSION_ID}`，在“行为 → GDM 登录界面”中切换"
+            ),
+        ),
+        GdmGreeterReadiness::Ready => report.pass(CHECK, enabled_by),
+        GdmGreeterReadiness::ProfileMissingSystemDb(profile) => report.error(
+            CHECK,
+            format!(
+                "{GDM_FACE_OVERRIDE_PATH} 已存在，但登录界面的 dconf 配置 {profile} 未包含 `system-db:{GDM_DCONF_PROFILE}`，GDM 因此不会读取它"
+            ),
+            format!(
+                "重新安装 Gaze GNOME 扩展包，或在 {profile} 的 `user-db:user` 后添加 `system-db:{GDM_DCONF_PROFILE}`（文件不存在时先从 {VENDOR_DCONF_PROFILE_DIR} 复制），运行 `sudo dconf update` 后重启。"
+            ),
+        ),
+        GdmGreeterReadiness::CompiledDbMissing => report.error(
+            CHECK,
+            format!(
+                "{GDM_FACE_OVERRIDE_PATH} 已存在，但编译后的数据库 {GDM_COMPILED_DB_PATH} 不存在"
+            ),
+            "运行 `sudo dconf update` 后重启。",
+        ),
+        GdmGreeterReadiness::ExtensionNotEnabled(source) => report.error(
+            CHECK,
+            format!(
+                "{enabled_by}，但登录界面未启用 {GNOME_EXTENSION_ID}，因此不会启动 {GDM_FACE_PAM_SERVICE} PAM 服务"
+            ),
+            match source {
+                Some(path) => clear_greeter_db(path.as_path()),
+                None => "重新安装 Gaze GNOME 扩展包，运行 `sudo dconf update` 后重启。".to_string(),
+            },
+        ),
+        GdmGreeterReadiness::ExtensionsDisabled(source) => report.error(
+            CHECK,
+            format!(
+                "{enabled_by}，但登录界面的 `org.gnome.shell disable-user-extensions` 为 true，禁用了包括 {GNOME_EXTENSION_ID} 在内的全部 GNOME Shell 扩展"
+            ),
+            match source {
+                Some(path) => clear_greeter_db(path.as_path()),
+                None => format!(
+                    "在 {GDM_FACE_OVERRIDE_PATH} 的 `[org/gnome/shell]` 下设置 `disable-user-extensions=false`，运行 `sudo dconf update` 后重启。"
+                ),
+            },
+        ),
+        GdmGreeterReadiness::NeedsRoot => report.warning(
+            CHECK,
+            format!(
+                "{enabled_by}，但需要 root 权限才能读取 GDM 自身的 dconf 数据库，该数据库可能禁用登录界面的所有扩展"
+            ),
+            "请运行 `sudo gaze doctor` 检查登录界面的设置。",
+        ),
+        GdmGreeterReadiness::Unverifiable(why) => report.warning(
+            CHECK,
+            format!("{enabled_by}，但无法验证登录界面配置：{why}"),
+            "安装 `dconf` 命令行工具后重新运行 `gaze doctor`。",
+        ),
     }
 }
 
@@ -702,5 +742,89 @@ mod tests {
         assert_eq!(level(None), Level::Pass);
         assert_eq!(level(Some("auth sufficient pam_gaze.so")), Level::Pass);
         assert_eq!(level(Some("auth required pam_fprintd.so")), Level::Warning);
+    }
+
+    fn gdm_face_login(
+        dconf_face_auth: Option<bool>,
+        override_exists: bool,
+        readiness: GdmGreeterReadiness,
+    ) -> (Level, String, String) {
+        let mut report = Report::default();
+        report_gdm_face_login(&mut report, dconf_face_auth, override_exists, |_| readiness);
+        let check = report
+            .checks
+            .into_iter()
+            .find(|check| check.name == "GDM 登录人脸认证")
+            .expect("the GDM login check always reports");
+        (check.level, check.message, check.fix.unwrap_or_default())
+    }
+
+    #[test]
+    fn face_login_enabled_outside_gaze_still_runs_the_greeter_checks() {
+        // #1024: enabled by hand in 00-gaze-defaults, with GDM's own seat db turning every
+        // extension off. Skipping the greeter checks reported this as a pass.
+        let seat_db = PathBuf::from("/var/lib/gdm/seat0/config/dconf/user");
+        let (level, message, fix) = gdm_face_login(
+            Some(true),
+            false,
+            GdmGreeterReadiness::ExtensionsDisabled(Some(seat_db)),
+        );
+        assert_eq!(level, Level::Error);
+        assert!(message.contains("disable-user-extensions"), "{message}");
+        assert!(
+            fix.contains("sudo rm -f /var/lib/gdm/seat0/config/dconf/user"),
+            "{fix}"
+        );
+
+        let (level, message, _) = gdm_face_login(Some(true), false, GdmGreeterReadiness::Ready);
+        assert_eq!(level, Level::Pass);
+        assert!(message.contains("已由系统配置"), "{message}");
+    }
+
+    #[test]
+    fn only_the_gaze_override_gets_the_override_checks() {
+        let mut asked = None;
+        let mut report = Report::default();
+        report_gdm_face_login(&mut report, Some(true), false, |gaze_override| {
+            asked = Some(gaze_override);
+            GdmGreeterReadiness::Ready
+        });
+        assert_eq!(
+            asked,
+            Some(false),
+            "a profile Gaze did not write must not be held to `system-db:gdm`"
+        );
+
+        let mut report = Report::default();
+        report_gdm_face_login(&mut report, None, true, |gaze_override| {
+            asked = Some(gaze_override);
+            GdmGreeterReadiness::Ready
+        });
+        assert_eq!(asked, Some(true));
+    }
+
+    #[test]
+    fn an_unreadable_greeter_db_is_never_a_pass() {
+        let (level, message, fix) =
+            gdm_face_login(Some(true), true, GdmGreeterReadiness::NeedsRoot);
+        assert_eq!(level, Level::Warning);
+        assert!(message.contains("需要 root 权限"), "{message}");
+        assert!(fix.contains("sudo gaze doctor"), "{fix}");
+    }
+
+    #[test]
+    fn face_login_off_skips_the_greeter_checks() {
+        let mut report = Report::default();
+        report_gdm_face_login(&mut report, Some(false), false, |_| {
+            panic!("the greeter is not checked while face login is off")
+        });
+        assert_eq!(report.checks[0].level, Level::Off);
+
+        let (level, _, _) = gdm_face_login(Some(false), true, GdmGreeterReadiness::Ready);
+        assert_eq!(
+            level,
+            Level::Warning,
+            "a stale compiled db is its own warning"
+        );
     }
 }

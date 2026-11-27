@@ -5,7 +5,7 @@
 # Build every package format supported by this checkout.
 set -euo pipefail
 
-ROOT=$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
+ROOT=$(CDPATH='' cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
 cd "$ROOT"
 
 formats=(deb rpm archlinux)

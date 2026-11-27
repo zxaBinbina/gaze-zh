@@ -111,9 +111,49 @@ pub fn print_apply_notes(before: &Config, after: &Config) {
         || before.inference.device != after.inference.device
     {
         println!(
-            "应用此加速更改后，请运行 sudo systemctl restart gazed，再用 gaze doctor --benchmark 检查实际使用的后端；程序可能仍在使用 CPU 回退。"
+            "应用加速设置后，如果新后端需要不同的运行时，gazed 会自动重启。请运行 gaze doctor --benchmark 检查实际使用的后端，确认是否回退到 CPU。"
         );
     }
+}
+
+fn wrap_words(text: &str, width: usize) -> Vec<String> {
+    let mut lines = Vec::new();
+    let mut line = String::new();
+    for word in text.split_whitespace() {
+        if !line.is_empty()
+            && console::measure_text_width(&line) + 1 + console::measure_text_width(word) > width
+        {
+            lines.push(std::mem::take(&mut line));
+        }
+        if !line.is_empty() {
+            line.push(' ');
+        }
+        if !word.is_ascii() && console::measure_text_width(word) > width {
+            for character in word.chars() {
+                if console::measure_text_width(&line)
+                    + console::measure_text_width(character.encode_utf8(&mut [0; 4]))
+                    > width
+                {
+                    lines.push(std::mem::take(&mut line));
+                }
+                line.push(character);
+            }
+        } else {
+            line.push_str(word);
+        }
+    }
+    if !line.is_empty() {
+        lines.push(line);
+    }
+    lines
+}
+
+fn write_wrapped(term: &Term, text: &str) -> std::io::Result<()> {
+    let width = usize::from(term.size().1).clamp(20, 100);
+    for line in wrap_words(text, width) {
+        term.write_line(&line)?;
+    }
+    Ok(())
 }
 
 pub async fn run_config_wizard(
@@ -124,12 +164,14 @@ pub async fn run_config_wizard(
 ) -> anyhow::Result<()> {
     let theme = crate::i18n::ChineseTheme::default();
     let original = config.clone();
-    term.write_line(
-        "Gaze 设置 — 请选择类别。保存前所有更改仅保留在草稿中。Esc 返回菜单；Ctrl+C 放弃草稿。",
+    write_wrapped(
+        term,
+        "Gaze 设置 — 请选择类别。更改在保存前仅保留于草稿中。按 Esc 返回菜单，按 Ctrl+C 放弃草稿。",
     )?;
     loop {
         let choice = Select::with_theme(&theme)
             .with_prompt("设置")
+            .report(false)
             .items([
                 "摄像头",
                 "安全",
@@ -140,29 +182,34 @@ pub async fn run_config_wizard(
             ])
             .default(0)
             .interact_opt()?;
+        let mut draft = config.clone();
         let result = match choice {
             Some(0) => {
-                if let Err(error) = edit_cameras(term, &theme, &mut config) {
-                    term.write_line(&format!("{error}。草稿已保留；请选择类别继续。"))?;
-                    continue;
+                match edit_cameras(term, &theme, &mut draft) {
+                    Ok(()) => {
+                        if Confirm::with_theme(&theme)
+                            .with_prompt("立即检查所选摄像头")
+                            .default(true)
+                            .interact()?
+                            && let Err(error) = crate::setup::check_cameras(&draft).await
+                        {
+                            term.write_line(&format!("摄像头检查：{error}。请选择“摄像头”尝试其他来源，当前更改尚未保存。"))?;
+                        }
+                        Ok(())
+                    }
+                    Err(error) if error.is::<BackToMenu>() => Err(error),
+                    Err(error) => {
+                        term.write_line(&format!("{error}。草稿已保留，请选择类别继续。"))?;
+                        continue;
+                    }
                 }
-                if Confirm::with_theme(&theme)
-                    .with_prompt("立即检查所选摄像头")
-                    .default(true)
-                    .interact()?
-                    && let Err(error) = crate::setup::check_cameras(&config).await
-                {
-                    term.write_line(&format!(
-                        "摄像头检查：{error}。请选择“摄像头”尝试其他来源；尚未保存任何更改。"
-                    ))?;
-                }
-                Ok(())
             }
-            Some(1) => edit_security(term, &theme, &mut config),
-            Some(2) => edit_authentication(term, &theme, &mut config),
+            Some(1) => edit_security(term, &theme, &mut draft),
+            Some(2) => edit_authentication(term, &theme, &mut draft),
             Some(3) => {
                 match Select::with_theme(&theme)
                     .with_prompt("高级设置")
+                    .report(false)
                     .items([
                         "硬件加速",
                         "摄像头调节",
@@ -174,12 +221,12 @@ pub async fn run_config_wizard(
                     ])
                     .interact_opt()?
                 {
-                    Some(0) => edit_acceleration(term, &theme, &mut config),
-                    Some(1) => edit_camera_tuning(term, &theme, &mut config),
-                    Some(2) => edit_enrollment(term, &theme, &mut config),
-                    Some(3) => edit_liveness(term, &theme, &mut config),
-                    Some(4) => edit_storage(term, &theme, &mut config, keyring_supported),
-                    Some(5) => edit_authentication_tuning(term, &theme, &mut config),
+                    Some(0) => edit_acceleration(term, &theme, &mut draft),
+                    Some(1) => edit_camera_tuning(term, &theme, &mut draft),
+                    Some(2) => edit_enrollment(term, &theme, &mut draft),
+                    Some(3) => edit_liveness(term, &theme, &mut draft),
+                    Some(4) => edit_storage(term, &theme, &mut draft, keyring_supported),
+                    Some(5) => edit_authentication_tuning(term, &theme, &mut draft),
                     _ => Ok(()),
                 }
             }
@@ -241,13 +288,59 @@ pub async fn run_config_wizard(
                 return Ok(());
             }
             _ => {
-                term.write_line("已放弃草稿。设置未更改。")?;
+                let pending = change_summary(&original, &config)?.len();
+                if pending > 0
+                    && !Confirm::with_theme(&theme)
+                        .with_prompt(format!("放弃 {pending} 项未保存的更改？"))
+                        .default(false)
+                        .interact_opt()?
+                        .unwrap_or(false)
+                {
+                    continue;
+                }
+                term.write_line("已放弃草稿。")?;
                 return Ok(());
             }
         };
-        if let Err(error) = result {
-            term.write_line(&format!("{error}。草稿尚未保存。"))?;
+        match result {
+            Ok(()) => config = draft,
+            Err(error) if error.is::<BackToMenu>() => {
+                term.write_line("已返回菜单，此类别的改动已撤销。")?;
+            }
+            Err(error) => {
+                term.write_line(&format!("{error}。草稿尚未保存。"))?;
+            }
         }
+    }
+}
+
+#[derive(Debug)]
+struct BackToMenu;
+
+impl std::fmt::Display for BackToMenu {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("返回设置菜单")
+    }
+}
+
+impl std::error::Error for BackToMenu {}
+
+trait PickOrBack {
+    type Answer;
+    fn pick(self) -> anyhow::Result<Self::Answer>;
+}
+
+impl PickOrBack for Select<'_> {
+    type Answer = usize;
+    fn pick(self) -> anyhow::Result<usize> {
+        self.interact_opt()?.ok_or_else(|| BackToMenu.into())
+    }
+}
+
+impl PickOrBack for Confirm<'_> {
+    type Answer = bool;
+    fn pick(self) -> anyhow::Result<bool> {
+        self.interact_opt()?.ok_or_else(|| BackToMenu.into())
     }
 }
 
@@ -274,7 +367,7 @@ fn edit_cameras(term: &Term, theme: &dyn Theme, config: &mut Config) -> anyhow::
         .with_prompt("彩色摄像头")
         .items(&cam_names)
         .default(default_cam_idx)
-        .interact()?;
+        .pick()?;
 
     if Some(selected_cam_idx) != keep_fallback_idx {
         config.cameras.rgb = cameras[selected_cam_idx].1.clone().into();
@@ -290,7 +383,7 @@ fn edit_cameras(term: &Term, theme: &dyn Theme, config: &mut Config) -> anyhow::
         .with_prompt("红外摄像头（不使用时选择“无”）")
         .items(&ir_names)
         .default(default_ir_idx)
-        .interact()?;
+        .pick()?;
 
     config.cameras.ir = ir_options[selected_ir_idx].1.clone();
 
@@ -317,7 +410,7 @@ fn edit_security(term: &Term, theme: &dyn Theme, config: &mut Config) -> anyhow:
             "自定义 — 高级调节",
         ])
         .default(config.security.level_index() as usize)
-        .interact()?;
+        .pick()?;
 
     if let Some(level) = SecurityLevel::preset_from_index(selected) {
         config.security = level;
@@ -328,14 +421,14 @@ fn edit_security(term: &Term, theme: &dyn Theme, config: &mut Config) -> anyhow:
             .with_prompt("自定义检测器级别")
             .items(MODEL_QUALITY_LABELS)
             .default(SecurityLevel::model_quality_index(&seed.detector) as usize)
-            .interact()?;
+            .pick()?;
         let detector = SecurityLevel::model_quality_from_index(selected_det_idx).to_string();
 
         let selected_rec_idx = Select::with_theme(theme)
             .with_prompt("自定义识别器级别")
             .items(MODEL_QUALITY_LABELS)
             .default(SecurityLevel::model_quality_index(&seed.recognizer) as usize)
-            .interact()?;
+            .pick()?;
         let recognizer = SecurityLevel::model_quality_from_index(selected_rec_idx).to_string();
 
         let rgb_threshold = prompt_security_threshold(theme, "RGB", seed.rgb_threshold)?;
@@ -345,7 +438,7 @@ fn edit_security(term: &Term, theme: &dyn Theme, config: &mut Config) -> anyhow:
             .with_prompt("自定义混合匹配策略")
             .items(HYBRID_POLICY_LABELS)
             .default(SecurityLevel::hybrid_policy_index_for_value(&seed.hybrid_policy) as usize)
-            .interact()?;
+            .pick()?;
         let hybrid_policy = SecurityLevel::hybrid_policy_from_index(selected_hybrid_idx);
 
         config.security = SecurityLevel::custom_with_thresholds(
@@ -367,7 +460,7 @@ fn edit_acceleration(term: &Term, theme: &dyn Theme, config: &mut Config) -> any
             .with_prompt("硬件加速（需要厂商运行库；推荐 CPU）")
             .items(gaze_core::config::INFERENCE_EXECUTION_PROVIDER_LABELS)
             .default(config.inference.execution_provider_index() as usize)
-            .interact()?;
+            .pick()?;
         config.inference.execution_provider =
             gaze_core::config::InferenceConfig::execution_provider_from_index(
                 selected_execution_provider,
@@ -379,7 +472,7 @@ fn edit_acceleration(term: &Term, theme: &dyn Theme, config: &mut Config) -> any
                 .with_prompt("OpenVINO 推理设备")
                 .items(INFERENCE_DEVICE_LABELS)
                 .default(config.inference.device_index() as usize)
-                .interact()?;
+                .pick()?;
             config.inference.device =
                 gaze_core::config::InferenceConfig::device_from_index(selected_device).to_string();
         } else {
@@ -411,12 +504,12 @@ fn edit_authentication(term: &Term, theme: &dyn Theme, config: &mut Config) -> a
     config.auth.require_confirmation_lock_screen = Confirm::with_theme(theme)
         .with_prompt("锁屏匹配人脸后需确认（回车/认证/确定）")
         .default(config.auth.require_confirmation_lock_screen)
-        .interact()?;
+        .pick()?;
 
     config.auth.require_confirmation_elevation = Confirm::with_theme(theme)
         .with_prompt("提权认证（sudo、polkit 等）匹配人脸后需确认（回车/认证/确定）")
         .default(config.auth.require_confirmation_elevation)
-        .interact()?;
+        .pick()?;
 
     config.auth.start_delay_ms = Input::with_theme(theme)
         .with_prompt("启动延迟，单位毫秒（0 表示禁用）")
@@ -431,7 +524,7 @@ fn edit_authentication(term: &Term, theme: &dyn Theme, config: &mut Config) -> a
                 AuthConfig::start_delay_scope_index_for_value(config.auth.start_delay_scope())
                     as usize,
             )
-            .interact()?;
+            .pick()?;
         config.auth.start_delay_scope = AuthConfig::start_delay_scope_from_index(scope_index);
     }
 
@@ -447,17 +540,17 @@ fn edit_authentication_tuning(
     config.auth.abort_if_ssh = Confirm::with_theme(theme)
         .with_prompt("SSH 会话中禁用人脸认证")
         .default(config.auth.abort_if_ssh)
-        .interact()?;
+        .pick()?;
 
     config.auth.abort_if_lid_closed = Confirm::with_theme(theme)
         .with_prompt("笔记本合盖时禁用人脸认证")
         .default(config.auth.abort_if_lid_closed)
-        .interact()?;
+        .pick()?;
 
     config.auth.abort_before_first_resume = Confirm::with_theme(theme)
         .with_prompt("系统完成一次休眠唤醒前禁用人脸认证")
         .default(config.auth.abort_before_first_resume)
-        .interact()?;
+        .pick()?;
 
     config.auth.resume_grace_ms = Input::with_theme(theme)
         .with_prompt("唤醒等待时间，单位毫秒（休眠后延迟认证）")
@@ -497,7 +590,7 @@ fn edit_liveness(term: &Term, theme: &dyn Theme, config: &mut Config) -> anyhow:
     config.liveness.enabled = Confirm::with_theme(theme)
         .with_prompt("启用活体防伪")
         .default(config.liveness.enabled)
-        .interact()?;
+        .pick()?;
     if config.liveness.enabled {
         config.liveness.threshold = Input::<String>::with_theme(theme)
             .with_prompt(format!(
@@ -551,7 +644,7 @@ fn edit_storage(
     config.storage.encrypt_templates = Confirm::with_theme(theme)
         .with_prompt("使用 TPM 2.0 加密存储人脸模板")
         .default(config.storage.encrypt_templates)
-        .interact()?;
+        .pick()?;
 
     let keyring_prerequisites = config.storage.encrypt_templates && config.liveness.enabled;
     for (was_on, name) in [
@@ -571,7 +664,7 @@ fn edit_storage(
             Confirm::with_theme(theme)
                 .with_prompt("GDM 或 greetd 人脸登录时启用 TPM 保护的 GNOME 密钥环解锁")
                 .default(config.storage.unlock_gnome_keyring)
-                .interact()?
+                .pick()?
         } else {
             false
         };
@@ -582,7 +675,7 @@ fn edit_storage(
             Confirm::with_theme(theme)
                 .with_prompt("KDE 人脸登录时启用 TPM 保护的 KWallet 解锁")
                 .default(config.storage.unlock_kwallet)
-                .interact()?
+                .pick()?
         } else {
             false
         };
@@ -604,7 +697,7 @@ fn edit_camera_tuning(term: &Term, theme: &dyn Theme, config: &mut Config) -> an
         config.cameras.emitter_enabled = Confirm::with_theme(theme)
             .with_prompt("强制开启红外发射器（仅在无法自动开启时使用）")
             .default(config.cameras.emitter_enabled)
-            .interact()?;
+            .pick()?;
 
         if config.cameras.rgb.is_empty() {
             config.cameras.parallel_capture = "never".to_string();
@@ -613,7 +706,7 @@ fn edit_camera_tuning(term: &Term, theme: &dyn Theme, config: &mut Config) -> an
                 .with_prompt("同时采集 RGB 与红外（更快，但部分摄像头不支持）")
                 .items(gaze_core::config::PARALLEL_CAPTURE_LABELS.as_slice())
                 .default(config.cameras.parallel_capture_index() as usize)
-                .interact()?;
+                .pick()?;
             config.cameras.parallel_capture =
                 gaze_core::config::CameraConfig::parallel_capture_from_index(capture_idx);
         }
@@ -640,6 +733,22 @@ fn enroll_keyring(config: &Config, backend: gaze_security::keyring::Backend) -> 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn wrap_words_breaks_only_between_words() {
+        let lines = wrap_words("Changes stay in this draft until you save.", 12);
+        assert_eq!(
+            lines,
+            ["Changes stay", "in this", "draft until", "you save."]
+        );
+        assert!(lines.iter().all(|line| line.chars().count() <= 12));
+        assert_eq!(
+            wrap_words("unbreakable-long-word here", 5),
+            ["unbreakable-long-word", "here"]
+        );
+        assert!(wrap_words("   ", 10).is_empty());
+        assert_eq!(wrap_words("请选择设置类别。", 8), ["请选择设", "置类别。"]);
+    }
 
     #[test]
     fn review_only_lists_changed_fields_and_keeps_sections() {

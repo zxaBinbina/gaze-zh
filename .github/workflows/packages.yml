@@ -114,6 +114,7 @@ jobs:
         env:
           CARGO_BUILD_JOBS: 2
           RUSTFLAGS: -Cdebuginfo=0
+          GAZE_OPENCV: ${{ matrix.format == 'archlinux' && 'static' || 'system' }}
           GAZE_KCM: ${{ matrix.format == 'deb' && matrix.deb_suite == 'noble' && 'legacy' || 'plasma6' }}
           INPUT_RELEASE_TAG: ${{ inputs.release_tag }}
           EXPECTED_ARCH: ${{ matrix.arch }}

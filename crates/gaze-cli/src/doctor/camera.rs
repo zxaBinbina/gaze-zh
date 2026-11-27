@@ -160,11 +160,8 @@ fn check_camera_system(
                             ),
                         );
                     }
-                } else if let Some((vid, pid)) = gaze_vision::camera::parse_usb_spec(rgb) {
-                    report.pass(
-                        rgb_name,
-                        format!("在运行时解析 USB {vid:04x}:{pid:04x} 的彩色节点"),
-                    );
+                } else if gaze_vision::camera::parse_usb_spec(rgb).is_some() {
+                    check_usb_camera(report, rgb_name, "cameras.rgb", rgb, true);
                 } else if let Some(name) = gaze_vision::camera::parse_libcamera_spec(rgb) {
                     check_libcamera_camera(report, rgb_name, "cameras.rgb", name);
                 } else if rgb.starts_with("/dev/video") {
@@ -235,11 +232,8 @@ fn check_camera_system(
                 "请确认 PipeWire 正在运行且已连接红外设备。",
             ),
         }
-    } else if let Some((vid, pid)) = gaze_vision::camera::parse_usb_spec(ir) {
-        report.pass(
-            ir_name,
-            format!("在运行时解析 USB {vid:04x}:{pid:04x} 的红外节点"),
-        );
+    } else if gaze_vision::camera::parse_usb_spec(ir).is_some() {
+        check_usb_camera(report, ir_name, "cameras.ir", ir, false);
     } else if let Some(name) = gaze_vision::camera::parse_libcamera_spec(ir) {
         check_libcamera_camera(report, ir_name, "cameras.ir", name);
     } else {
@@ -322,6 +316,37 @@ fn check_ir_node(
             format!("{node} 的桥接来源验证失败：{err:#}"),
             "请确认桥接服务正在运行，并已写入配置指定的标记文件。",
         ),
+    }
+}
+
+fn check_usb_camera(
+    report: &mut Report,
+    check: &'static str,
+    key: &str,
+    source: &str,
+    want_color: bool,
+) {
+    let kind = if want_color { "彩色" } else { "红外" };
+    if let Some(node) = gaze_vision::camera::resolve_node_for(source, want_color) {
+        report.pass(check, format!("{source} 对应{kind}节点 {node}"));
+    } else if gaze_vision::camera::camera_disconnected(source, want_color, false) {
+        report.error(
+            check,
+            format!("{source} 未连接"),
+            format!("请重新连接摄像头或修正 {key}。"),
+        );
+    } else if running_as_root() {
+        report.error(
+            check,
+            format!("{source} 已连接，但没有可用的{kind}节点"),
+            format!("请用 `v4l2-ctl --list-devices` 检查设备，并修正 {key}。"),
+        );
+    } else {
+        report.warning(
+            check,
+            format!("{source} 已连接，但无法读取其{kind}节点"),
+            "请运行 `sudo gaze doctor` 检查摄像头。",
+        );
     }
 }
 

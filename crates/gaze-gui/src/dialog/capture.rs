@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 use crate::camera::{CameraFeed, build_camera_widget};
+use crate::i18n::{tr, trf};
 use futures::StreamExt;
 use gaze_core::config::{CameraConfig, CameraSources, DEFAULT_RGB_CAMERA};
 use gaze_core::dbus::{EnrollPrompt, GazeProxy};
@@ -35,8 +36,8 @@ async fn wait_for_daemon_loss(proxy: &GazeProxy<'_>) {
 
 fn camera_system_label(index: usize) -> String {
     match index {
-        0 => "主摄像头组合".to_string(),
-        index => format!("回退摄像头组合 {index}"),
+        0 => tr("Main cameras").to_string(),
+        index => trf("Fallback cameras {index}", &[("index", &index.to_string())]),
     }
 }
 
@@ -88,8 +89,8 @@ pub fn show_capture_dialog(
 
     let dialog = libadwaita::Window::new();
     let title = match face_name {
-        Some(name) => format!("优化“{name}”"),
-        None => "添加人脸".to_string(),
+        Some(name) => trf("Improve “{name}”", &[("name", name)]),
+        None => tr("Add Face").to_string(),
     };
     dialog.set_title(Some(&title));
     dialog.set_default_size(500, if is_refine { 450 } else { 530 });
@@ -101,23 +102,23 @@ pub fn show_capture_dialog(
             .as_ref(),
     );
 
-    let content = gtk4::Box::new(gtk4::Orientation::Vertical, 0);
+    let content = libadwaita::ToolbarView::new();
     let header = libadwaita::HeaderBar::new();
-    content.append(&header);
+    content.add_top_bar(&header);
 
     let body = gtk4::Box::new(gtk4::Orientation::Vertical, 12);
-    body.set_margin_start(16);
-    body.set_margin_end(16);
-    body.set_margin_top(16);
-    body.set_margin_bottom(16);
+    body.set_margin_start(18);
+    body.set_margin_end(18);
+    body.set_margin_top(12);
+    body.set_margin_bottom(18);
 
     let camera_kind = if is_ir {
-        "红外摄像头"
+        tr("Infrared camera")
     } else {
-        "RGB 摄像头"
+        tr("RGB camera")
     };
     let camera_mode = gtk4::Label::new(Some(if is_ir {
-        "红外摄像头 · 采集时显示预览"
+        tr("Infrared camera · preview starts when capture does")
     } else {
         camera_kind
     }));
@@ -126,14 +127,16 @@ pub fn show_capture_dialog(
     camera_mode.set_halign(gtk4::Align::Start);
     body.append(&camera_mode);
 
-    let resolved_face = Rc::new(RefCell::new(face_name.unwrap_or("默认").to_string()));
+    let resolved_face = Rc::new(RefCell::new(
+        face_name.unwrap_or_else(|| tr("default")).to_string(),
+    ));
     let existing_face_names = Rc::new(RefCell::new(HashSet::<String>::new()));
     let enrollment_completed = Rc::new(Cell::new(false));
     let enrollment_task = Rc::new(RefCell::new(None::<futures::future::AbortHandle>));
     let face_name_valid = Rc::new(RefCell::new(is_refine));
     let mut face_name_entry: Option<libadwaita::EntryRow> = None;
 
-    let name_hint = gtk4::Label::new(Some("已存在同名人脸档案"));
+    let name_hint = gtk4::Label::new(Some(tr("A face with this name already exists")));
     name_hint.add_css_class("caption");
     name_hint.add_css_class("error");
     name_hint.set_halign(gtk4::Align::Start);
@@ -141,8 +144,8 @@ pub fn show_capture_dialog(
 
     if !is_refine {
         let entry = libadwaita::EntryRow::new();
-        entry.set_title("人脸名称");
-        entry.set_text("默认");
+        entry.set_title(tr("Face name"));
+        entry.set_text(tr("default"));
         let group = libadwaita::PreferencesGroup::new();
         group.add(&entry);
         body.append(&group);
@@ -167,7 +170,7 @@ pub fn show_capture_dialog(
             .collect::<Vec<_>>();
         let model = gtk4::StringList::new(&labels.iter().map(String::as_str).collect::<Vec<_>>());
         let row = libadwaita::ComboRow::new();
-        row.set_title("摄像头");
+        row.set_title(tr("Camera"));
         row.set_model(Some(&model));
         let group = libadwaita::PreferencesGroup::new();
         group.add(&row);
@@ -183,9 +186,9 @@ pub fn show_capture_dialog(
                 selected_system.set(row.selected());
                 feed.stop();
                 feed.hide_frame();
-                camera_mode.set_text(&format!(
-                    "{} · 开始采集时启动预览",
-                    camera_system_label(row.selected() as usize)
+                camera_mode.set_text(&trf(
+                    "{camera} · preview starts when capture does",
+                    &[("camera", &camera_system_label(row.selected() as usize))],
                 ));
             }
         ));
@@ -200,10 +203,14 @@ pub fn show_capture_dialog(
     let cam_frame = gtk4::Frame::new(None);
     cam_frame.set_child(Some(&cam_widget));
     cam_frame.set_vexpand(true);
+    cam_frame.add_css_class("camera-frame");
+    cam_frame.set_overflow(gtk4::Overflow::Hidden);
     body.append(&cam_frame);
 
     let prompt_label = gtk4::Label::new(None);
-    prompt_label.add_css_class("title-4");
+    prompt_label.add_css_class("title-3");
+    prompt_label.set_wrap(true);
+    prompt_label.set_justify(gtk4::Justification::Center);
     prompt_label.set_visible(false);
     body.append(&prompt_label);
 
@@ -217,13 +224,16 @@ pub fn show_capture_dialog(
     progress.set_visible(false);
     body.append(&progress);
 
-    let start_btn = gtk4::Button::with_label("开始采集");
+    let start_btn = gtk4::Button::with_label(tr("Start Capture"));
     start_btn.add_css_class("suggested-action");
     start_btn.add_css_class("pill");
     start_btn.set_halign(gtk4::Align::Center);
     start_btn.set_sensitive(is_refine);
     body.append(&start_btn);
-    let done_btn = gtk4::Button::with_label("完成 — 接下来测试识别");
+    let done_btn = gtk4::Button::with_label(tr("Done — test recognition next"));
+    done_btn.add_css_class("suggested-action");
+    done_btn.add_css_class("pill");
+    done_btn.set_halign(gtk4::Align::Center);
     done_btn.set_visible(false);
     body.append(&done_btn);
     done_btn.connect_clicked(glib::clone!(
@@ -247,7 +257,7 @@ pub fn show_capture_dialog(
         });
     }
 
-    let stop_btn = gtk4::Button::with_label("取消");
+    let stop_btn = gtk4::Button::with_label(tr("Cancel"));
     stop_btn.add_css_class("destructive-action");
     stop_btn.add_css_class("pill");
     stop_btn.set_halign(gtk4::Align::Center);
@@ -265,13 +275,13 @@ pub fn show_capture_dialog(
         stop_btn,
         move |parent: gtk4::Window| {
             let confirm = libadwaita::MessageDialog::builder()
-                .heading("取消录入？")
-                .body("尚未完成的采集将被丢弃。")
+                .heading(tr("Cancel Enrollment?"))
+                .body(tr("This will discard any partial captures."))
                 .transient_for(&parent)
                 .build();
 
-            confirm.add_response("resume", "继续");
-            confirm.add_response("discard", "丢弃");
+            confirm.add_response("resume", tr("Resume"));
+            confirm.add_response("discard", tr("Discard"));
             confirm.set_response_appearance("discard", libadwaita::ResponseAppearance::Destructive);
 
             confirm.connect_response(
@@ -312,7 +322,7 @@ pub fn show_capture_dialog(
         }
     ));
 
-    content.append(&body);
+    content.set_content(Some(&body));
     dialog.set_content(Some(&content));
 
     let username = username.to_string();
@@ -343,8 +353,8 @@ pub fn show_capture_dialog(
                 }
 
                 let mut current_name = resolved_face.borrow().trim().to_string();
-                let default_taken =
-                    current_name == "默认" && existing_face_names.borrow().contains(&current_name);
+                let default_taken = current_name == tr("default")
+                    && existing_face_names.borrow().contains(&current_name);
                 if default_taken {
                     let free = (2..)
                         .map(|n| format!("face-{n}"))
@@ -399,14 +409,14 @@ pub fn show_capture_dialog(
             // before starting enrollment.
             feed.stop_and_wait();
             feed.hide_frame();
-            camera_mode.set_text(&format!("{camera_kind} · 正在开始采集"));
+            camera_mode.set_text(&trf("{camera} · starting capture", &[("camera", camera_kind)]));
 
             btn.set_visible(false);
             stop_btn.set_visible(true);
             prompt_label.set_visible(true);
             progress_label.set_visible(true);
             progress.set_visible(true);
-            prompt_label.set_text("正在开始录入…");
+            prompt_label.set_text(tr("Starting enrollment…"));
 
             let preview_live = Rc::new(Cell::new(false));
             let face_name = resolved_face.borrow().clone();
@@ -461,7 +471,7 @@ pub fn show_capture_dialog(
                     let mut enroll_stream = match proxy.receive_enroll_status().await {
                         Ok(s) => s,
                         Err(_) => {
-                            start_failed("连接录入状态流失败，请重试。");
+                            start_failed(tr("Failed to connect to enrollment stream. Try again."));
                             let _ = proxy.release().await;
                             return;
                         }
@@ -470,7 +480,7 @@ pub fn show_capture_dialog(
                     let mut capture_stream = match proxy.receive_face_status().await {
                         Ok(s) => s,
                         Err(_) => {
-                            start_failed("连接采集状态流失败，请重试。");
+                            start_failed(tr("Failed to connect to capture stream. Try again."));
                             let _ = proxy.release().await;
                             return;
                         }
@@ -480,7 +490,7 @@ pub fn show_capture_dialog(
 
                     // Claim only when capture starts, not while the name-entry dialog is idle.
                     if let Err(err) = proxy.claim(&username).await {
-                        start_failed(&format!("无法获取摄像头：{err}。请重试。"));
+                        start_failed(&trf("Could not claim camera: {error}. Try again.", &[("error", &err.to_string())]));
                         return;
                     }
                     let started = if camera_system == 0 {
@@ -489,9 +499,9 @@ pub fn show_capture_dialog(
                         proxy.enroll_start_on(&face_name, camera_system).await
                     };
                     if let Err(err) = started {
-                        start_failed(&format!(
-                            "无法开始录入：{}",
-                            gaze_core::dbus::dbus_error_message(&err)
+                        start_failed(&trf(
+                            "Could not start enrollment: {error}",
+                            &[("error", &gaze_core::dbus::dbus_error_message(&err))],
                         ));
                         let _ = proxy.release().await;
                         return;
@@ -509,17 +519,18 @@ pub fn show_capture_dialog(
                                 preview_grace_elapsed = true;
                                 if !preview_live.get() {
                                     feed.set_active(true);
-                                    camera_mode.set_text(&format!(
-                                        "{camera_kind} · 实时预览不可用，请看向摄像头"
+                                    camera_mode.set_text(&trf(
+                                        "{camera} · live preview unavailable, look at the camera",
+                                        &[("camera", camera_kind)],
                                     ));
                                 }
                             }
                             _ = &mut deadline => {
-                                prompt_label.set_text("录入超时，请关闭此窗口后重试。");
+                                prompt_label.set_text(tr("Enrollment timed out. Close this window and try again."));
                                 break;
                             }
                             _ = &mut owner_lost => {
-                                prompt_label.set_text("与 Gaze 后台服务的连接已断开，请关闭此窗口后重试。");
+                                prompt_label.set_text(tr("Lost contact with the Gaze daemon. Close this window and try again."));
                                 break;
                             }
                             Some(signal) = enroll_stream.next() => {
@@ -530,10 +541,10 @@ pub fn show_capture_dialog(
                                     let time_remaining = *args.time_remaining();
                                     let is_done = *args.is_done();
 
-                                    let display_msg = raw_msg.to_string();
+                                    let display_msg = tr(raw_msg.as_ref()).to_string();
 
                                     if time_remaining > 0.0 {
-                                        prompt_label.set_text(&format!("{} [{:.1}秒]", display_msg, time_remaining));
+                                        prompt_label.set_text(&format!("{} [{:.1}s]", display_msg, time_remaining));
                                     } else {
                                         prompt_label.set_text(&display_msg);
                                     }
@@ -545,7 +556,7 @@ pub fn show_capture_dialog(
                                     }
 
                                     if matches!(raw_msg, EnrollPrompt::DbFailed | EnrollPrompt::CameraFailed | EnrollPrompt::Cancelled) {
-                                        prompt_label.set_text(raw_msg.as_ref());
+                                        prompt_label.set_text(tr(raw_msg.as_ref()));
                                         stop_btn.set_visible(false);
                                         retryable = true;
                                         break;
@@ -553,7 +564,7 @@ pub fn show_capture_dialog(
 
                                     if is_done && raw_msg == EnrollPrompt::Completed {
                                         enrollment_completed.set(true);
-                                        prompt_label.set_text("人脸已保存。请使用主窗口的“测试”，然后检查桌面集成。");
+                                        prompt_label.set_text(tr("Face saved. Use Test in the main window, then check desktop integration."));
                                         prompt_label.set_wrap(true);
                                         done_btn.set_visible(true);
                                         stop_btn.set_visible(false);
@@ -562,7 +573,7 @@ pub fn show_capture_dialog(
                                     }
 
                                     if is_done {
-                                        prompt_label.set_text("录入已结束，未保存。");
+                                        prompt_label.set_text(tr("Enrollment finished without saving."));
                                         stop_btn.set_visible(false);
                                         retryable = true;
                                         break;
@@ -585,7 +596,7 @@ pub fn show_capture_dialog(
                                 }
                             }
                             else => {
-                                prompt_label.set_text("与 Gaze 后台服务的连接已断开。");
+                                prompt_label.set_text(tr("Lost contact with the Gaze daemon."));
                                 stop_btn.set_visible(false);
                                 break;
                             }
@@ -601,7 +612,7 @@ pub fn show_capture_dialog(
                         progress.set_fraction(0.0);
                         progress_label.set_visible(false);
                         progress_label.set_text("");
-                        start_btn.set_label("重试");
+                        start_btn.set_label(tr("Try Again"));
                         start_btn.set_visible(true);
                     }
                 }
@@ -668,8 +679,8 @@ mod tests {
 
     #[test]
     fn camera_systems_are_labelled_main_then_by_fallback_order() {
-        assert_eq!(camera_system_label(0), "主摄像头组合");
-        assert_eq!(camera_system_label(2), "回退摄像头组合 2");
+        assert_eq!(camera_system_label(0), "Main cameras");
+        assert_eq!(camera_system_label(2), "Fallback cameras 2");
     }
 
     #[test]

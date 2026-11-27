@@ -68,7 +68,7 @@ gaze add-face glasses
 gaze add-face rear --camera 1
 ```
 
-按方向提示自然移动，保持人脸居中。外观经常变化时可使用不同档案。`--camera 0` 使用主组合，1 至 3 使用对应 `[[cameras.fallback]]`。录入有最长时限；取消需确认，连续两次 Ctrl+C 可直接退出。
+录入和补充采集需要交互终端。按方向提示自然移动，保持人脸居中。外观经常变化时可使用不同档案。`--camera 0` 使用主组合，1 至 3 使用对应 `[[cameras.fallback]]`。录入有最长时限；取消需确认，连续两次 Ctrl+C 可直接退出。
 
 ## 改善档案 {#improve-a-profile}
 
@@ -126,7 +126,7 @@ gaze uninstall --keep-data
 gaze uninstall --dry-run
 ```
 
-先预览计划再确认。移除已安装的软件包（包括 `gaze-zh`）、软件源、桌面与 PAM 集成、SELinux、模型缓存和配置。`--keep-data` 保留 `/var/lib/gaze`。步骤失败会报告卸载未完成；软件包事务失败时停止删除剩余配置与人脸数据。详见[卸载指南](/guide/uninstallation)。
+先预览计划再确认。移除已安装的软件包（包括 `gaze-zh`）、软件源、桌面与 PAM 集成、SELinux、模型缓存和配置。`--keep-data` 保留 `/var/lib/gaze`。桌面文件以所属用户的身份清理。步骤失败会报告卸载未完成；软件包事务失败时停止删除剩余配置与人脸数据。详见[卸载指南](/guide/uninstallation)。
 
 ## 首次设置 {#guided-setup}
 
@@ -134,7 +134,7 @@ gaze uninstall --dry-run
 
 ## 交互式配置 {#interactive-configuration}
 
-`gaze config` 按类别编辑草稿，检查变化后保存；Esc 返回菜单，Ctrl+C 放弃草稿。模型切换提示重新采集，推理后端切换提示重启并用 `gaze doctor --benchmark` 验证。`gaze config --show` 输出完整 TOML 与预设的实际生效值。
+`gaze config` 按类别编辑草稿，检查变化后保存；Esc 返回菜单，Ctrl+C 放弃草稿。切换识别模型后，`gaze list-faces` 会标记需要重新采集的档案。切换到需要不同运行时的推理后端时，gazed 会自动重启，可用 `gaze doctor --benchmark` 验证实际后端。`gaze config --show` 输出完整 TOML 与预设的实际生效值。
 
 ## 读取或修改单项设置 {#read-or-change-one-setting}
 

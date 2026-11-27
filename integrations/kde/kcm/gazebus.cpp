@@ -27,7 +27,7 @@ QString errorText(const QDBusMessage &reply)
 {
     const QString name = reply.errorName();
     if (name == QLatin1String("org.freedesktop.DBus.Error.ServiceUnknown") || name == QLatin1String("org.freedesktop.DBus.Error.NameHasNoOwner")) {
-        return i18n("Gaze 后台服务尚未运行。首次启动会下载人脸模型，可能需要几分钟。服务就绪后此页面将自动更新。");
+        return i18n("The Gaze daemon is not running yet. Its first start downloads face models, which can take a few minutes. This page updates when it is ready.");
     }
     return reply.errorMessage();
 }

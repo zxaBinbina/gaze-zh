@@ -3,6 +3,7 @@
 
 import QtQuick
 import QtQuick.Controls as QQC2
+import org.kde.kirigami as Kirigami
 
 // A combo box bound to one configuration key. Options are { text, value } pairs.
 QQC2.ComboBox {
@@ -42,16 +43,12 @@ QQC2.ComboBox {
             kcm.settings.set(key, selected);
         }
     }
-    QQC2.Dialog {
+    Kirigami.PromptDialog {
         id: confirmModel
-        title: i18n("更改后重新录入人脸？")
-        modal: true
-        standardButtons: QQC2.Dialog.Ok | QQC2.Dialog.Cancel
-        contentItem: QQC2.Label {
-            text: i18n("现有样本无法与新的识别模型匹配，仍会保留在磁盘上。保存后，请用“改善此人脸”为每份档案重新采集，再测试识别。")
-            wrapMode: Text.WordWrap
-            implicitWidth: 360
-        }
+        parent: QQC2.Overlay.overlay
+        title: i18n("Re-enroll faces after this change?")
+        subtitle: i18n("Existing captures cannot match with the new recognition model. They remain on disk. After saving, use Improve this face for each profile, then test recognition.")
+        standardButtons: Kirigami.Dialog.Ok | Kirigami.Dialog.Cancel
         onAccepted: kcm.settings.set(root.key, root.pendingValue)
         onRejected: root.currentIndex = Qt.binding(function() { return Math.max(0, root.shown.findIndex(o => o.value === root.current)); })
     }

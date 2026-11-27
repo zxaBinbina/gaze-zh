@@ -194,6 +194,16 @@ struct PreparedConfig {
     cipher: Option<crate::crypto::EmbeddingCipher>,
 }
 
+const EXIT_RUNTIME_RESTART: i32 = 75;
+
+fn schedule_runtime_restart() {
+    info!("新的加速设置需要不同的 ONNX Runtime，正在重启 gazed 以加载");
+    std::thread::spawn(|| {
+        std::thread::sleep(std::time::Duration::from_secs(1));
+        std::process::exit(EXIT_RUNTIME_RESTART);
+    });
+}
+
 impl PreparedConfig {
     fn load(
         current: &Config,
@@ -365,6 +375,11 @@ impl AuthDaemon {
                         *ir_liveness.blocking_lock() = None;
                     }
                     info!("配置已重新加载");
+                    if prepared.reload.inference
+                        && gaze_vision::inference::needs_restart_for(&requested.inference)
+                    {
+                        schedule_runtime_restart();
+                    }
                     Ok(())
                 },
             )

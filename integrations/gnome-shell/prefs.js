@@ -6,7 +6,7 @@ import Gio from 'gi://Gio';
 import GLib from 'gi://GLib';
 import Gtk from 'gi://Gtk';
 
-import {ExtensionPreferences} from 'resource:///org/gnome/Shell/Extensions/js/extensions/prefs.js';
+import {ExtensionPreferences, gettext as _} from 'resource:///org/gnome/Shell/Extensions/js/extensions/prefs.js';
 
 const GAZE_DBUS_NAME = 'com.gundulabs.Gaze';
 const GAZE_OBJECT_PATH = '/com/gundulabs/Gaze';
@@ -37,20 +37,18 @@ export default class GazePreferences extends ExtensionPreferences {
         const extensionSettings = this.getSettings();
 
         const behaviorPage = new Adw.PreferencesPage({
-            title: '行为',
+            title: _('Behavior'),
             icon_name: 'preferences-system-symbolic',
         });
 
         const behaviorGroup = new Adw.PreferencesGroup({
-            title: '人脸认证',
+            title: _('Face authentication'),
             description:
-                '用于解锁当前会话的人脸认证。' +
-                '此设置不影响下方的 GDM 登录界面设置。' +
-                '设置保存在当前 dconf 配置中。',
+                _('Face authentication for unlocking this session. This does not affect the GDM login screen (see below). Settings are stored in your current dconf profile.'),
         });
 
         const faceRow = new Adw.SwitchRow({
-            title: '启用锁屏人脸认证',
+            title: _('Enable face authentication (lock screen)'),
             active: extensionSettings.get_boolean(FACE_AUTH_KEY),
         });
 
@@ -64,17 +62,17 @@ export default class GazePreferences extends ExtensionPreferences {
 
         const retryModes = ['disabled', 'fixed', 'infinite'];
         const retryModeRow = new Adw.ComboRow({
-            title: '人脸重试模式',
+            title: _('Face retry mode'),
             model: Gtk.StringList.new([
-                '禁用',
-                '固定次数',
-                '无限次'
+                _('Disabled'),
+                _('Fixed tries'),
+                _('Infinite')
             ]),
         });
         behaviorGroup.add(retryModeRow);
 
         const triesRow = new Adw.SpinRow({
-            title: '人脸尝试次数上限',
+            title: _('Maximum face tries'),
             adjustment: new Gtk.Adjustment({
                 lower: 2,
                 upper: 20,
@@ -119,13 +117,13 @@ export default class GazePreferences extends ExtensionPreferences {
             updateTriesRowSensitivity(val);
         });
 
-        const facesGroup = new Adw.PreferencesGroup({title: '录入'});
+        const facesGroup = new Adw.PreferencesGroup({title: _('Enrollment')});
         const facesRow = new Adw.ActionRow({
-            title: '已录入人脸',
-            subtitle: 'Checking…',
+            title: _('Enrolled faces'),
+            subtitle: _('Checking…'),
         });
         const openButton = new Gtk.Button({
-            label: '打开 Gaze',
+            label: _('Open Gaze'),
             valign: Gtk.Align.CENTER,
         });
         openButton.connect('clicked', () => {
@@ -134,8 +132,8 @@ export default class GazePreferences extends ExtensionPreferences {
                     'gaze-gui', 'Gaze', Gio.AppInfoCreateFlags.NONE
                 ).launch([], null);
             } catch (e) {
-                logError(e, '[gaze] 无法打开 Gaze 应用');
-                facesRow.set_subtitle('无法打开 Gaze 应用。请在终端中运行 gaze-gui。');
+                logError(e, '[gaze] Failed to open the Gaze app');
+                facesRow.set_subtitle(_('Could not open the Gaze app. Run gaze-gui from a terminal.'));
             }
         });
         facesRow.add_suffix(openButton);
@@ -145,28 +143,25 @@ export default class GazePreferences extends ExtensionPreferences {
             .then(result => {
                 const [enrolled] = result.deepUnpack();
                 facesRow.set_subtitle(enrolled
-                    ? '此账户已录入人脸。'
-                    : '尚未录入人脸，人脸解锁无法进行匹配。请打开 Gaze 录入人脸。');
+                    ? _('A face is enrolled for this account.')
+                    : _('No face is enrolled yet, so face unlock has nothing to match. Open Gaze to enroll one.'));
             })
             .catch(error => {
-                logError(error, '[gaze] 无法读取已录入人脸');
-                facesRow.set_subtitle('Gaze 后台服务不可用。');
+                logError(error, '[gaze] Failed to read enrolled faces');
+                facesRow.set_subtitle(_('Gaze daemon unavailable.'));
             });
 
         behaviorPage.add(facesGroup);
         behaviorPage.add(behaviorGroup);
 
         const loginGroup = new Adw.PreferencesGroup({
-            title: 'GDM 登录界面',
+            title: _('GDM login screen'),
             description:
-                '在 GDM 登录界面启用人脸认证。' +
-                '需要管理员授权。' +
-                'GNOME 密钥环通常由密码解锁，' +
-                '仅使用人脸登录可能无法解锁密钥环。',
+                _('Enable face authentication at the GDM login screen. Requires administrator authorization. Note: GNOME keyring is normally unlocked by your password, so logging in with face only may leave it locked.'),
         });
 
         const gdmRow = new Adw.SwitchRow({
-            title: '启用 GDM 登录人脸认证',
+            title: _('Enable face authentication at GDM login'),
             active: false,
             sensitive: false,
         });
@@ -187,8 +182,8 @@ export default class GazePreferences extends ExtensionPreferences {
                     gdmRow.set_sensitive(true);
                 })
                 .catch(error => {
-                    logError(error, '[gaze] 无法读取 GDM 人脸认证状态');
-                    gdmRow.set_subtitle('Gaze 后台服务不可用。');
+                    logError(error, '[gaze] Failed to read GDM face auth state');
+                    gdmRow.set_subtitle(_('Gaze daemon unavailable.'));
                 });
         };
 
@@ -197,7 +192,7 @@ export default class GazePreferences extends ExtensionPreferences {
             loadGdmState,
             () => {
                 gdmRow.set_sensitive(false);
-                gdmRow.set_subtitle('Gaze 后台服务不可用。');
+                gdmRow.set_subtitle(_('Gaze daemon unavailable.'));
             }
         );
         window.connect('close-request', () => {
@@ -213,11 +208,12 @@ export default class GazePreferences extends ExtensionPreferences {
             let message;
             if (accessDenied) {
                 message = desired
-                    ? '启用 GDM 登录人脸认证需要管理员授权。'
-                    : '禁用 GDM 登录人脸认证需要管理员授权。';
+                    ? _('Administrator authorization is required to enable face authentication at the GDM login screen.')
+                    : _('Administrator authorization is required to disable face authentication at the GDM login screen.');
             } else {
                 Gio.DBusError.strip_remote_error(error);
-                message = `无法更新 GDM 登录人脸认证：${error.message}`;
+                message = _('Could not update GDM login face authentication: {error}')
+                    .replace('{error}', () => error.message);
             }
             gdmRow.set_subtitle(message);
             if (typeof window.add_toast === 'function')
@@ -238,8 +234,8 @@ export default class GazePreferences extends ExtensionPreferences {
                     gdmRow.set_sensitive(true);
                     if (typeof window.add_toast === 'function') {
                         const message = desired
-                            ? '已启用 GDM 登录人脸认证，重启 GDM 或系统后生效。'
-                            : '已禁用 GDM 登录人脸认证，重启 GDM 或系统后生效。';
+                            ? _('Face auth enabled at the GDM login screen. Restart GDM (or reboot) for it to take effect.')
+                            : _('Face auth disabled at the GDM login screen. Restart GDM (or reboot) for it to take effect.');
                         window.add_toast(new Adw.Toast({title: message}));
                     }
                 })

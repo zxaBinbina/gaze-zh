@@ -8,13 +8,14 @@ use gaze_core::config::{
     MIN_LIVENESS_MAX_SECONDS, MIN_LIVENESS_THRESHOLD, SecurityField, unknown_config_keys,
 };
 use gaze_core::dbus::{
-    GazeProxy, dbus_error_message, dbus_is_file_not_found, dbus_is_not_activatable,
-    dbus_is_unknown_method, try_benchmark_from_daemon,
+    GazeProxy, dbus_error_message, dbus_is_access_denied, dbus_is_file_not_found,
+    dbus_is_not_activatable, dbus_is_unknown_method, try_benchmark_from_daemon,
 };
 use gaze_core::desktop::{
-    GDM_DCONF_PROFILE, GDM_FACE_OVERRIDE_PATH, KDE_FACE_PAM_FILE, KDE_SMARTCARD_PAM_FILE,
-    PLASMALOGIN_FACE_PAM_FILE, dconf_bool, gdm_face_auth_from_dconf, gdm_greeter_dconf_read,
-    gdm_greeter_dconf_source, kscreenlocker_starts_smartcard_slot,
+    GDM_DCONF_PROFILE, GDM_FACE_OVERRIDE_PATH, GDM_HOME_DIRS, KDE_FACE_PAM_FILE,
+    KDE_SMARTCARD_PAM_FILE, PLASMALOGIN_FACE_PAM_FILE, dconf_bool, dconf_read_with_profile,
+    gdm_face_auth_from_dconf, gdm_greeter_config_dirs, gdm_user_db_read,
+    kscreenlocker_starts_smartcard_slot,
 };
 use gaze_security::tpm::TPM_DEVICES;
 use std::collections::BTreeSet;

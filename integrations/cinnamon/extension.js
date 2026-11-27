@@ -6,6 +6,7 @@ const GLib = imports.gi.GLib;
 const St = imports.gi.St;
 const Clutter = imports.gi.Clutter;
 const Pango = imports.gi.Pango;
+const Gettext = imports.gettext;
 const Main = imports.ui.main;
 
 const GAZE_DBUS_INTERFACE = `
@@ -54,6 +55,18 @@ const GAZE_MSG_PASSWORD_REQUIRED = "GAZE_MSG_PASSWORD_REQUIRED";
 
 const CINNAMON_PAM_SERVICES = ["polkit-1", "cinnamon"];
 
+const TEXT_DOMAIN = "gaze@gundulabs.com";
+
+const bindTranslations = (metadata) => {
+  if (!metadata?.path) return;
+  // <prefix>/share/cinnamon/extensions/<uuid> keeps its catalogs in <prefix>/share/locale.
+  let dataDir = metadata.path;
+  for (let i = 0; i < 3; i++) dataDir = GLib.path_get_dirname(dataDir);
+  try {
+    Gettext.bindtextdomain(TEXT_DOMAIN, `${dataDir}/locale`);
+  } catch (e) {}
+};
+
 const safeGettext = (str) => {
   if (!str) return str;
   const chinese = {
@@ -101,6 +114,8 @@ const safeGettext = (str) => {
 };
   if (Object.hasOwn(chinese, str)) return chinese[str];
   try {
+    const translated = Gettext.dgettext(TEXT_DOMAIN, str);
+    if (translated && translated !== str) return translated;
     if (typeof _ === "function") return _(str) || str;
   } catch (e) {}
   return str;
@@ -1094,6 +1109,7 @@ class GazeCinnamonExtension {
 let extensionInstance = null;
 
 function init(metadata) {
+  bindTranslations(metadata);
   extensionInstance = new GazeCinnamonExtension(metadata);
 }
 

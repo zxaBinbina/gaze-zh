@@ -36,7 +36,7 @@ fn spectrum_badge(label: &str, enrolled: bool, configured: bool) -> String {
             .yellow()
             .bold()
             .to_string(),
-        SpectrumBadge::Unused => style(format!("{badge} unused")).dim().to_string(),
+        SpectrumBadge::Unused => style(format!("{badge} 未启用")).dim().to_string(),
     }
 }
 
@@ -124,6 +124,24 @@ pub async fn handle_list_faces(
                     ))?;
                 }
                 term.write_line("")?;
+                let stale = proxy.stale_faces(user).await.unwrap_or_default();
+                let user_flag = if user == crate::get_current_user() {
+                    String::new()
+                } else {
+                    format!("--user {user} ")
+                };
+                for face in &stale {
+                    term.write_line(&format!(
+                        "{} “{}”使用其他识别模型录入，当前无法匹配。请运行 `gaze refine-face {}{}` 重新采集。",
+                        style("!").yellow().bold(),
+                        face,
+                        user_flag,
+                        face
+                    ))?;
+                }
+                if !stale.is_empty() {
+                    term.write_line("")?;
+                }
             }
         }
         Err(e) => {
@@ -191,6 +209,12 @@ pub async fn handle_rename_face(
     .await?;
 
     match result {
+        Ok(true) if from == to => {
+            term.write_line(&format!(
+                "{} 用户“{user}”的人脸“{from}”已命名为“{to}”。",
+                style("✓").green().bold(),
+            ))?;
+        }
         Ok(true) => {
             term.write_line(&format!(
                 "{} 已将人脸“{}”重命名为“{}”，用户“{}”",

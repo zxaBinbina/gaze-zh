@@ -454,6 +454,11 @@ impl Camera {
         let Some(node) = resolve_privileged_node(camera_source, want_color, opt_in.enabled) else {
             let err = if camera_disconnected(camera_source, want_color, opt_in.enabled) {
                 anyhow::anyhow!("摄像头 {camera_source:?} 未连接")
+            } else if parse_usb_spec(camera_source).is_some() {
+                anyhow::anyhow!(
+                    "摄像头 {camera_source:?} 已连接，但没有可用的{}视频节点",
+                    if want_color { "彩色" } else { "红外" }
+                )
             } else {
                 anyhow::anyhow!(
                     "拒绝对 {camera_source:?} 进行特权采集：没有对应的 /dev/video 节点（PipeWire 会话和自定义管线不能作为可信认证来源）"
@@ -549,7 +554,7 @@ impl Camera {
                 let node = resolve_usb_video_node(vid, pid, want_color).ok_or_else(|| {
                     anyhow::anyhow!(
                         "未找到 USB {vid:04x}:{pid:04x} 对应的 {} 摄像头",
-                        if want_color { "color" } else { "IR" }
+                        if want_color { "彩色" } else { "红外" }
                     )
                 })?;
                 (

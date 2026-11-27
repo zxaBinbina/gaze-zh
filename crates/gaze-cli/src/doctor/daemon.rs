@@ -253,6 +253,17 @@ pub(super) async fn connect_daemon(report: &mut Report) -> Option<Daemon> {
             );
             None
         }
+        Ok(Err(err)) if dbus_is_access_denied(&err) => {
+            report.warning(
+                "Daemon",
+                format!(
+                    "gazed 正在运行，但拒绝向当前会话提供配置：{}",
+                    dbus_error_message(&err)
+                ),
+                "请运行 `sudo gaze doctor`，或在已登录的桌面会话中打开终端运行。",
+            );
+            None
+        }
         Ok(Err(err)) => {
             report.error(
                 "后台服务",

@@ -2,7 +2,9 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 use console::{Term, style};
-use dialoguer::{Select, theme::ColorfulTheme};
+use dialoguer::Select;
+
+use crate::i18n::ChineseTheme;
 
 pub fn which(bin: &str) -> bool {
     std::process::Command::new("sh")
@@ -44,7 +46,7 @@ fn reset_cinnamon_user_settings_cmd() -> String {
         "getent passwd | while IFS=: read -r user _ uid _ _ home _; do",
         r#"[ "$uid" -ge 1000 ] 2>/dev/null || continue;"#,
         r#"[ -d "$home" ] || continue;"#,
-        r#"sudo rm -rf "$home/.config/cinnamon/spices/gaze@gundulabs.com" "$home/.cinnamon/configs/gaze@gundulabs.com" "$home/.local/share/cinnamon/extensions/gaze@gundulabs.com";"#,
+        r#"sudo -u "$user" rm -rf -- "$home/.config/cinnamon/spices/gaze@gundulabs.com" "$home/.cinnamon/configs/gaze@gundulabs.com" "$home/.local/share/cinnamon/extensions/gaze@gundulabs.com";"#,
         "command -v dbus-run-session >/dev/null 2>&1 || continue;",
         r#"sudo -u "$user" env HOME="$home" dbus-run-session sh -c 'EXT_ID="gaze@gundulabs.com";"#,
         "command -v gsettings >/dev/null 2>&1 || exit 0;",
@@ -132,6 +134,11 @@ fn remove_unmanaged_install_artifacts_cmd() -> String {
           [ -e "$p" ] || [ -L "$p" ] || continue;
           remove_if_unmanaged "$p";
         done;
+        for p in /usr/share/gnome-shell/extensions/gaze@gundulabs.com/locale/*/LC_MESSAGES/gaze@gundulabs.com.mo /usr/share/locale/*/LC_MESSAGES/gaze@gundulabs.com.mo; do
+          [ -e "$p" ] || [ -L "$p" ] || continue;
+          remove_if_unmanaged "$p";
+        done;
+        sudo find /usr/share/gnome-shell/extensions/gaze@gundulabs.com/locale -depth -type d -empty -delete 2>/dev/null || true;
         sudo rmdir /usr/share/gnome-shell/extensions/gaze@gundulabs.com 2>/dev/null || true;
         sudo rm -rf /etc/systemd/system/gazed.service.d;
         sudo rm -rf /usr/local/share/gaze-dev;
@@ -361,14 +368,17 @@ fn build_uninstall_plan(keep_data: bool) -> Vec<(&'static str, String)> {
         "移除各用户的 GNOME 扩展副本",
         "for d in /home/*/.local/share/gnome-shell/extensions /root/.local/share/gnome-shell/extensions; do \
           [ -d \"$d/gaze@gundulabs.com\" ] || continue; \
-          sudo rm -rf \"$d/gaze@gundulabs.com\"; \
+          owner=$(stat -c %U -- \"${d%/.local/share/gnome-shell/extensions}\") || continue; \
+          sudo -u \"$owner\" rm -rf -- \"$d/gaze@gundulabs.com\"; \
           done"
             .into(),
     ));
     plan.push((
         "移除安装器的一次性 GNOME 启用项",
         "for h in /home/* /root; do \
-          sudo rm -f \"$h/.config/autostart/gaze-gnome-enable.desktop\" \"$h/.local/share/gaze/gnome-enable.sh\"; \
+          [ -d \"$h\" ] || continue; \
+          owner=$(stat -c %U -- \"$h\") || continue; \
+          sudo -u \"$owner\" rm -f -- \"$h/.config/autostart/gaze-gnome-enable.desktop\" \"$h/.local/share/gaze/gnome-enable.sh\"; \
           done"
             .into(),
     ));
@@ -397,8 +407,9 @@ fn build_uninstall_plan(keep_data: bool) -> Vec<(&'static str, String)> {
         "for d in /home/*/.config/hypr /root/.config/hypr; do \
           f=\"$d/hyprlock.conf\"; \
           [ -f \"$f\" ] || continue; \
-          sudo grep -q 'hyprlock-gaze' \"$f\" 2>/dev/null || continue; \
-          sudo sed --follow-symlinks -i.gaze-uninstall-bak \
+          owner=$(stat -c %U -- \"${d%/.config/hypr}\") || continue; \
+          sudo -u \"$owner\" grep -q 'hyprlock-gaze' \"$f\" 2>/dev/null || continue; \
+          sudo -u \"$owner\" sed --follow-symlinks -i.gaze-uninstall-bak \
             '/^\\s*\\(pam_\\)\\?module\\s*=\\s*hyprlock-gaze\\(-simultaneous\\)\\?\\s*$/d' \"$f\" \
             || echo \"  无法编辑 $f；请手动删除其中的 hyprlock-gaze 模块行。\"; \
           done"
@@ -486,7 +497,7 @@ pub fn handle_uninstall(yes: bool, keep_data: bool, dry_run: bool) -> anyhow::Re
     }
 
     if !yes {
-        let theme = ColorfulTheme::default();
+        let theme = ChineseTheme::default();
         let proceed = Select::with_theme(&theme)
             .with_prompt("继续卸载？")
             .items(["否，取消", "是，卸载 Gaze"])
@@ -971,6 +982,26 @@ mod tests {
                 "step {label:?} has nothing to run"
             );
         }
+    }
+
+    #[test]
+    fn files_in_home_directories_are_removed_as_their_owner() {
+        let plan = build_uninstall_plan(true);
+        let home_steps = [
+            "移除各用户的 GNOME 扩展副本",
+            "移除安装器的一次性 GNOME 启用项",
+            "移除 hyprlock 中的 Gaze PAM 引用",
+        ];
+        for label in home_steps {
+            let (_, cmd) = plan.iter().find(|(desc, _)| *desc == label).unwrap();
+            assert!(cmd.contains("sudo -u \"$owner\""), "{label}: {cmd}");
+            assert!(!cmd.contains("sudo rm"), "{label}: {cmd}");
+            assert!(!cmd.contains("sudo sed"), "{label}: {cmd}");
+            assert!(!cmd.contains("sudo grep"), "{label}: {cmd}");
+        }
+        let cinnamon = reset_cinnamon_user_settings_cmd();
+        assert!(cinnamon.contains(r#"sudo -u "$user" rm -rf"#));
+        assert!(!cinnamon.contains("sudo rm"));
     }
 
     #[test]

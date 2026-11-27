@@ -37,7 +37,9 @@ fn translate_command(mut command: Command) -> Command {
                 _ => arg,
             };
             let arg = match arg.get_action() {
-                ArgAction::Help => arg.help("显示帮助"),
+                ArgAction::Help | ArgAction::HelpShort | ArgAction::HelpLong => {
+                    arg.help("显示帮助")
+                }
                 ArgAction::Version => arg.help("显示版本"),
                 _ => arg,
             };
@@ -67,6 +69,7 @@ pub fn exit<T>(error: clap::Error) -> T {
         .replace("[OPTIONS]", "[选项]")
         .replace("[default:", "[默认：")
         .replace("[possible values:", "[可选值：")
+        .replace("[alias:", "[别名：")
         .replace("[aliases:", "[别名：")
         .replace("[short aliases:", "[短别名：")
         .replace("[long aliases:", "[长别名：");

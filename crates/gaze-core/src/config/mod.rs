@@ -804,7 +804,7 @@ impl<'de> Deserialize<'de> for AuthConfig {
         D: serde::Deserializer<'de>,
     {
         let file = AuthConfigFile::deserialize(deserializer)?;
-        let legacy = file.require_confirmation.unwrap_or(false);
+        let legacy = file.require_confirmation;
 
         Ok(Self {
             abort_if_ssh: file.abort_if_ssh,
@@ -812,8 +812,12 @@ impl<'de> Deserialize<'de> for AuthConfig {
             abort_before_first_resume: file.abort_before_first_resume,
             require_confirmation_lock_screen: file
                 .require_confirmation_lock_screen
-                .unwrap_or(legacy),
-            require_confirmation_elevation: file.require_confirmation_elevation.unwrap_or(legacy),
+                .or(legacy)
+                .unwrap_or(false),
+            require_confirmation_elevation: file
+                .require_confirmation_elevation
+                .or(legacy)
+                .unwrap_or(true),
             require_attention: file.require_attention,
             resume_grace_ms: file.resume_grace_ms,
             start_delay_ms: file.start_delay_ms,
@@ -960,7 +964,7 @@ impl Default for AuthConfig {
             abort_if_lid_closed: true,
             abort_before_first_resume: false,
             require_confirmation_lock_screen: false,
-            require_confirmation_elevation: false,
+            require_confirmation_elevation: true,
             require_attention: false,
             resume_grace_ms: default_resume_grace_ms(),
             start_delay_ms: default_start_delay_ms(),
@@ -1169,6 +1173,11 @@ impl Config {
 
     pub fn to_toml(&self) -> anyhow::Result<String> {
         Ok(toml_edit::ser::to_string_pretty(self)?)
+    }
+
+    pub fn knows_setting_root(&self, key: &str) -> bool {
+        let root = key.split('.').next().unwrap_or(key);
+        toml_edit::ser::to_document(self).is_ok_and(|doc| doc.get(root).is_some())
     }
 
     pub fn get_key(&self, key: &str) -> anyhow::Result<String> {
@@ -1485,6 +1494,16 @@ fn merge_into_toml_table(target: &mut toml_edit::Table, desired: &toml_edit::Tab
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn knows_setting_root_matches_top_level_sections_only() {
+        let config = Config::default();
+        assert!(config.knows_setting_root("security.level"));
+        assert!(config.knows_setting_root("security"));
+        assert!(config.knows_setting_root("security.not_a_real_leaf"));
+        assert!(!config.knows_setting_root("nosuch.key"));
+        assert!(!config.knows_setting_root(""));
+    }
 
     #[test]
     fn rgb_sources_accept_strings_and_ordered_lists_and_preserve_their_shape() {
@@ -2160,8 +2179,15 @@ mod tests {
     }
 
     #[test]
-    fn confirmation_defaults_to_off_without_any_key() {
+    fn only_elevation_confirmation_defaults_on_without_any_key() {
         let auth: AuthConfig = toml_edit::de::from_str("").unwrap();
+        assert!(!auth.require_confirmation_lock_screen);
+        assert!(auth.require_confirmation_elevation);
+    }
+
+    #[test]
+    fn a_legacy_false_still_turns_elevation_confirmation_off() {
+        let auth: AuthConfig = toml_edit::de::from_str("require_confirmation = false\n").unwrap();
         assert!(!auth.require_confirmation_lock_screen);
         assert!(!auth.require_confirmation_elevation);
     }
@@ -2562,7 +2588,7 @@ mod tests {
         assert!(config.auth.abort_if_lid_closed);
         assert!(!config.auth.abort_before_first_resume);
         assert!(!config.auth.require_confirmation_lock_screen);
-        assert!(!config.auth.require_confirmation_elevation);
+        assert!(config.auth.require_confirmation_elevation);
         assert!(!config.auth.require_attention);
         assert_eq!(config.auth.start_delay_ms, 0);
         assert_eq!(config.enrollment.max_templates, 2);

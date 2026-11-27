@@ -140,24 +140,43 @@ test('daemon refusal diagnostics shown by GUI and CLI stay Chinese', async () =>
     }
 });
 
+function translatedMessages(po) {
+    const messages = new Map();
+    const decode = value => [...value.matchAll(/^("(?:\\.|[^"\\])*")$/gm)]
+        .map(([, quoted]) => JSON.parse(quoted)).join('');
+    for (const entry of po.split(/\n\n+/)) {
+        if (/^#,[^\n]*\bfuzzy\b/m.test(entry)) continue;
+        const fields = entry.match(/^msgid (.+(?:\n".*")*)(?:\nmsgid_plural .+)?\nmsgstr(?:\[0\])? (.+(?:\n".*")*)/m);
+        if (fields) messages.set(decode(fields[1]), decode(fields[2]));
+    }
+    return messages;
+}
+
 test('new and existing GTK, KDE and GNOME settings keep visible labels Chinese', async () => {
-    const roots = ['crates/gaze-gui/src', 'integrations/kde/kcm/ui', 'integrations/gnome-shell'];
+    const catalogs = new Map(await Promise.all([
+        ['crates/gaze-gui/src', 'crates/gaze-gui/po/zh_CN.po'],
+        ['integrations/kde/kcm', 'integrations/kde/kcm/po/zh_CN/kcm_gaze.po'],
+        ['integrations/gnome-shell', 'integrations/gnome-shell/po/zh_CN.po'],
+    ].map(async ([root, po]) => [root, translatedMessages(await read(po))])));
     const paths = [];
     const visit = async path => {
         for (const entry of await readdir(new URL(`../${path}/`, import.meta.url), {withFileTypes: true})) {
             const child = `${path}/${entry.name}`;
-            if (entry.isDirectory()) await visit(child);
-            else if (/\.(rs|qml)$/.test(child) || child.endsWith('/prefs.js')) paths.push(child);
+            if (entry.isDirectory() && entry.name !== 'po') await visit(child);
+            else if (/\.(rs|qml|cpp)$/.test(child) || child.endsWith('/prefs.js')) paths.push(child);
         }
     };
-    await Promise.all(roots.map(visit));
+    await Promise.all([...catalogs.keys()].map(visit));
     const technical = /^(Gaze|RGB|IR|TPM|CPU|NPU|GPU|OpenVINO|KWallet|Intel OpenVINO|AMD Ryzen AI|Gaze \{\}|RGB \{\}|IR \{\})$/;
     for (const path of paths) {
         const source = (await read(path)).split('#[cfg(test)]')[0];
-        const labels = source.matchAll(/(?:\.(?:title|subtitle|label|placeholder_text|set_title|set_subtitle|set_label)\s*\(\s*|\b(?:i18n|qsTr)\s*\(\s*)(["'])([^"'\n]*)\1/g);
-        for (const [, , label] of labels) {
+        const catalog = [...catalogs].find(([root]) => path.startsWith(root + '/'))[1];
+        const labels = source.matchAll(/(?:(\.(?:title|subtitle|label|placeholder_text|set_title|set_subtitle|set_label))\s*\(\s*|\b(trf?|i18np?|qsTr|_)\s*\(\s*)(["'])([^"'\n]*)\3/g);
+        for (const [, , translate, quote, literal] of labels) {
+            const label = quote === '"' ? JSON.parse(quote + literal + quote) : literal;
             if (!label || /[\u4e00-\u9fff]/.test(label) || technical.test(label) || !/[A-Za-z]/.test(label)) continue;
-            assert.fail(`${path}: untranslated visible label ${label}`);
+            assert.ok(translate && /[\u4e00-\u9fff]/.test(catalog.get(label) ?? ''),
+                `${path}: missing Simplified Chinese text for ${label}`);
         }
     }
 });

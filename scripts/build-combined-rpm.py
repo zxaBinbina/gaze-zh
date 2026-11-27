@@ -40,9 +40,7 @@ def main():
     if output('rpm', '-qp', '--qf', '%{FILEDIGESTALGO}', base) != '8':
         raise SystemExit('Base RPM must use SHA256 payload digests')
     run('rpm', '-K', base)
-    run('cargo', 'build', '--release', '--locked', '-p', 'gazed', cwd=ROOT)
-    run('cargo', 'build', '--release', '--locked', '-p', 'gaze-cli', '-p', 'gaze-gui',
-        '-p', 'pam-gaze', '-p', 'pam-gaze-grosshack', cwd=ROOT)
+    run('just', 'build-rust', cwd=ROOT)
     run('cargo', 'test', '--locked', '-p', 'pam-gaze', cwd=ROOT)
     run(ROOT / 'scripts/check-pam-link.sh', ROOT / 'target/release/libpam_gaze.so')
     if not args.reuse_krdp_build:
@@ -94,7 +92,9 @@ def main():
 
     stage(ROOT / 'target/release/gazed', '/usr/bin/gazed', 0o755)
     stage(ROOT / 'target/release/gaze', '/usr/bin/gaze', 0o755)
-    stage(ROOT / 'target/release/libpam_gaze_grosshack.so', '/usr/lib64/security/pam_gaze_grosshack.so', 0o755)
+    legacy_pam = payload / 'usr/lib64/security/pam_gaze_grosshack.so'
+    legacy_pam.unlink(missing_ok=True)
+    legacy_pam.symlink_to('pam_gaze.so')
     stage(ROOT / 'packaging/config/com.gundulabs.gaze.policy', '/usr/share/polkit-1/actions/com.gundulabs.gaze.policy')
     stage(ROOT / 'target/release/libpam_gaze.so', '/usr/lib64/security/pam_gaze.so', 0o755)
     stage(ROOT / 'packaging/config/config.toml', '/etc/gaze/config.toml')
@@ -131,10 +131,10 @@ def main():
                     if not line.startswith(('rpmlib(', 'config(gaze)', 'gaze =', 'gaze(x86-64)'))}
     requirements.update(['krdp', 'gstreamer1-plugins-base', 'gstreamer1-plugins-good', 'pipewire-gstreamer'])
     hook = (ROOT / 'packaging/krdp-fix/refresh-user-services.sh').read_text().replace('%', '%%')
-    post = (ROOT / 'packaging/postinst-rpm.sh').read_text().replace('%', '%%')
-    preun = (ROOT / 'packaging/prerm-rpm.sh').read_text().replace('%', '%%')
-    kde_post = (ROOT / 'packaging/postinst-kde.sh').read_text().replace('%', '%%')
-    kde_postun = (ROOT / 'packaging/postrm-kde.sh').read_text().replace('%', '%%')
+    post = (ROOT / 'packaging/scriptlets/postinst-rpm.sh').read_text().replace('%', '%%')
+    preun = (ROOT / 'packaging/scriptlets/prerm-rpm.sh').read_text().replace('%', '%%')
+    kde_post = (ROOT / 'packaging/scriptlets/postinst-kde.sh').read_text().replace('%', '%%')
+    kde_postun = (ROOT / 'packaging/scriptlets/postrm-kde.sh').read_text().replace('%', '%%')
     spec = '''%global debug_package %{nil}
 %global __os_install_post %{nil}
 %global __provides_exclude_from ^/usr/lib(64)?/(gaze|gaze-krdp-fix)/.*$
@@ -143,7 +143,7 @@ Name: gaze-zh
 Conflicts: gaze
 Obsoletes: gaze
 Version: ''' + version + '\nRelease: ' + args.release + '''%{?dist}
-Summary: Chinese Gaze with GUI, KDE integration and KRDP fixes
+Summary: Gaze 中文版，包含图形界面、KDE 集成和 KRDP 修复
 License: GPL-3.0-or-later AND GPL-2.0-or-later AND BSD-2-Clause AND BSD-3-Clause AND LGPL-2.0-or-later AND (LGPL-2.1-only OR LGPL-3.0-only OR LicenseRef-KDE-Accepted-LGPL)
 URL: https://github.com/GunduLabs/gaze
 Vendor: Local gaze-zh-rdp-fix build
@@ -159,13 +159,9 @@ Requires(posttrans): systemd
 Requires(postun): systemd
 ''' + ''.join('Requires: ' + r + '\n' for r in sorted(requirements)) + '''
 %description
-Gaze with Chinese interfaces and the KRDP network-login fix.
-The daemon, CLI, GUI, PAM modules and private KRDP library are rebuilt from this
-project. KDE System Settings and lock screen integration are included.
-Runtime libraries and support files use the verified base RPM payload.
-The KRDP service wrapper enables the private repair only for its supported
-Fedora KRDP build, without replacing the distribution's system library.
-Windows App Android users should disable hardware decoding in the client.
+Gaze 简体中文版，包含命令行、图形界面、PAM、KDE 系统设置和锁屏集成。
+KRDP 修复仅用于受支持的 Fedora KRDP 版本，使用独立运行库。
+Windows App 安卓客户端需关闭硬件解码。
 
 %prep
 %build
@@ -197,7 +193,7 @@ cp -a "%{_topdir}/payload/." %{buildroot}/
         'gaze_source_commit': output('git', '-C', ROOT, 'rev-parse', 'HEAD'),
         'source_diff_sha256': hashlib.sha256(subprocess.check_output(['git', '-C', str(ROOT), 'diff', 'HEAD'])).hexdigest(),
         'binaries_sha256': {name: hashlib.sha256((ROOT / 'target/release' / name).read_bytes()).hexdigest()
-                            for name in ['gazed', 'gaze', 'gaze-gui', 'libpam_gaze.so', 'libpam_gaze_grosshack.so']},
+                            for name in ['gazed', 'gaze', 'gaze-gui', 'libpam_gaze.so']},
         'components': ['daemon', 'cli', 'pam', 'gui', 'kde', 'krdp-fix'],
         'krdp_build': build_info, 'spec': str(spec_path.relative_to(ROOT)),
         'validation': 'PAM tests, KRDP tests, RPM digests, dependencies passed',

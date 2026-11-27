@@ -243,6 +243,10 @@ const safeGettext = (str) => {
     "Face verified. Press Enter or click Authenticate to confirm.": "人脸已验证。请按 Enter 或点击认证以确认。",
     "Face authentication failed": "人脸认证失败",
     "Confirm Face Unlock": "确认人脸解锁",
+    "(or look at the camera or swipe finger)": "（或看向摄像头或划动手指）",
+    "(or look at the camera or place finger on reader)": "（或看向摄像头或将手指放在指纹读取器上）",
+    "(or swipe finger across reader)": "（或将手指划过指纹读取器）",
+    "(or place finger on reader)": "（或将手指放在指纹读取器上）",
     "Password": "密码",
     "Failed to show confirmation prompt": "无法显示确认提示",
     "Please look at the camera...": "请看向摄像头...",
@@ -1394,7 +1398,12 @@ export default class GazeFaceAuthExtension extends Extension {
 
                 if (FACE_STATUS_UPDATES.has(safeGettext(text))) {
                   emitFilterMessages(this, serviceName, MESSAGE_TYPE.HINT);
-                  emitQueueMessage(this, serviceName, safeGettext(text), MESSAGE_TYPE.HINT);
+                  emitQueueMessage(
+                    this,
+                    serviceName,
+                    safeGettext(text),
+                    MESSAGE_TYPE.HINT,
+                  );
                   return;
                 }
               }
@@ -1713,16 +1722,16 @@ export default class GazeFaceAuthExtension extends Extension {
 
           if (faceActive && fpActive) {
             return this._fingerprintReaderType === 2
-              ? "(or look at the camera or swipe finger)"
-              : "(or look at the camera or place finger on reader)";
+              ? safeGettext("(or look at the camera or swipe finger)")
+              : safeGettext("(or look at the camera or place finger on reader)");
           }
 
-          if (faceActive) return "(or look at the camera)";
+          if (faceActive) return safeGettext(FACE_HINT_TEXT);
 
           if (fpActive) {
             return this._fingerprintReaderType === 2
-              ? "(or swipe finger across reader)"
-              : "(or place finger on reader)";
+              ? safeGettext("(or swipe finger across reader)")
+              : safeGettext("(or place finger on reader)");
           }
 
           return null;
@@ -1800,7 +1809,11 @@ export default class GazeFaceAuthExtension extends Extension {
 
               if (FACE_STATUS_UPDATES.has(safeGettext(text))) {
                 this._filterServiceMessages(serviceName, MESSAGE_TYPE.HINT);
-                this._queueMessage(serviceName, safeGettext(text), MESSAGE_TYPE.HINT);
+                this._queueMessage(
+                  serviceName,
+                  safeGettext(text),
+                  MESSAGE_TYPE.HINT,
+                );
                 return;
               }
             }
